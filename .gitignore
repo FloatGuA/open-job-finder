@@ -1,0 +1,77 @@
+# Runtime data (never commit)
+code/data/
+code/output/
+code/logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+code/dashboard/frontend/node_modules/
+
+# TypeScript build artifacts
+*.tsbuildinfo
+code/dashboard/frontend/tailwind.config.d.ts
+code/dashboard/frontend/tailwind.config.js
+code/dashboard/frontend/vite.config.d.ts
+code/dashboard/frontend/vite.config.js
+
+# Debug / diagnostic scripts and output
+code/debug_*.txt
+code/debug_*.py
+code/diagnose_*.txt
+code/diagnose_*.py
+code/verify_*.py
+code/*.txt
+
+# Factory runtime state
+factory_state.json
+logs/factory.log
+logs/activity.jsonl
+code/.factory/
+.codex/
+
+# Structured run logs (runtime, not source)
+logs/runs/
+
+# Frontend dev artifacts
+code/dashboard/frontend/logs/
+
+# Local Claude settings
+.claude/
+
+# Env / secrets
+.env
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Worklog / memory (local only)
+worklog.md
+COLLAB.md
+
+# Screenshots & diagnostic dumps (debug artifacts, never commit)
+*.png
+*_dump.json
+/inspect_*.json
+/tool*.json
+code/memory/
+code/open_boss.py
+
+# Stray root runtime & factory-era logs
+/data/
+/logs/orchestrator.log
+/logs/task_*/

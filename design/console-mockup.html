@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OpenJobFinder · 控制台原型 (Apple-refined Telemetry)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+:root{
+  /* --- Apple surfaces --- */
+  --bg:        #000000;
+  --panel:     #1c1c1e;   /* bg-card */
+  --panel-2:   #2c2c2e;   /* bg-card2 */
+  --panel-3:   #3a3a3c;   /* bg-hover */
+  --line:      rgba(255,255,255,0.08);
+  --line-2:    rgba(255,255,255,0.05);
+  --grid:      rgba(255,255,255,0.025);
+  --shadow-card: rgba(0,0,0,0.22) 3px 5px 30px 0px;
+  /* --- text (Apple) — every tier is a READABLE color (>=4.5:1 on #1c1c1e card) --- */
+  --t1: #ffffff;   /* primary    ~18:1 */
+  --t2: #adadb8;   /* secondary   ~7:1 */
+  --t3: #84848c;   /* tertiary (weakest readable: descriptions/timestamps/durations) ~4.5:1 */
+  /* --deco is a DECORATION color ONLY (hairlines/grid/dividers/disabled) — NEVER for text */
+  --deco: #48484a;
+  /* --- Apple dark system signal colors --- */
+  --sig-blue:   #0a84ff;   /* W1 / brand */
+  --sig-bright: #2997ff;
+  --sig-green:  #30d158;
+  --sig-amber:  #ff9f0a;
+  --sig-purple: #bf5af2;   /* W2 */
+  --sig-red:    #ff453a;
+  --sig-teal:   #40c8e0;
+  --glow-green: rgba(48,209,88,0.5);
+  --glow-amber: rgba(255,159,10,0.45);
+  /* --- Apple letter spacing --- */
+  --ls-tight:  -0.374px;
+  --ls-cap:    -0.224px;
+  --ls-micro:  -0.12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);
+  color:var(--t1);
+  font-family:-apple-system,'SF Pro Display','SF Pro Text','Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:16px;
+  letter-spacing:var(--ls-cap);
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-feature-settings:"tnum" 1;font-variant-numeric:tabular-nums;letter-spacing:0}
+/* atmospheric layers */
+body::before{ /* fine grid */
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:46px 46px;
+  mask-image:radial-gradient(ellipse 120% 100% at 50% 0%,#000 35%,transparent 100%);
+}
+body::after{ /* noise */
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:0;opacity:0.02;mix-blend-mode:screen;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.app{position:relative;z-index:1;display:flex;height:100vh}
+
+/* ============ SIDEBAR ============ */
+.side{width:240px;flex:none;border-right:1px solid var(--line);display:flex;flex-direction:column;background:linear-gradient(180deg,#161618 0%,#000 100%)}
+.brand{padding:24px 22px 20px}
+.brand .logo{display:flex;align-items:center;gap:10px}
+.brand .mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--sig-blue),var(--sig-teal));position:relative;box-shadow:0 0 20px rgba(10,132,255,0.4)}
+.brand .mark::after{content:'';position:absolute;inset:7px;border:1.5px solid rgba(0,0,0,0.85);border-radius:2px}
+.brand .name{font-weight:600;font-size:18px;letter-spacing:var(--ls-tight)}
+.brand .sub{margin-top:7px;font-size:13px;color:var(--t3);display:flex;gap:7px;align-items:center}
+.brand .ver{color:var(--t3)}
+.navlabel{padding:0 22px;margin:10px 0 9px;font-size:11px;letter-spacing:2.4px;color:var(--t3);font-weight:600}
+nav{flex:1;padding:0 12px}
+.nav-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;color:var(--t2);font-size:16px;cursor:pointer;transition:all .15s;margin-bottom:2px;position:relative;letter-spacing:var(--ls-cap)}
+.nav-item:hover{background:var(--panel);color:var(--t1)}
+.nav-item.active{background:linear-gradient(90deg,rgba(10,132,255,0.16),rgba(10,132,255,0.03));color:#cfe2ff}
+.nav-item.active::before{content:'';position:absolute;left:0;top:10px;bottom:10px;width:2.5px;border-radius:2px;background:var(--sig-blue);box-shadow:0 0 9px var(--sig-blue)}
+.nav-item .ic{width:18px;height:18px;flex:none;opacity:.85}
+.nav-item .cnt{margin-left:auto;font-size:12.5px;padding:1px 8px;border-radius:20px;background:rgba(255,159,10,0.18);color:var(--sig-amber);font-family:'IBM Plex Mono';font-weight:600}
+.agent-stat{padding:16px 22px;border-top:1px solid var(--line)}
+.agent-stat .row{display:flex;align-items:center;gap:9px;font-size:13.5px;color:var(--t3)}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.dot.live{background:var(--sig-green);box-shadow:0 0 0 0 var(--glow-green);animation:pulse 1.8s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 var(--glow-green)}70%{box-shadow:0 0 0 6px rgba(48,209,88,0)}100%{box-shadow:0 0 0 0 rgba(48,209,88,0)}}
+
+/* ============ MAIN ============ */
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{height:56px;flex:none;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 26px;gap:15px;background:rgba(0,0,0,0.5);backdrop-filter:blur(10px)}
+.topbar .crumb{font-size:11.5px;letter-spacing:2.2px;color:var(--t3);font-weight:600}
+.topbar .title{font-size:18px;font-weight:600;letter-spacing:var(--ls-tight)}
+.topbar .spacer{flex:1}
+.topbar .clock{font-size:14px;color:var(--t3)}
+
+.content{flex:1;overflow-y:auto;padding:22px 26px 34px}
+
+/* ---- pending-approval action bar (prominent) ---- */
+.approve-bar{
+  display:flex;align-items:center;gap:17px;
+  padding:17px 22px;margin-bottom:18px;border-radius:16px;
+  background:linear-gradient(100deg,rgba(255,159,10,0.16),rgba(255,159,10,0.05) 70%);
+  border:1px solid rgba(255,159,10,0.34);
+  box-shadow:0 0 0 1px rgba(255,159,10,0.05),0 8px 28px rgba(255,159,10,0.08);
+  opacity:0;animation:rise .5s forwards;position:relative;overflow:hidden;
+}
+.approve-bar::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--sig-amber);box-shadow:0 0 14px var(--sig-amber)}
+.approve-bar .ab-dot{width:12px;height:12px;border-radius:50%;background:var(--sig-amber);flex:none;box-shadow:0 0 0 0 var(--glow-amber);animation:pulseA 1.6s infinite}
+@keyframes pulseA{0%{box-shadow:0 0 0 0 var(--glow-amber)}70%{box-shadow:0 0 0 9px rgba(255,159,10,0)}100%{box-shadow:0 0 0 0 rgba(255,159,10,0)}}
+.approve-bar .ab-txt{display:flex;flex-direction:column;gap:3px}
+.approve-bar .ab-txt .a-h{font-size:17.5px;font-weight:600;letter-spacing:var(--ls-cap);color:#ffd699}
+.approve-bar .ab-txt .a-h b{font-family:'IBM Plex Mono';color:var(--sig-amber);font-size:19px}
+.approve-bar .ab-txt .a-s{font-size:14px;color:var(--t2)}
+.approve-bar .ab-cta{margin-left:auto;display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:11px;background:var(--sig-amber);color:#1a1200;font-weight:600;font-size:15px;cursor:pointer;transition:.15s;box-shadow:0 4px 16px rgba(255,159,10,0.3)}
+.approve-bar .ab-cta:hover{filter:brightness(1.08);transform:translateY(-1px)}
+
+/* ---- telemetry strip ---- */
+.tele{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;opacity:0;animation:rise .5s .06s forwards}
+.tele .cell{background:var(--panel);padding:20px 22px;border-radius:16px;box-shadow:var(--shadow-card);position:relative;overflow:hidden}
+.tele .cell::after{content:'';position:absolute;inset:0;border-radius:16px;border:1px solid var(--line);pointer-events:none}
+.tele .cell .k{font-size:12.5px;letter-spacing:1.4px;color:var(--t3);font-weight:600;text-transform:uppercase}
+.tele .cell .v{margin-top:11px;font-size:40px;font-weight:600;letter-spacing:-1px;line-height:1}
+.tele .cell .v small{font-size:21px;color:var(--t3);font-weight:500}
+.tele .cell .d{margin-top:9px;font-size:13.5px;color:var(--t3)}
+.tele .cell .v.green{color:var(--sig-green)}
+.tele .cell .v.amber{color:var(--sig-amber)}
+
+/* ---- status distribution bar ---- */
+.distrib{margin-top:16px;border-radius:16px;background:var(--panel);box-shadow:var(--shadow-card);padding:19px 22px;position:relative;opacity:0;animation:rise .5s .13s forwards}
+.distrib::after{content:'';position:absolute;inset:0;border-radius:16px;border:1px solid var(--line);pointer-events:none}
+.distrib .hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:13px}
+.distrib .hd .lab{font-size:12.5px;letter-spacing:1.4px;color:var(--t3);font-weight:600;text-transform:uppercase}
+.distrib .hd .tot{font-size:13.5px;color:var(--t3)}
+.distrib .track{height:10px;border-radius:6px;overflow:hidden;display:flex;background:rgba(255,255,255,0.05)}
+.distrib .track i{height:100%;transition:width .4s}
+.distrib .legend{margin-top:15px;display:flex;flex-wrap:wrap;gap:9px 24px}
+.distrib .legend span{font-size:14px;color:var(--t2);display:flex;align-items:center;gap:8px}
+.distrib .legend i{width:9px;height:9px;border-radius:2px}
+.distrib .legend b{color:var(--t3);font-family:'IBM Plex Mono';font-weight:500}
+
+/* ---- command grid ---- */
+.cmd{margin-top:18px;display:grid;grid-template-columns:minmax(400px,460px) 1fr;gap:18px;align-items:start}
+.panel{border-radius:16px;background:var(--panel);box-shadow:var(--shadow-card);position:relative;opacity:0;animation:rise .5s forwards}
+.panel::after{content:'';position:absolute;inset:0;border-radius:16px;border:1px solid var(--line);pointer-events:none}
+.panel.l{animation-delay:.2s}
+.panel.r{animation-delay:.26s}
+.panel .ph{display:flex;align-items:center;gap:11px;padding:16px 22px;border-bottom:1px solid var(--line)}
+.panel .ph .tag{font-size:12.5px;letter-spacing:1.8px;color:var(--t3);font-weight:600}
+.panel .ph .seg{margin-left:auto;display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.panel .ph .seg b{font-size:13px;padding:5px 12px;color:var(--t3);cursor:pointer;font-weight:500}
+.panel .ph .seg b.on{background:var(--panel-3);color:var(--t1)}
+
+/* control panel inner */
+.ctl{padding:19px 22px}
+.grp{margin-bottom:20px}
+.grp:last-child{margin-bottom:0}
+.grp .gh{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.grp .gh .wf{font-family:'IBM Plex Mono';font-size:12.5px;font-weight:700;padding:2px 8px;border-radius:5px}
+.wf.w1{background:rgba(10,132,255,0.18);color:var(--sig-bright)}
+.wf.w2{background:rgba(191,90,242,0.18);color:var(--sig-purple)}
+.grp .gh .gt{font-size:15px;color:var(--t2)}
+.field{display:flex;align-items:center;gap:13px;margin-bottom:12px}
+.field label{font-size:15px;color:var(--t2);flex:1;font-family:'IBM Plex Mono';letter-spacing:0}
+.field input[type=number]{width:86px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;color:var(--t1);font-family:'IBM Plex Mono';font-size:15.5px;padding:7px 11px;text-align:right;outline:none}
+.field input[type=number]:focus{border-color:rgba(10,132,255,0.55);box-shadow:0 0 0 3px rgba(10,132,255,0.12)}
+.field.check{cursor:pointer}
+.toggle{width:40px;height:23px;border-radius:20px;background:rgba(255,255,255,0.13);position:relative;transition:.18s;flex:none}
+.toggle.on{background:var(--sig-blue)}
+.toggle::after{content:'';position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#fff;transition:.18s}
+.toggle.on::after{transform:translateX(17px)}
+.divider{height:1px;background:var(--line);margin:18px 0}
+.runtime{display:flex;gap:22px;flex-wrap:wrap}
+.runtime .field{margin:0}
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}
+.btn{font-size:15px;padding:10px 18px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);color:var(--t1);cursor:pointer;display:inline-flex;align-items:center;gap:9px;transition:.14s;font-weight:500;letter-spacing:var(--ls-cap)}
+.btn:hover{background:var(--panel-3);border-color:var(--line)}
+.btn .gl{width:8px;height:8px;border-radius:50%}
+.btn.go .gl{background:var(--sig-blue);box-shadow:0 0 8px var(--sig-blue)}
+.btn.scan .gl{background:var(--sig-purple);box-shadow:0 0 8px var(--sig-purple)}
+.btn.full{background:linear-gradient(135deg,var(--sig-blue),var(--sig-teal));border:none;color:#fff;font-weight:600;box-shadow:0 4px 18px rgba(10,132,255,0.3)}
+.btn.full:hover{filter:brightness(1.08)}
+.btn.stop{color:var(--sig-red);border-color:rgba(255,69,58,0.28);background:rgba(255,69,58,0.08)}
+.btn.ghost{color:var(--t3);background:transparent}
+.btn.ghost:hover{color:var(--t1)}
+
+/* monitor / progress tree */
+.mon{padding:9px 0;max-height:600px;overflow-y:auto}
+.trow{display:flex;align-items:center;gap:11px;padding:9px 22px;position:relative;transition:background .12s}
+.trow:hover{background:var(--panel-2)}
+.trow .ts{font-family:'IBM Plex Mono';font-size:13px;color:var(--t3);width:70px;flex:none}
+.badge{font-family:'IBM Plex Mono';font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:5px;flex:none;letter-spacing:0.3px}
+.b-run{background:rgba(255,159,10,0.18);color:var(--sig-amber)}
+.b-ok{background:rgba(48,209,88,0.16);color:var(--sig-green)}
+.b-err{background:rgba(255,69,58,0.16);color:var(--sig-red)}
+.b-skip{background:rgba(110,110,115,0.2);color:var(--t3)}
+.trow .nm{font-family:'IBM Plex Mono';color:var(--t1);font-size:15px}
+.trow .nm.dim{color:var(--t2)}
+.trow .scope{font-size:14.5px;color:var(--t3);margin-left:2px}
+.trow .dur{margin-left:auto;font-family:'IBM Plex Mono';font-size:13px;color:var(--t3)}
+.trow.lvl2{padding-left:46px}
+.trow.lvl3{padding-left:74px}
+.trow.running{background:linear-gradient(90deg,rgba(255,159,10,0.09),transparent 70%)}
+.trow.running .nm{color:#ffce80}
+.evt{font-family:'IBM Plex Mono';font-size:12.5px;padding:1px 8px;border-radius:5px;background:rgba(10,132,255,0.12);color:#7db4ff;margin-left:4px}
+.evt.w2{background:rgba(191,90,242,0.14);color:#d6acfb}
+.live-pip{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;color:var(--sig-green)}
+.live-pip .dot.live{width:8px;height:8px}
+
+@keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
+
+/* scrollbars */
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.09);border-radius:11px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.16)}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="side">
+    <div class="brand">
+      <div class="logo"><div class="mark"></div><div class="name">OpenJobFinder</div></div>
+      <div class="sub"><span>AI 求职助手</span><span class="ver mono">v2.0.0</span></div>
+    </div>
+    <div class="navlabel">NAVIGATOR</div>
+    <nav>
+      <div class="nav-item active"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg><span>控制台</span></div>
+      <div class="nav-item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg><span>职位</span></div>
+      <div class="nav-item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>会话</span><span class="cnt">3</span></div>
+      <div class="nav-item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg><span>日志</span></div>
+      <div class="nav-item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>自动化</span></div>
+      <div class="nav-item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>设置</span></div>
+    </nav>
+    <div class="agent-stat">
+      <div class="row"><span class="dot live"></span><span class="live-pip">运行中 · W1 投递</span></div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="topbar">
+      <span class="crumb">CONSOLE</span>
+      <span class="title">控制台</span>
+      <span class="spacer"></span>
+      <span class="clock mono" id="clock">--:--:--</span>
+    </div>
+
+    <div class="content">
+      <!-- PENDING APPROVAL — prominent action bar -->
+      <div class="approve-bar">
+        <span class="ab-dot"></span>
+        <div class="ab-txt">
+          <div class="a-h"><b>3</b> 条 HR 回复待审批</div>
+          <div class="a-s">华为 · 字节跳动 · 腾讯 —— 审批后将在下次 W2 运行时发出</div>
+        </div>
+        <div class="ab-cta">前往会话审批 →</div>
+      </div>
+
+      <!-- TELEMETRY STRIP -->
+      <div class="tele">
+        <div class="cell"><div class="k">总职位</div><div class="v mono">1,240</div><div class="d">累计发现</div></div>
+        <div class="cell"><div class="k">今日投递</div><div class="v mono amber">5<small> / 30</small></div><div class="d">日上限 30</div></div>
+        <div class="cell"><div class="k">已获回复</div><div class="v mono green">12</div><div class="d">HR 主动回应</div></div>
+        <div class="cell"><div class="k">面试 · OFFER</div><div class="v mono">2</div><div class="d">2 面试 · 0 offer</div></div>
+      </div>
+
+      <!-- STATUS DISTRIBUTION -->
+      <div class="distrib">
+        <div class="hd"><span class="lab">状态分布</span><span class="tot mono">1,240 总计</span></div>
+        <div class="track">
+          <i style="width:38%;background:rgba(255,255,255,0.14)"></i>
+          <i style="width:22%;background:rgba(255,255,255,0.26)"></i>
+          <i style="width:16%;background:#6b7787"></i>
+          <i style="width:14%;background:var(--sig-blue)"></i>
+          <i style="width:6%;background:var(--sig-green)"></i>
+          <i style="width:3%;background:var(--sig-amber)"></i>
+          <i style="width:1%;background:var(--sig-red)"></i>
+        </div>
+        <div class="legend">
+          <span><i style="background:rgba(255,255,255,0.14)"></i>已发现 <b>472</b></span>
+          <span><i style="background:rgba(255,255,255,0.26)"></i>已扫描 <b>273</b></span>
+          <span><i style="background:#6b7787"></i>已评分 <b>198</b></span>
+          <span><i style="background:var(--sig-blue)"></i>已投递 <b>174</b></span>
+          <span><i style="background:var(--sig-green)"></i>已回复 <b>74</b></span>
+          <span><i style="background:var(--sig-amber)"></i>面试 <b>37</b></span>
+          <span><i style="background:var(--sig-red)"></i>错误 <b>12</b></span>
+        </div>
+      </div>
+
+      <!-- COMMAND GRID -->
+      <div class="cmd">
+        <!-- LEFT: control -->
+        <section class="panel l">
+          <div class="ph"><span class="tag">CONTROL · 控制</span></div>
+          <div class="ctl">
+            <div class="grp">
+              <div class="gh"><span class="wf w1">W1</span><span class="gt">投递参数</span></div>
+              <div class="field"><label>score_threshold</label><input type="number" value="60" /></div>
+              <div class="field"><label>apply_limit</label><input type="number" value="0" /></div>
+              <div class="field check" onclick="this.querySelector('.toggle').classList.toggle('on')"><label>dry_run</label><div class="toggle"></div></div>
+              <div class="field check" onclick="this.querySelector('.toggle').classList.toggle('on')"><label>custom_url</label><div class="toggle"></div></div>
+            </div>
+            <div class="divider"></div>
+            <div class="grp">
+              <div class="gh"><span class="wf w2">W2</span><span class="gt">检查参数</span></div>
+              <div class="field"><label>max_conversations</label><input type="number" value="30" /></div>
+              <div class="field"><label>days</label><input type="number" value="7" /></div>
+              <div class="field"><label>auto_interval_min</label><input type="number" value="0" /></div>
+            </div>
+            <div class="divider"></div>
+            <div class="runtime">
+              <div class="field check" onclick="this.querySelector('.toggle').classList.toggle('on')"><label>headless</label><div class="toggle on"></div></div>
+              <div class="field check" onclick="this.querySelector('.toggle').classList.toggle('on')"><label>debug</label><div class="toggle on"></div></div>
+            </div>
+            <div class="actions">
+              <button class="btn go"><span class="gl"></span>开始投递</button>
+              <button class="btn scan"><span class="gl"></span>扫描回复</button>
+              <button class="btn full">⚡ 全流程</button>
+              <button class="btn stop">■ 中止</button>
+              <button class="btn ghost">清除缓存</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- RIGHT: monitor -->
+        <section class="panel r">
+          <div class="ph">
+            <span class="tag">LIVE · 实时进度</span>
+            <span class="live-pip" style="margin-left:10px"><span class="dot live"></span>SSE 已连接</span>
+            <div class="seg"><b class="on">树</b><b>事件</b></div>
+          </div>
+          <div class="mon">
+            <div class="trow"><span class="ts">14:32:01</span><span class="badge b-run">RUN</span><span class="nm">W1</span><span class="scope">· 投递流程</span><span class="dur">运行中</span></div>
+            <div class="trow lvl2"><span class="ts">14:32:03</span><span class="badge b-ok">OK</span><span class="nm dim">scan</span><span class="scope">· 发现 24 卡</span><span class="dur">1.2s</span></div>
+            <div class="trow lvl2"><span class="ts">14:32:06</span><span class="badge b-ok">OK</span><span class="nm dim">深圳大学</span><span class="scope">· navigate</span><span class="dur">2.8s</span></div>
+            <div class="trow lvl3"><span class="ts">14:32:09</span><span class="badge b-ok">OK</span><span class="nm">fetch_jd</span><span class="dur">3.1s</span></div>
+            <div class="trow lvl3"><span class="ts">14:32:13</span><span class="badge b-ok">OK</span><span class="nm">score_job</span><span class="evt">job_scored · 82</span><span class="dur">4.0s</span></div>
+            <div class="trow lvl3 running"><span class="ts">14:32:17</span><span class="badge b-run">RUN</span><span class="nm">apply</span><span class="scope">· 投递中…</span><span class="dur">2.4s</span></div>
+            <div class="trow lvl2"><span class="ts">14:32:06</span><span class="badge b-skip">SKIP</span><span class="nm dim">e3c924f0</span><span class="scope">· 评分 41 < 60</span><span class="dur">5.5s</span></div>
+            <div class="trow" style="margin-top:6px;border-top:1px solid var(--line-2)"><span class="ts">14:18:44</span><span class="badge b-ok">OK</span><span class="nm">W2</span><span class="scope">· 检查回应</span><span class="dur">6m 12s</span></div>
+            <div class="trow lvl2"><span class="ts">14:19:02</span><span class="badge b-ok">OK</span><span class="nm dim">华为</span><span class="scope">· analyze</span><span class="evt w2">intent · 面试邀约</span><span class="dur">3.4s</span></div>
+            <div class="trow lvl2"><span class="ts">14:19:10</span><span class="badge b-ok">OK</span><span class="nm dim">华为</span><span class="scope">· resume</span><span class="evt w2">resume_sent</span><span class="dur">5.1s</span></div>
+            <div class="trow lvl2"><span class="ts">14:20:31</span><span class="badge b-ok">OK</span><span class="nm dim">字节跳动</span><span class="scope">· reply</span><span class="evt w2">reply_sent</span><span class="dur">2.2s</span></div>
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script>
+  function tick(){const d=new Date();const p=n=>String(n).padStart(2,'0');document.getElementById('clock').textContent=p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())}
+  tick();setInterval(tick,1000);
+</script>
+</body>
+</html>

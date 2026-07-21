@@ -1,0 +1,53 @@
+# OpenJobFinder 配置 —— 三层模型
+#   Layer 1 系统配置  + Layer 3 workflow 运行参数出厂默认  → 本文件（git 跟踪）
+#   Layer 2 用户求职偏好画像                              → data/profile.yaml（gitignore）
+#   Layer 3 用户"设为默认"保存的覆盖                       → data/user_settings.yaml（gitignore，懒创建）
+# 运行参数优先级（后者覆盖前者）：本文件 w1/w2 < user_settings.yaml < API/CLI 本次 override
+# 完整说明见 docs/configuration.md
+
+# ===== Layer 1：系统配置（开发者维护，前端基本只读）=====
+llm:                          # [W1+W2] 模型与 fallback 链，按 capability 路由
+  capabilities:
+    fast:
+    - type: ollama            # 本地 ollama（快）
+      model: qwen3:8b
+      base_url: http://localhost:11434
+    balanced:                 # W2 分析（analyze_intent）走此链，仅 ollama、无 CLI 兜底。
+                              # - ollama(qwen3:8b, think=false)：准且快（实测富模板 6/6、~0.9s），本地无配额问题。
+                              #   ollama 断线时诚实退化 unknown（不错判）。
+                              # 为什么不加 CLI 兜底（两个 CLI 都是 agent 壳、非 chat 补全）：
+                              # - codex_cli 走 `codex exec` 是编程 agent（协作式执行任务，会澄清/规划），把要
+                              #   分类的消息当背景素材：实测无 schema 时反问「你想让我干什么」，加 --output-schema
+                              #   只是把反问塞进 JSON 形状→随手填 general/unknown。非 prompt 可修（三种 system ×
+                              #   low/med/high reasoning × ignore-user-config 全错）。
+                              # - claude_cli 走 `claude -p` 忽略 system 且抢主对话 Claude 配额。
+                              # 正道——要用云端大模型判意图，走 chat completions 而非 agent CLI：
+                              # - OpenAI(gpt-5.x)：设 OPENAI_API_KEY + 加 openai_compatible provider。
+                              # - Claude：设 ANTHROPIC_API_KEY + 加 anthropic_api（自带 key、不抢主对话配额）。
+    - type: ollama
+      model: qwen3:8b
+      base_url: http://localhost:11434
+    powerful:
+    - type: claude_cli
+    - type: anthropic_api
+      model: claude-opus-4-8
+      api_key_env: ANTHROPIC_API_KEY
+  tool_providers:             # null = 用 capability 路由；填 provider 名可覆盖单个工具
+    score_job: null           # [W1]
+    analyze_intent: null      # [W2]
+dashboard:
+  port: 8765
+
+# ===== Layer 3：workflow 运行参数出厂默认（前端可覆盖 / 设为默认）=====
+w1:                           # 投递流程
+  score_threshold: 60         # 低于此分不投递
+  max_cards: 0                # 0 = 本次不限处理卡片数
+  daily_limit: 150            # 每日投递上限（当前仅用于 stats 显示，pipeline 未接限流）
+  dry_run: false              # true = 演练，不真实投递
+  headless: true              # 浏览器无头模式
+w2:                           # 检查回应流程
+  max_conversations: 200      # 本次最多处理会话数
+  no_response_days: 14        # 会话多少天无新消息 → 打「停滞」软标记(stage=closed)+提醒；不再拒绝 application
+  stale_conv_days: 30         # 投递满多少天且无进展(排除面试/offer) → 清理数据(级联删岗位+会话+消息)，重新走流程
+  dry_run: false
+  headless: true
