@@ -121,10 +121,26 @@ server.py 内联正则解析，注释自承 "mirrors Chat.tsx"，前端持第二
 
 后端下沉 `tools/biz_logic/wechat_id.py`；**前端那份直接删除**——它是冗余 fallback：`wechat_id` 由 API 从**同一批 messages** 算好返回，前端再算不可能得到不同结果。`isWechatCard` 保留（渲染判断，非身份提取）。补 8 个测试（内联时零测试）。
 
-### 3.5 upsert_application 完整收敛 — 待做（仅做了 `applied_at` 语义修复）
-### 3.6 upsert_hr_conversation 完整收敛 — 待做
+### 3.5 upsert_application 完整收敛 — **评估后不做**（`applied_at` 真 bug 已修）
 
-> **第五例双实现**：`tracker.upsert_hr_conversation` **不写** `last_msg_ts`/`hr_title`/`job_id`，只有工具版写（且含 legacy re-key 与 stage 状态机 CASE）。测试因此写不进该列，当前在测试里直写并注明。
+`tracker.upsert` 没有任何生产调用方（只被测试调用），工具版才是 `card_pipeline` 走的路径。两者差异：tracker 版有 `_validate_transition` + created_at 保留，工具版有 `content_hash`。
+
+看似该收敛，但 `VALID_TRANSITIONS` 在 tracker 里已标注 **ADVISORY ONLY**——它只驱动一条警告日志，真实转换（`sync_application_status` / purge）本来就走裸 SQL 绕过它。所以生产路径缺这个校验影响有限，而完整收敛要把 `content_hash` 并进 tracker 并重排 created_at 逻辑，收益不匹配风险。
+
+**真正的缺陷（`applied_at` 语义相反）已在 2.4 修掉**，那才是会造成实际后果的部分。
+
+### 3.6 upsert_hr_conversation 完整收敛 — **不该做，是我判断错了**
+
+一度记为"第五例双实现"。查证后确认：**两个实现职责不同，有意分离**，且工具文件顶部注释早已写明。
+
+| | 调用方 | 写什么 |
+|---|---|---|
+| 工具版 | `card_pipeline`(W1 stub) + `conversation_pipeline`(W2 扫描) | 身份/stage/`last_msg_ts`/`hr_title`/`job_id`；**故意不碰** intent 三件套 |
+| tracker 版 | 仅 `services/onboarding.py`（播种） | 身份/stage + intent/reply_status/reply_text |
+
+列集不同、调用方不重叠 → 不是分叉。tracker 版**本就不该写** `last_msg_ts`（那是扫描时数据，属工具版职责），所以测试里直写该列是合理做法。
+
+**教训**：判断分叉前先看**调用方是否重叠、列集是否相同**，并先读文件顶部注释——这里的取舍早就写好了，我没读就下了结论。这与 3.1 是同一个错误的两次重犯。
 
 ---
 
@@ -157,12 +173,24 @@ server.py 内联正则解析，注释自承 "mirrors Chat.tsx"，前端持第二
 
 ## 贯穿全程的一条模式
 
-**同一张表的写操作散在多处必然漂移。** 已连抓五例，判据是**同一列在不同实现里的 CASE 分支不一致**：
+**同一张表的写操作散在多处必然漂移。** 已确认四例，判据是**同一列在不同实现里的 CASE 分支不一致**：
 
 1. `mark_reply_sent` 三份两义（NULL vs 'sent'）
 2. `update_hr_analysis` 双实现（缺水位线 / None 语义相反）
 3. `upsert_application` 的 `applied_at`（保留首次 vs 更新为最后）
-4. `upsert_hr_conversation` 缺三列（`last_msg_ts`/`hr_title`/`job_id`）
-5. 冒烟自持执行路径（绕过队列的 schedule_log / trigger 映射 / 错误清理）
+4. 冒烟自持执行路径（绕过队列的 schedule_log / trigger 映射 / 错误清理）
 
 收敛手法统一为：**SQL 只留 tracker 一处，工具做薄壳 + ToolResult 契约**；或依赖注入（`submit` 回调）让被测逻辑只管断言。
+
+## 但同样重要：两次差点把有意设计当缺陷
+
+这轮里我有**两次**准备"修"掉其实是刻意为之的东西：
+
+| 项 | 我以为 | 实际 |
+|---|--------|------|
+| 3.1 `too_old` 优先于 `unanalyzed` | 架空了"失败下轮必重试"的承诺 | #51 的有意取舍——分析两月前的死线程没收益，真机 909→12 靠它收敛 |
+| 3.6 `upsert_hr_conversation` 双实现 | 第五例分叉 | 有意职责分离——工具版管运行时身份/stage，tracker 版只管 onboarding 播种，列集与调用方均不重叠 |
+
+**两次的识别信号都在现场**：3.1 有测试专门断言相反行为且 docstring 写明理由；3.6 的工具文件顶部注释直接写着 "intentionally kept apart rather than merged"。
+
+**动手前先读注释与测试名。** 审计报告（包括 AI 生成的）给出的是可疑点，不是判决；与既有取舍冲突时，正确处理往往是**把取舍写进代码**，而不是改行为。
