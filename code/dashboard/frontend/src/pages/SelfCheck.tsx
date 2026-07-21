@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { API, type SelfCheckReport, type SelfCheckCfg, type SelfCheckHistoryEntry } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
 
@@ -71,9 +71,20 @@ function ScheduledCard({ onRan }: { onRan: () => void }) {
   const [saved, setSaved] = useState(false)
   const [running, setRunning] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // Poll handles from runNow. Kept in refs so unmounting cancels them: they were
+  // previously local consts, so navigating away within the 10-minute window left
+  // the interval firing onRan into a dead component for up to 10 minutes.
+  const pollRef = useRef<number | null>(null)
+  const stopRef = useRef<number | null>(null)
+
+  const clearPolling = () => {
+    if (pollRef.current !== null) { window.clearInterval(pollRef.current); pollRef.current = null }
+    if (stopRef.current !== null) { window.clearTimeout(stopRef.current); stopRef.current = null }
+  }
 
   useEffect(() => {
     void API.getSchedule().then((s) => { if (s.selfcheck) setCfg(s.selfcheck) }).catch(() => {})
+    return clearPolling
   }, [])
 
   const patch = (p: Partial<SelfCheckCfg>) => setCfg((c) => (c ? { ...c, ...p } : c))
@@ -94,8 +105,12 @@ function ScheduledCard({ onRan }: { onRan: () => void }) {
     setRunning(true); setErr(null)
     try {
       await API.runSelfCheckCycle({})
-      const id = window.setInterval(onRan, 15000)
-      window.setTimeout(() => window.clearInterval(id), 600000)
+      // Replace any poll still running from a previous click, then poll for the
+      // result and stop after 10 minutes. Both handles live in refs so the
+      // unmount cleanup can cancel them.
+      clearPolling()
+      pollRef.current = window.setInterval(onRan, 15000)
+      stopRef.current = window.setTimeout(clearPolling, 600000)
     } catch (e) {
       setErr((e as Error).message)
     } finally {

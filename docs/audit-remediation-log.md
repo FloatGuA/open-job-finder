@@ -103,20 +103,48 @@ tracker 版    applied_at = excluded.applied_at                          -- 更�
 
 **改**：改用 `last_msg_ts`；`last_msg_ts=0` 的行保留原入库时间逻辑。
 
-### 3.3 配置读写统一 config_manager — 待做
-### 3.4 微信号解析下沉 biz_logic — 待做
-### 3.5 upsert_application 完整收敛（工具调 tracker，含 content_hash）— 待做
+### 3.3 配置读写统一 config_manager — `71eb3b3`
+
+一半端点走单例、一半直接 yaml 读写同一批文件。单例有内存缓存，被绕过写盘后 `get_system_config()`/`get_profile()` 继续返回旧值——`/api/config/system` 正是读单例的，显示与刚保存的不一致。
+
+`/api/profile` GET/POST、`/api/config/llm` POST、`/api/preview/search` 全部改走单例。
+
+**llm 段需要专门方法**：`save_system_config` 是顶层 `dict.update`，而 llm 是嵌套结构（`capabilities[level]` 是 provider 字典的**列表**），平铺 update 会破坏它——config_manager 里「禁止写 llm」的守卫是对的，端点绕过它才是问题。新增 `save_llm_settings()` 只改首个 provider 的 type。
+
+`schedule.yaml` / `resume_base.yaml` 不动：不属 config_manager 管辖。**收敛范围按「谁的文件」划，不是见 yaml 就收。**
+
+**测试隔离**：ConfigManager 是全局单例，绑定首次路径后忽略后续（有意设计）。端点改走单例后测试间会读到第一个测试的 tmp_path → client fixture 重置 `_instance`，并按真实部署前提在沙箱建最小 config.yaml，**而不是放宽「缺配置即 fail-fast」的守卫**。
+
+### 3.4 微信号解析下沉 biz_logic — `71eb3b3`
+
+server.py 内联正则解析，注释自承 "mirrors Chat.tsx"，前端持第二份拷贝 → Boss 改文案要改两处。
+
+后端下沉 `tools/biz_logic/wechat_id.py`；**前端那份直接删除**——它是冗余 fallback：`wechat_id` 由 API 从**同一批 messages** 算好返回，前端再算不可能得到不同结果。`isWechatCard` 保留（渲染判断，非身份提取）。补 8 个测试（内联时零测试）。
+
+### 3.5 upsert_application 完整收敛 — 待做（仅做了 `applied_at` 语义修复）
 ### 3.6 upsert_hr_conversation 完整收敛 — 待做
 
 > **第五例双实现**：`tracker.upsert_hr_conversation` **不写** `last_msg_ts`/`hr_title`/`job_id`，只有工具版写（且含 legacy re-key 与 stage 状态机 CASE）。测试因此写不进该列，当前在测试里直写并注明。
 
 ---
 
-## 阶段 4 · Low — 待做
+## 阶段 4 · Low（已完成）
 
-- 4.1 补 `score_job` 加权聚合单测（唯一实质测试空白）
-- 4.2 修 `SelfCheck.tsx` interval 泄漏（句柄未存 ref，卸载不清）
-- 4.3 修正 CLAUDE.md/MEMORY「禁止 tool 层裸 SQL」措辞，与 `tools/db` 实际设计对齐
+### 4.1 score_job 加权聚合单测 — 12 例
+
+「models judge, code decides」的 **code 那一半**：LLM 给五个维度分，Python 做加权，产出决定每次投递的那个数字。此前零测试——错的权重、拼错的维度 key（静默落回 50）、坏掉的钳制都会无声上线。
+
+覆盖：权重和为 1、满分/零分、单维度加权值（同时钉住权重数值与"是加权和而非平均"）、混合手算、缺维度落回 50、越界钳制、非 dict 维度项、浮点、解析失败、LLM 异常不被吞、`provider_used` 可追踪。**一次通过**——实现本就正确，缺的只是守门。
+
+### 4.2 SelfCheck.tsx interval 泄漏 — 已修
+
+`runNow` 里 `setInterval`/`setTimeout` 句柄是局部常量，无 cleanup。10 分钟窗口内离开页面 → interval 继续把 `onRan` 打到已卸载组件，最长空转 10 分钟。改为存 ref + `useEffect` 卸载清理，并在重复点击时先清旧 poll。
+
+### 4.3 铁律措辞修正 — 已修
+
+旧措辞「禁止在端点 / tool 层直接执行 SQL」与 `tools/db/*` 的实际形态冲突（13 个工具都复用 `tracker.conn`，是 sanctioned 的），读起来像被集体违反，会误导后续评审。
+
+改述为**「一个状态转换只能有一份 SQL」**：tracker 独占连接/schema/迁移与每个写操作的唯一实现，`tools/db/*` 做薄壳调 tracker，端点一律无 SQL。CLAUDE.md 里附上五例漂移表与识别判据（**同一列在不同实现里的 CASE 分支不一致**）。
 
 ---
 

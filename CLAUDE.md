@@ -121,6 +121,20 @@ code/
 
 > 例外：纯读端点（GET `/api/jobs`、`/api/stats` 等）直接调 `tracker` 序列化即可，**不强行 tool 化**——tool 契约是为流水线可观测/可重放设计的，仪表盘读取用不上，硬包只剩仪式感。
 
+**第二条铁律：一个状态转换只能有一份 SQL。** `tracker` 独占连接、schema、迁移，以及每个写操作的唯一实现；`tools/db/*` 是薄壳（提供 ToolResult 契约与 registry 的 trace/SSE），**调 tracker 而不是自持 SQL**；端点里一律不出现 SQL。
+
+这条不是洁癖——2026-07 一次审查连抓五例同构漂移，全都因为"同一转换有两份实现"：
+
+| 分叉 | 后果 |
+|------|------|
+| `mark_reply_sent` 三份 | 一份写 `NULL` 而非 `'sent'`，不在保护集里 → **可能给同一 HR 二次发送** |
+| `update_hr_analysis` 两份 | tracker 版缺 `last_analyzed_ts` → 误接即回退读/析解耦；传 `None` 时一版保留原值、一版写 NULL 清空草稿 |
+| `upsert_application` 的 `applied_at` | 一版"保留首次"、一版"更新为最后" → 重投不计入今日，且被按过期时间提前清理 |
+| `upsert_hr_conversation` | tracker 版**不写** `last_msg_ts`/`hr_title`/`job_id` |
+| 冒烟自持执行路径 | 绕过队列的 schedule_log / trigger 映射 / 错误清理 |
+
+**识别判据：同一列在不同实现里的 CASE 分支不一致。** 发现分叉时不要两边同步，选正确的那版收敛掉另一版（见 `docs/audit-remediation-log.md`）。
+
 ---
 
 ## 开发规则
