@@ -1,3 +1,5 @@
+import time
+
 from tools.base import BaseTool, ToolResult
 
 
@@ -32,24 +34,39 @@ class MarkTimeoutStatuses(BaseTool):
     ) -> ToolResult:
         # `stale_conv_days` is accepted for signature back-compat but unused here — the
         # 30-day threshold now drives the separate purge step, not conversation close.
+        # Staleness is measured from when the HR last SPOKE (last_msg_ts, the real
+        # millisecond timestamp from getGeekFriendList), not from when we happened to
+        # write the message to our DB. hr_messages.created_at is insert time: the
+        # first time we scan a months-old thread every one of its messages gets
+        # today's created_at, so the thread looked freshly active and was never
+        # soft-closed.
+        #
+        # This also aligns the two clocks. filter_conversations' too_old gate already
+        # uses last_msg_ts to decide "don't process"; using a different clock here to
+        # decide "soft-close" left conversations that were skipped as stale yet never
+        # marked as such -- permanently pending, invisible to both.
+        #
+        # last_msg_ts == 0 (DOM-fallback / pre-migration rows) keeps the old
+        # insert-time behaviour: an unknown real time is better served by a rough
+        # signal than by treating the row as infinitely old.
+        cutoff_ms = int((time.time() - no_response_days * 86400) * 1000)
         with self._db.conn:
-            # Stall marker: a conversation with no new message for `no_response_days`
-            # (keyed off the last recorded message; falls back to created_at when the
-            # conversation has no messages) is moved to stage='closed'. Terminal stages
-            # (already closed / offer) are left alone.
             cur_convs = self._db.conn.execute(
                 """
                 UPDATE hr_conversations
                 SET stage = 'closed'
                 WHERE stage NOT IN ('closed', 'offer')
-                  AND COALESCE(
-                        (SELECT MAX(m.created_at) FROM hr_messages m
-                         WHERE m.conv_id = hr_conversations.conv_id),
-                        created_at
-                      ) <= datetime('now', ? || ' days')
+                  AND CASE
+                        WHEN COALESCE(last_msg_ts, 0) > 0 THEN last_msg_ts <= ?
+                        ELSE COALESCE(
+                               (SELECT MAX(m.created_at) FROM hr_messages m
+                                WHERE m.conv_id = hr_conversations.conv_id),
+                               created_at
+                             ) <= datetime('now', ? || ' days')
+                      END
                 RETURNING conv_id
                 """,
-                (f"-{no_response_days}",),
+                (cutoff_ms, f"-{no_response_days}"),
             )
             stale_closed = [row[0] for row in cur_convs.fetchall()]
 

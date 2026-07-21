@@ -106,6 +106,59 @@ def test_mark_timeout_keeps_recent_and_terminal(tracker):
     assert tracker.get_hr_conversation("offered").stage == "offer"
 
 
+def _days_ago_ms(days: int) -> int:
+    import time
+    return int((time.time() - days * 86400) * 1000)
+
+
+def _set_last_msg_ts(tracker, conv_id, ts_ms):
+    """Write last_msg_ts directly.
+
+    tracker.upsert_hr_conversation does not persist this column -- only the
+    upsert_hr_conversation TOOL does (it also owns hr_title/job_id and the legacy
+    re-key logic). That split is a known divergence queued for convergence; until
+    then the fixture writes the column itself rather than silently testing nothing.
+    """
+    with tracker.conn:
+        tracker.conn.execute(
+            "UPDATE hr_conversations SET last_msg_ts = ? WHERE conv_id = ?",
+            (ts_ms, conv_id),
+        )
+
+
+def test_stall_is_measured_from_when_the_hr_last_spoke(tracker):
+    """last_msg_ts (real chat-list timestamp), not insert time.
+
+    hr_messages.created_at is when WE wrote the row: the first time a months-old
+    thread is scanned, every message gets today's created_at, so the thread looked
+    freshly active and was never soft-closed. The row below is written today but
+    its last real message is 60 days old -- it must still close.
+    """
+    _conv(tracker, "stale", "A", "X", "active", created_at="2026-07-22T00:00:00+00:00")
+    _set_last_msg_ts(tracker, "stale", _days_ago_ms(60))
+
+    res = MarkTimeoutStatuses(db=tracker).execute(no_response_days=14)
+    assert "stale" in res.data["stale_closed"]
+
+
+def test_recent_real_activity_survives_an_old_insert_date(tracker):
+    """The mirror case: a row created long ago whose HR spoke yesterday is live."""
+    _conv(tracker, "live", "A", "X", "active", created_at="2020-01-01T00:00:00+00:00")
+    _set_last_msg_ts(tracker, "live", _days_ago_ms(1))
+
+    res = MarkTimeoutStatuses(db=tracker).execute(no_response_days=14)
+    assert res.data["stale_closed"] == []
+    assert tracker.get_hr_conversation("live").stage == "active"
+
+
+def test_rows_without_a_real_timestamp_fall_back_to_insert_time(tracker):
+    """DOM-fallback / pre-migration rows have last_msg_ts=0; an unknown real time is
+    better served by the old rough signal than by treating the row as infinitely old."""
+    _conv(tracker, "nots", "A", "X", "active", created_at="2020-01-01T00:00:00+00:00")
+    res = MarkTimeoutStatuses(db=tracker).execute(no_response_days=14)
+    assert "nots" in res.data["stale_closed"]
+
+
 def test_mark_timeout_never_rejects_applications(tracker):
     # A stale APPLIED job (old applied_at) must NOT be rejected — applying needs no reply.
     _app(tracker, "j1", "A", "X", AppStatus.APPLIED.value,

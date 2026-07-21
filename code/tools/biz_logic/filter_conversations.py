@@ -93,11 +93,22 @@ class FilterConversations(BaseTool):
                 # Activity-window gate: last message older than the window and no
                 # unread badge / approved reply -> stale, skip instead of navigating
                 # in + LLM-analyzing a months-old thread. Placed AFTER unread/approved
-                # (those must always be handled) but BEFORE new/newer_ts/preview so an
-                # old conversation can't slip through on any of those. conv_ts == 0
+                # (those must always be handled) but BEFORE new/unanalyzed/preview so
+                # an old conversation can't slip through on any of those. conv_ts == 0
                 # (DOM-fallback / pre-migration rows with no real timestamp) is exempt:
                 # unknown time falls through to the normal signals rather than being
                 # wrongly judged old.
+                #
+                # DELIBERATE: this OUTRANKS `unanalyzed`, so a stale row whose analyze
+                # once failed is NOT revived. That does mean #53's "a failed analyze is
+                # retried next run" only holds inside the activity window -- a real
+                # trade-off, reviewed and kept. Analysing a thread whose last message is
+                # two months old buys nothing (FinalizeStep soft-closes it anyway) and
+                # costs an LLM call per corpse; on real data the window is what turned
+                # 909 conversations into the ~12 live ones worth processing (#51).
+                # An HR who re-engages brings an unread badge or a newer timestamp,
+                # both of which are checked before this. Do not "fix" this ordering
+                # without also answering what the analysis of a dead thread is for.
                 action, reason = "skip", "too_old"
             elif conv_id not in stored_states:
                 action, reason = "process", "new"
