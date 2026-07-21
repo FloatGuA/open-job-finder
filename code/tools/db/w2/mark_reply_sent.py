@@ -19,9 +19,9 @@ class MarkReplySent(BaseTool):
         # current status (update_hr_analysis intentionally protects 'approved' and
         # other decided states from re-analysis, so it cannot be used here). 'sent'
         # is itself a protected status, so later re-analysis won't revive the reply.
-        with self._db.conn:
-            cur = self._db.conn.execute(
-                "UPDATE hr_conversations SET reply_status = 'sent', reply_text = '' WHERE conv_id = ?",
-                (conv_id,),
-            )
-        return ToolResult(ok=True, data={"updated": cur.rowcount})
+        #
+        # Delegates to tracker rather than holding its own copy of the SQL: this
+        # transition previously existed in three places with two different meanings,
+        # and the odd one out (NULL instead of 'sent') left conversations eligible
+        # for a second send.
+        return ToolResult(ok=True, data={"updated": self._db.mark_reply_sent(conv_id)})

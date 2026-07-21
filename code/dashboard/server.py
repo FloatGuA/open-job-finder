@@ -1818,18 +1818,13 @@ async def reject_conversation(conv_id: str) -> JSONResponse:
 
 @app.post("/api/conversations/{conv_id}/mark-sent")
 async def mark_sent(conv_id: str) -> JSONResponse:
+    """Mark a reply as sent (user did it manually in Boss).
+
+    Delegates to tracker: this was the only write endpoint holding its own SQL,
+    and the same transition lived in three places with two different meanings.
+    """
     _initialize_state()
-    tracker = app.state.tracker
-    with tracker.conn:
-        cur = tracker.conn.execute(
-            """
-            UPDATE hr_conversations
-            SET reply_status = 'sent', reply_text = ''
-            WHERE conv_id = ?
-            """,
-            (conv_id,),
-        )
-    if cur.rowcount <= 0:
+    if app.state.tracker.mark_reply_sent(conv_id) <= 0:
         return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
     return JSONResponse({"ok": True})
 

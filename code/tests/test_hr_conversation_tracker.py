@@ -258,13 +258,77 @@ def test_concurrent_writes_no_lock(tracker):
     assert len(tracker.get_hr_conversations()) == 60
 
 
-def test_mark_reply_sent_clears_reply(tracker):
+def test_mark_reply_sent_records_sent_not_null(tracker):
+    """'sent' is a PROTECTED status in update_hr_analysis; NULL is not.
+
+    This method used to write NULL/NULL, so a conversation whose reply had already
+    gone out looked "never processed" to the next re-analysis, which could draft and
+    send a SECOND reply to the same HR. The status must be the protected terminal
+    value, and the working draft must be cleared.
+    """
     conv = _make_conv()
     tracker.upsert_hr_conversation(conv)
     tracker.update_hr_analysis(conv.conv_id, "interview_invite", "我可以", "approved")
 
-    tracker.mark_reply_sent(conv.conv_id)
+    updated = tracker.mark_reply_sent(conv.conv_id)
+
+    assert updated == 1
+    result = tracker.get_hr_conversation(conv.conv_id)
+    assert result.reply_status == "sent"
+    assert not (result.reply_text or "").strip()
+
+
+def test_analysis_is_not_lost_when_the_row_does_not_exist_yet(tracker):
+    """W2 analyses BEFORE it upserts (stage depends on the intent being computed),
+    so for a conversation W1 never applied to -- an HR who messaged first -- the row
+    does not exist yet. A plain UPDATE matched zero rows and silently dropped the
+    intent, the draft and the watermark; the later upsert then wrote stage only,
+    producing rows whose stage had advanced while intent stayed empty. Four such
+    rows were found in production.
+    """
+    tracker.update_hr_analysis(
+        "brand-new-conv", "interview_invite",
+        reply_text="方便的", reply_status="pending", last_analyzed_ts=1700,
+    )
+
+    result = tracker.get_hr_conversation("brand-new-conv")
+    assert result is not None, "分析结果不能因为行不存在而丢失"
+    assert result.intent == "interview_invite"
+    assert result.reply_text == "方便的"
+    assert result.last_analyzed_ts == 1700
+
+
+def test_ensuring_the_row_never_disturbs_an_existing_one(tracker):
+    """The INSERT must be OR IGNORE: re-analysing an existing conversation must not
+    reset its identity columns or walk its stage backwards."""
+    conv = _make_conv()
+    conv.stage = "interview"
+    tracker.upsert_hr_conversation(conv)
+
+    tracker.update_hr_analysis(conv.conv_id, "general", reply_text="草稿", reply_status="pending")
 
     result = tracker.get_hr_conversation(conv.conv_id)
-    assert result.reply_status is None
-    assert result.reply_text is None
+    assert result.stage == "interview"          # not reset to 'new'
+    assert result.hr_name == conv.hr_name       # identity preserved
+    assert result.company == conv.company
+
+
+def test_mark_reply_sent_reports_missing_conversation(tracker):
+    """Rowcount is what lets the endpoint answer 404 instead of a silent success."""
+    assert tracker.mark_reply_sent("nope") == 0
+
+
+def test_sent_status_survives_reanalysis(tracker):
+    """The whole point of using 'sent': a later re-analysis must not revive the
+    reply and make it eligible for sending again."""
+    conv = _make_conv()
+    tracker.upsert_hr_conversation(conv)
+    tracker.update_hr_analysis(conv.conv_id, "interview_invite", "我可以", "approved")
+    tracker.mark_reply_sent(conv.conv_id)
+
+    # A later scan re-analyses the conversation and would like to draft a reply.
+    tracker.update_hr_analysis(conv.conv_id, "general", "新的草稿", "pending")
+
+    result = tracker.get_hr_conversation(conv.conv_id)
+    assert result.reply_status == "sent"
+    assert not (result.reply_text or "").strip()

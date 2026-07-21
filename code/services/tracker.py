@@ -26,6 +26,18 @@ VALID_TRANSITIONS = {
     AppStatus.REJECTED.value:     {AppStatus.APPLIED.value},
 }
 
+# Reply statuses that reflect a user/system DECISION and must never be clobbered
+# when W2 re-analyzes a conversation: 'approved' (user OK'd it), 'revision' (user
+# edited it), 'dismissed' (user declined), 'sent' (already delivered to the HR).
+# Only null / 'pending' are freely refreshed. Both reply_text AND reply_status are
+# protected -- an earlier version omitted 'approved' and left reply_text open, so
+# re-analysis could downgrade approved→pending and overwrite a user-revised draft.
+PROTECTED_REPLY_STATUSES = frozenset({"approved", "sent", "dismissed", "revision"})
+
+# What a caller may ASK for. The protected ones above are reached through their own
+# explicit transitions (approve / dismiss / mark_reply_sent), never via re-analysis.
+ALLOWED_REPLY_STATUSES = frozenset({None, "pending", "sent"})
+
 
 class ApplicationTracker:
     def __init__(self, db_path: Optional[str] = None):
@@ -632,30 +644,77 @@ class ApplicationTracker:
         intent: str,
         reply_text: Optional[str] = None,
         reply_status: Optional[str] = None,
+        last_analyzed_ts: Optional[int] = None,
     ) -> None:
-        """Store LLM analysis results.
+        """Store LLM analysis results. Single implementation of this transition.
 
         Does NOT overwrite a reply the user has acted on -- approved / revision /
-        sent / dismissed are all preserved. Only 'pending' (or no status) gets a
-        freshly regenerated draft, so re-analysis can never clobber a user's
+        sent / dismissed are all preserved (PROTECTED_REPLY_STATUSES). Only null or
+        'pending' is freely refreshed, so re-analysis can never clobber a user's
         edit, approval, send, or dismissal.
+
+        Passing None for reply_text/reply_status leaves the stored value alone; it
+        does NOT blank it. (An earlier copy of this method in tracker wrote the NULL
+        through, wiping drafts -- the tool layer had the correct behaviour and this
+        is now the only version.)
+
+        last_analyzed_ts is the dirty-check watermark, advanced ONLY here, i.e. only
+        when analyze actually concluded. A DEGRADED analyze never reaches this call,
+        so the watermark stays behind and filter_conversations re-selects the
+        conversation next run (#53). MAX guards against out-of-order regress; None
+        leaves it untouched.
         """
+        # No reply_status whitelist here on purpose: this is the storage layer, and
+        # legitimate callers (approve/dismiss flows, tests building fixtures) need to
+        # set decided statuses directly. The restriction that RE-ANALYSIS may only
+        # ask for null/pending/sent belongs to the pipeline's entry point, so it is
+        # enforced in the update_hr_analysis tool instead. Constrain at the door,
+        # not in the vault.
+        protected_sql = ", ".join(f"'{s}'" for s in sorted(PROTECTED_REPLY_STATUSES))
+
+        # Make sure the row exists before UPDATE-ing it. W2 analyses a conversation
+        # BEFORE the pipeline upserts it (stage depends on the intent we are about
+        # to compute), so for a conversation W1 never applied to -- an HR who
+        # messaged first, or a legacy row being re-keyed -- the UPDATE matched zero
+        # rows and silently dropped the intent, the draft AND the watermark. The
+        # later upsert then wrote stage/preview only, leaving rows whose stage had
+        # advanced while intent stayed empty (4 such rows found in production).
+        # Identity columns are left blank here; the upsert that follows fills them.
         with self.conn:
             self.conn.execute(
                 """
-                UPDATE hr_conversations
-                SET intent       = ?,
+                INSERT OR IGNORE INTO hr_conversations (conv_id, hr_name, company, stage, created_at)
+                VALUES (?, '', '', 'new', ?)
+                """,
+                (conv_id, self._utcnow_iso()),
+            )
+        # NOTE: hr_conversations has no `updated_at` column (T030 keeps only
+        # created_at). An earlier version wrote it here and every call raised
+        # "no such column", so analysis was never persisted. Don't re-add it
+        # without adding the column.
+        with self.conn:
+            self.conn.execute(
+                f"""
+                UPDATE hr_conversations SET
+                    intent       = ?,
                     reply_text   = CASE
-                        WHEN reply_status IN ('approved', 'revision', 'sent', 'dismissed') THEN reply_text
-                        ELSE ?
+                        WHEN reply_status IN ({protected_sql}) THEN reply_text
+                        WHEN ? IS NOT NULL THEN ?
+                        ELSE reply_text
                     END,
                     reply_status = CASE
-                        WHEN reply_status IN ('approved', 'revision', 'sent', 'dismissed') THEN reply_status
-                        ELSE ?
+                        WHEN reply_status IN ({protected_sql}) THEN reply_status
+                        WHEN ? IS NOT NULL THEN ?
+                        ELSE reply_status
+                    END,
+                    last_analyzed_ts = CASE
+                        WHEN ? IS NULL THEN last_analyzed_ts
+                        ELSE MAX(last_analyzed_ts, ?)
                     END
                 WHERE conv_id = ?
                 """,
-                (intent, reply_text, reply_status, conv_id),
+                (intent, reply_text, reply_text, reply_status, reply_status,
+                 last_analyzed_ts, last_analyzed_ts, conv_id),
             )
 
     def dismiss_wechat(self, conv_id: str) -> None:
@@ -718,13 +777,29 @@ class ApplicationTracker:
         ).fetchall()
         return [self._row_to_hr_conv(row) for row in rows]
 
-    def mark_reply_sent(self, conv_id: str) -> None:
-        """Clear reply after it has been sent."""
+    def mark_reply_sent(self, conv_id: str) -> int:
+        """Authoritative transition after a reply was actually sent to the HR.
+
+        Sets reply_status='sent' and clears the working draft. 'sent' is one of the
+        PROTECTED statuses in update_hr_analysis, so a later re-analysis will not
+        revive the reply.
+
+        This used to write NULL/NULL, which is NOT protected: a conversation marked
+        that way looked "never processed" to the next re-analysis, which could draft
+        and send a second reply to the same HR. The same transition existed in three
+        places with two different meanings (this method, the mark_reply_sent tool,
+        and the mark-sent endpoint's inline SQL); they now all route here so the SQL
+        lives in exactly one place.
+
+        Returns the number of rows updated, so callers can tell a missing
+        conversation from a successful transition.
+        """
         with self.conn:
-            self.conn.execute(
-                "UPDATE hr_conversations SET reply_status = NULL, reply_text = NULL WHERE conv_id = ?",
+            cur = self.conn.execute(
+                "UPDATE hr_conversations SET reply_status = 'sent', reply_text = '' WHERE conv_id = ?",
                 (conv_id,),
             )
+            return cur.rowcount
 
     def dismiss_reply(self, conv_id: str) -> bool:
         """Dismiss a pending reply suggestion (sets reply_status back to null)."""
