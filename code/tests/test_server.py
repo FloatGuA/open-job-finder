@@ -81,6 +81,21 @@ def client(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
+    # Reset the ConfigManager singleton. It binds to whatever paths it was first
+    # constructed with and then ignores later ones (by design -- the app has exactly
+    # one config), so without this every test after the first would read the FIRST
+    # test's tmp_path. Endpoints now read/write config through this singleton, which
+    # is what makes the leak visible.
+    from services import config_manager as _cm
+    _cm._instance = None
+
+    # ConfigManager fails fast when config.yaml is missing (it is required in any
+    # real deployment). Give the sandbox that same precondition instead of weakening
+    # the guard -- tests should not be the reason a missing config becomes tolerable.
+    cfg_file = tmp_path / "config.yaml"
+    if not cfg_file.exists():
+        cfg_file.write_text("llm: {}\n", encoding="utf-8")
+
     # Close and reset any tracker left over from a previous test
     old = getattr(app.state, "tracker", None)
     if old is not None:

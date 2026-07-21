@@ -34,6 +34,7 @@ from services.progress_emitter import ProgressEmitter, ProgressEvent
 from services.resume_manager import ResumeManager
 from services.resume_parser import parse_resume_file
 from services.tracker import ApplicationTracker
+from tools.biz_logic.wechat_id import wechat_id_from
 from pipeline.run_logger import _ui_status
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -178,33 +179,11 @@ def _serialize_record(record) -> dict[str, Any]:
     }
 
 
-# WeChat-exchange "number card" marker (mirrors Chat.tsx). HR sends `[卡片] X的微信号\n<id>`
-# right after we auto-agree; that <id> is what the user needs to go add on WeChat.
-_WECHAT_NUMBER_MARKER = "微信号"
-_CARD_PREFIX = "[卡片]"
-# A real WeChat id / phone: alphanumeric (+ _ / -), no CJK, no spaces. This rejects
-# plain HR text that merely mentions 微信号 in a sentence (e.g. a decline message),
-# which the loose "any message containing 微信号" match wrongly treated as an id.
-_WECHAT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{4,29}$")
-
-
-def _wechat_id_from(messages: list[dict]) -> str | None:
-    """Extract HR's WeChat id from the number CARD; None if not present.
-
-    Only the actual card (text starts with `[卡片]` and contains 微信号) counts, and the
-    extracted token must look like an id/phone -- a sentence mentioning 微信号 is not one.
-    """
-    for m in messages:
-        if m.get("sender") != "hr":
-            continue
-        text = m.get("text", "")
-        if not text.startswith(_CARD_PREFIX) or _WECHAT_NUMBER_MARKER not in text:
-            continue
-        after = text.split(_WECHAT_NUMBER_MARKER, 1)[-1].strip(" :：。\n\t")
-        wid = after.split()[0] if after.split() else ""
-        if _WECHAT_ID_RE.match(wid):
-            return wid
-    return None
+# WeChat-card parsing lives in tools/biz_logic/wechat_id.py -- deterministic text
+# parsing that Boss occasionally changes the wording of, so it needs exactly one
+# home. It used to sit here with a comment saying it "mirrors Chat.tsx"; the
+# frontend's copy has been removed in favour of the wechat_id this API returns.
+_wechat_id_from = wechat_id_from
 
 
 def _serialize_conversation(conv, messages: list[dict], job_url: str) -> dict[str, Any]:
@@ -1362,10 +1341,11 @@ async def control_status() -> JSONResponse:
 @app.get("/api/profile")
 async def get_profile() -> JSONResponse:
     _initialize_state()
-    if not PROFILE_PATH.exists():
+    # Read through the singleton so this endpoint and /api/config/system cannot
+    # disagree about what profile.yaml currently says.
+    profile = get_config_manager(str(CONFIG_PATH), str(PROFILE_PATH)).get_profile()
+    if not profile:
         return JSONResponse({"keywords": [], "cities": [], "experience": [], "degree": [], "salary": "", "scale": []})
-    with PROFILE_PATH.open("r", encoding="utf-8") as f:
-        profile = yaml.safe_load(f) or {}
     return JSONResponse({
         "name": profile.get("name") or "",
         "keywords": profile.get("keywords") or [],
@@ -1387,12 +1367,13 @@ async def get_profile() -> JSONResponse:
 async def save_profile(request: Request) -> JSONResponse:
     _initialize_state()
     data = await request.json()
-    # Read-modify-write: preserve fields managed outside the dashboard (e.g. greeting_template, boss_online)
-    existing: dict = {}
-    if PROFILE_PATH.exists():
-        with PROFILE_PATH.open("r", encoding="utf-8") as f:
-            existing = yaml.safe_load(f) or {}
-    existing.update({
+    # Read-modify-write through the singleton. save_profile() merges into the cached
+    # dict and writes, so fields managed outside the dashboard (greeting_template,
+    # boss_online, ...) survive AND the cache stays in step with the file. Writing
+    # inline used to leave the singleton serving a pre-edit copy.
+    cm = get_config_manager(str(CONFIG_PATH), str(PROFILE_PATH))
+    existing = cm.get_profile()
+    updates = {
         "name": data.get("name") or existing.get("name") or "",
         "keywords": data.get("keywords") or [],
         "cities": data.get("cities") or [],
@@ -1409,10 +1390,9 @@ async def save_profile(request: Request) -> JSONResponse:
         # save from a form that omits it does not wipe it. Single source of truth
         # for all profile.yaml fields now lives on /api/profile (Settings merge).
         "extra_notes": data.get("extra_notes", existing.get("extra_notes", "")),
-    })
+    }
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with PROFILE_PATH.open("w", encoding="utf-8") as f:
-        yaml.dump(existing, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    cm.save_profile(updates)
     return JSONResponse({"ok": True})
 
 
@@ -1449,30 +1429,21 @@ async def save_llm_config(request: Request) -> JSONResponse:
     _initialize_state()
     data = await request.json()
 
-    existing: dict = {}
-    if CONFIG_PATH.exists():
-        with CONFIG_PATH.open("r", encoding="utf-8") as f:
-            existing = yaml.safe_load(f) or {}
-
-    caps: dict = existing.setdefault("llm", {}).setdefault("capabilities", {})
-    for level in ("fast", "balanced", "powerful"):
-        ptype = (data.get("capabilities") or {}).get(level, "")
-        if not ptype:
-            continue
-        level_providers = caps.get(level) or []
-        if level_providers:
-            level_providers[0]["type"] = ptype
-        else:
-            caps[level] = [{"type": ptype}]
-
+    # Through config_manager, not inline yaml: the singleton caches config.yaml, so
+    # writing the file behind its back left get_system_config() serving the pre-edit
+    # copy (/api/config/system reads through the singleton and would show stale data).
     tp = data.get("tool_providers") or {}
-    existing["llm"]["tool_providers"] = {
-        "score_job":      tp.get("score_job") or None,
-        "analyze_intent": tp.get("analyze_intent") or None,
-    }
-
-    with CONFIG_PATH.open("w", encoding="utf-8") as f:
-        yaml.dump(existing, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    cm = get_config_manager(str(CONFIG_PATH), str(PROFILE_PATH))
+    cm.save_llm_settings(
+        capabilities={
+            level: (data.get("capabilities") or {}).get(level, "")
+            for level in ("fast", "balanced", "powerful")
+        },
+        tool_providers={
+            "score_job":      tp.get("score_job") or None,
+            "analyze_intent": tp.get("analyze_intent") or None,
+        },
+    )
 
     new_config = _load_runtime_config()
     app.state.config = new_config
@@ -2609,10 +2580,9 @@ async def preview_search() -> JSONResponse:
     import subprocess as _subprocess
     _initialize_state()
 
-    profile: dict = {}
-    if PROFILE_PATH.exists():
-        with PROFILE_PATH.open("r", encoding="utf-8") as f:
-            profile = yaml.safe_load(f) or {}
+    # Through the singleton: reading profile.yaml inline here meant this preview
+    # could be built from a different profile than the one /api/profile just saved.
+    profile = get_config_manager(str(CONFIG_PATH), str(PROFILE_PATH)).get_profile()
 
     search_url = _build_boss_search_url(profile)
     chrome = _find_chrome_exe()

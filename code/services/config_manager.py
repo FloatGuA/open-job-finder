@@ -47,9 +47,48 @@ class ConfigManager:
         self._load()
 
     def save_system_config(self, section: str, updates: dict) -> None:
+        # 'llm' is refused here because this is a flat top-level update, and the llm
+        # section is nested (capabilities[level] is a LIST of provider dicts). A plain
+        # dict.update would flatten it. Use save_llm_settings, which knows the shape.
         if section == "llm":
-            raise ValueError("Writing to the 'llm' section is not allowed via save_system_config.")
+            raise ValueError(
+                "Writing to the 'llm' section is not allowed via save_system_config; "
+                "use save_llm_settings()."
+            )
         self._config.setdefault(section, {}).update(updates)
+        self._write_config()
+
+    def save_llm_settings(
+        self,
+        capabilities: dict[str, str] | None = None,
+        tool_providers: dict[str, Any] | None = None,
+    ) -> None:
+        """Structured update of the llm section, keeping its nesting intact.
+
+        `capabilities` maps a level (fast/balanced/powerful) to a provider TYPE; the
+        stored form is a list of provider dicts per level, so only the first entry's
+        "type" is rewritten and the rest of each provider's settings survive.
+
+        Exists because the dashboard used to read/modify/write config.yaml inline for
+        this one section, which left the singleton's cached copy stale -- a later
+        get_system_config() would hand back the pre-edit config.
+        """
+        llm = self._config.setdefault("llm", {})
+        if capabilities:
+            caps = llm.setdefault("capabilities", {})
+            for level, ptype in capabilities.items():
+                if not ptype:
+                    continue
+                providers = caps.get(level) or []
+                if providers:
+                    providers[0]["type"] = ptype
+                else:
+                    caps[level] = [{"type": ptype}]
+        if tool_providers is not None:
+            llm["tool_providers"] = tool_providers
+        self._write_config()
+
+    def _write_config(self) -> None:
         with self._config_path.open("w", encoding="utf-8") as f:
             yaml.safe_dump(
                 self._config, f, allow_unicode=True, default_flow_style=False, sort_keys=False

@@ -103,10 +103,10 @@ def test_fixture_files_downgrade_name_matches_to_warnings():
     assert found[0]["severity"] == "warn"
 
 
-def test_fixture_downgrade_applies_to_db_terms_but_never_to_hard_patterns():
+def test_fixture_downgrade_applies_to_db_terms_but_never_to_resource_ids():
     """In a fixture file, a name/company matching the DB is probably coincidence,
-    so it warns. But an avatar URL is personal data no matter where it sits --
-    there is no innocent reason for one to appear in a test."""
+    so it warns. But an avatar URL points at ONE specific real person -- there is no
+    innocent reason for one to appear in a test, so it still blocks."""
     found = scan.scan_text("code/tests/test_foo.py", _lines(
         'URL = "https://img.bosszhipin.com/beijin/upload/avatar/x/y.png"',
         'company = "某某科技有限公司"',
@@ -114,6 +114,31 @@ def test_fixture_downgrade_applies_to_db_terms_but_never_to_hard_patterns():
     by_kind = {f["kind"]: f["severity"] for f in found}
     assert by_kind["Boss 头像 CDN URL（可反查到具体个人）"] == "high"
     assert by_kind["私有库中的真实公司名"] == "warn"
+
+
+def test_format_patterns_are_downgraded_inside_fixtures():
+    """A test for the WeChat-id parser MUST contain something shaped like a WeChat
+    id, or it tests nothing. Same for phone/e-mail parsing tests. Blocking those
+    trains people to --no-verify, after which the hook protects nothing.
+
+    This scanner blocked the very commit that added the WeChat-id parser tests --
+    which is how the distinction between resource identifiers and formats surfaced.
+    """
+    found = scan.scan_text("code/tests/test_wechat_id.py", _lines(
+        'assert wechat_id_from([_hr("[卡片] 微信号：hr_abc123")]) == "hr_abc123"',
+        'assert parse("13812345678") is not None',
+        'assert parse_email("someone@corp.com")',
+    ), _terms())
+    assert found, "夹具里仍应报告，只是降级"
+    assert all(f["severity"] == "warn" for f in found)
+
+
+def test_format_patterns_still_block_outside_fixtures():
+    """The downgrade is scoped to test paths; real contact details in a doc block."""
+    found = scan.scan_text("PROGRESS.md", _lines(
+        "HR 说他的微信号：zhangsan_hr2024",
+    ), _terms())
+    assert [f["severity"] for f in found] == ["high"]
 
 
 # ---- precision: well-known employers ------------------------------------------

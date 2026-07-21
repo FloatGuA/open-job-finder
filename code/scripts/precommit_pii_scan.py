@@ -33,15 +33,24 @@ import sys
 from pathlib import Path
 
 # --- hard patterns: personal data regardless of context ------------------------
+# The third element is whether a match may be downgraded to a warning inside test
+# fixtures. It distinguishes two kinds of hit:
+#   RESOURCE identifiers (an avatar URL) point at one specific real person. There is
+#   no innocent reason for one to appear anywhere, tests included -> never downgrade.
+#   FORMAT matches (phone / e-mail / WeChat id) are shapes. A test for the WeChat-id
+#   parser must contain something shaped like a WeChat id, or it tests nothing.
+#   Blocking those trains people to --no-verify, after which nothing is protected.
+# (Learned the hard way: this scanner blocked the commit that added its own
+# WeChat-id parser tests.)
 HARD_PATTERNS = [
-    (re.compile(r"upload/avatar/[A-Za-z0-9_\-/.]+"), "Boss 头像 CDN URL（可反查到具体个人）"),
-    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "手机号"),
-    (re.compile(r"[A-Za-z0-9._%+\-]+@(?!example\.|test\.|localhost)[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"), "邮箱地址"),
+    (re.compile(r"upload/avatar/[A-Za-z0-9_\-/.]+"), "Boss 头像 CDN URL（可反查到具体个人）", False),
+    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "手机号", True),
+    (re.compile(r"[A-Za-z0-9._%+\-]+@(?!example\.|test\.|localhost)[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"), "邮箱地址", True),
     # Chinese context only, and the value must not be a type/identifier: matching
     # `wechat_id?: string` or `WechatCard(msg:` is exactly the noise that gets a
     # hook disabled. Requires 微信/微信号 followed by a plausible account string.
     (re.compile(r"微信(?:号)?\s*[:：]\s*(?!string\b|number\b|boolean\b)"
-                r"[A-Za-z][A-Za-z0-9_\-]{5,19}\b"), "微信号"),
+                r"[A-Za-z][A-Za-z0-9_\-]{5,19}\b"), "微信号", True),
 ]
 
 # Publicly known employers. They live in jobs.db because the user applied there,
@@ -110,12 +119,13 @@ def scan_text(path: str, lines, terms: dict) -> list:
     names, companies = terms["names"], terms["companies"]
 
     for line_no, text in lines:
-        for pattern, label in HARD_PATTERNS:
+        for pattern, label, fixture_ok in HARD_PATTERNS:
             m = pattern.search(text)
             if m:
                 findings.append({
                     "file": path, "line": line_no, "kind": label,
-                    "matched": m.group(0)[:60], "severity": "high",
+                    "matched": m.group(0)[:60],
+                    "severity": "warn" if (is_fixture and fixture_ok) else "high",
                 })
 
         # DB comparison only makes sense for lines containing CJK; skipping the

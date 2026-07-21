@@ -78,25 +78,19 @@ function convMatchesQuery(conv: Conversation, q: string): boolean {
 const WECHAT_CARD_SUBSTR = '\u6211\u60f3\u8981\u548c\u60a8\u4ea4\u6362\u5fae\u4fe1'
 const WECHAT_NUMBER_MARKER = '\u5fae\u4fe1\u53f7'
 const WECHAT_CARD_PREFIX = '[\u5361\u7247]'
-const WECHAT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{4,29}$/
 function isWechatCard(msg: ConversationMessage): boolean {
   return msg.sender === 'hr'
     && msg.text.startsWith(WECHAT_CARD_PREFIX)
     && (msg.text.includes(WECHAT_CARD_SUBSTR) || msg.text.includes(WECHAT_NUMBER_MARKER))
 }
 
-// Pull HR's WeChat id out of the "[\u5361\u7247] <name>\u7684\u5fae\u4fe1\u53f7\n<id>" card; null if none/invalid.
-// Only the actual card counts, and the token must look like an id/phone -- a sentence
-// merely mentioning \u5fae\u4fe1\u53f7 (e.g. an HR decline) is not one.
-function wechatIdFrom(messages: ConversationMessage[]): string | null {
-  for (const m of messages) {
-    if (m.sender !== 'hr' || !m.text.startsWith(WECHAT_CARD_PREFIX) || !m.text.includes(WECHAT_NUMBER_MARKER)) continue
-    const after = (m.text.split(WECHAT_NUMBER_MARKER).pop() ?? '').trim()
-    const id = after.split(/\s+/)[0] ?? ''
-    if (WECHAT_ID_RE.test(id)) return id
-  }
-  return null
-}
+// The WeChat id itself is NOT parsed here: the API already computes it (see
+// tools/biz_logic/wechat_id.py) and returns it as conversation.wechat_id, derived
+// from the very same messages this component receives. A second copy of the parser
+// bought nothing and could disagree with the backend when Boss changes its card
+// wording -- one side showing \u5f85\u52a0\u5fae\u4fe1, the other not.
+// isWechatCard above stays: that is a rendering concern (draw a green card instead
+// of an HR bubble), not identity extraction.
 
 function MessageBubble({ msg }: { msg: ConversationMessage }) {
   // WeChat-exchange request card: centered green card notice, not an HR chat bubble.
@@ -232,7 +226,6 @@ export default function Chat() {
 
   const selected = conversations.find((c) => c.conv_id === selectedId) ?? null
   const messages = selected?.messages ?? []
-  const wechatId = wechatIdFrom(messages)
 
   // \u641c\u7d22\u662f\u53e0\u52a0\u5728\u5f53\u524d tab \u8fc7\u6ee4\u4e4b\u4e0a\u7684\u5ba2\u6237\u7aef\u5b50\u4e32\u8fc7\u6ee4\uff1b\u7a7a\u67e5\u8be2\u65f6\u5c55\u793a\u5168\u90e8\u3002
   const searchNeedle = searchQuery.trim().toLowerCase()
@@ -672,10 +665,10 @@ export default function Chat() {
                   <span style={{ color: '#30d158' }}>{'\u2705'}</span>
                   <DevLabel name="WechatReminder" />
                   <span style={{ color: 'rgba(255,255,255,0.82)' }}>
-                    {(selected.wechat_id || wechatId) ? (
+                    {selected.wechat_id ? (
                       <>
                         {'HR \u5fae\u4fe1\u53f7\uff1a'}
-                        <span className="font-mono font-semibold" style={{ color: '#30d158' }}>{selected.wechat_id || wechatId}</span>
+                        <span className="font-mono font-semibold" style={{ color: '#30d158' }}>{selected.wechat_id}</span>
                         {'\uff0c\u8bf7\u5c3d\u5feb\u6dfb\u52a0'}
                       </>
                     ) : 'HR \u8bf7\u6c42\u4ea4\u6362\u5fae\u4fe1\uff0c\u5df2\u81ea\u52a8\u540c\u610f\uff0c\u8bf7\u5c3d\u5feb\u5728 Boss \u6dfb\u52a0\u5bf9\u65b9\u5fae\u4fe1'}
