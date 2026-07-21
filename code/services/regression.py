@@ -430,7 +430,9 @@ def run_smoke(*, submit, tracker,
             if resumes > 0:
                 return (f"{base} · 真发简历{resumes}"
                         + (f"—但消息未落库(Δ={md})落库失败!" if md < 1 else "(已落库)"))
-            return f"{base} · 本轮无简历外发—未覆盖发送落库验证(微信同意/落库仍真跑)"
+            # Not a coverage gap: no HR asked for a resume this round, and nothing can
+            # force one. The main chain (导航→读→意图→落库) was still exercised.
+            return f"{base} · 本轮无 HR 索要简历，发送分支未触发(主链路已验证)"
 
         # Coverage for live = an outbound action actually happened, which is the only
         # case where the "did it persist?" assertion means anything. Nothing applied /
@@ -440,9 +442,20 @@ def run_smoke(*, submit, tracker,
         step("W1 真跑: 搜索→抓卡→抓JD→评分→真投递→断言落库",
              _w1_live, _w1_live_ok, _w1_live_detail,
              lambda s: int(s.get("applied", 0) or 0) >= 1)
+        # W2 coverage = the MAIN chain ran (navigate → read → analyze → persist).
+        # Sending a resume is a conditional branch that only fires when an HR asks,
+        # and unlike W1's threshold there is no knob that can force it -- the only
+        # way would be to pester a real person. Requiring resumes_sent here made the
+        # gate structurally unclosable: every run without an incoming resume request
+        # reported "not covered" forever, which is the same defect as leaving
+        # score_threshold at 60 for W1.
+        #
+        # The send assertion itself is unchanged and still lives in _w2_live_ok: IF a
+        # resume went out, it MUST have persisted. Opportunistic verification, but a
+        # hard one when the opportunity occurs.
         step("W2 真跑: 会话→读消息→意图→真发简历/同意微信→断言落库",
              _w2_live, _w2_live_ok, _w2_live_detail,
-             lambda s: int(s.get("resumes_sent", 0) or 0) >= 1)
+             lambda s: int(s.get("convs_processed", 0) or 0) >= 1)
 
     uncovered = [c["name"] for c in checks if not c["covered"]]
     # Diagnose the runs this smoke just produced, straight from their logs. The log

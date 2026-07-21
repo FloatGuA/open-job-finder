@@ -206,12 +206,54 @@ def test_run_that_did_nothing_passes_but_is_not_fully_covered(monkeypatch):
     tr = FakeTracker(today=5, msgs=100, convs=10)
     _sub = _submit_for(
         lambda **kw: {"cards_viewed": 3, "scored": 2, "applied": 0, "errors": 0},
-        lambda **kw: {"convs_processed": 3, "stage_changes": 0, "resumes_sent": 0},
+        lambda **kw: {"convs_processed": 0, "stage_changes": 0, "resumes_sent": 0},
     )
     rep = regression.run_smoke(submit=_sub, tracker=tr, dry_run=False)
     assert rep["ok"] is True
     assert rep["fully_covered"] is False
     assert len(rep["uncovered"]) == 2  # both workflows verified nothing
+
+
+def test_w2_coverage_is_the_main_chain_not_the_resume_branch():
+    """Sending a resume only happens when an HR asks, and no knob can force it --
+    short of pestering a real person. Requiring it for coverage made the gate
+    structurally unclosable (every run without an incoming request reported "not
+    covered" forever), the same defect as leaving W1's threshold at 60.
+
+    Coverage is therefore the main chain: navigate → read → analyze → persist.
+    """
+    tr = FakeTracker(today=5, msgs=100, convs=10)
+
+    def w1(**kw):
+        tr._today += 1
+        return {"cards_viewed": 1, "scored": 1, "applied": 1, "errors": 0}
+
+    _sub = _submit_for(
+        w1,
+        lambda **kw: {"convs_processed": 5, "stage_changes": 1, "resumes_sent": 0},
+    )
+    rep = regression.run_smoke(submit=_sub, tracker=tr, dry_run=False)
+
+    assert rep["fully_covered"] is True, "无 HR 索要简历不应导致「未覆盖」"
+    w2c = _check(rep, "W2")
+    assert w2c["covered"] is True
+    assert "主链路已验证" in w2c["detail"]
+
+
+def test_resume_send_assertion_still_hard_when_it_does_happen():
+    """Coverage was relaxed; the assertion was not. If a resume actually goes out,
+    it MUST persist -- otherwise we have told an HR something the DB does not know."""
+    tr = FakeTracker(today=5, msgs=100, convs=10)
+    _sub = _submit_for(
+        lambda **kw: {"cards_viewed": 0, "applied": 0},
+        # claims a resume was sent, but hr_messages does not grow
+        lambda **kw: {"convs_processed": 2, "stage_changes": 0, "resumes_sent": 1},
+    )
+    rep = regression.run_smoke(submit=_sub, tracker=tr, dry_run=False)
+
+    w2c = _check(rep, "W2")
+    assert w2c["ok"] is False
+    assert "落库失败" in w2c["detail"]
 
 
 def test_live_run_with_both_outbound_actions_is_fully_covered(monkeypatch):
