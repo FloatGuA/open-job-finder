@@ -802,10 +802,23 @@ class ApplicationTracker:
             return cur.rowcount
 
     def dismiss_reply(self, conv_id: str) -> bool:
-        """Dismiss a pending reply suggestion (sets reply_status back to null)."""
+        """Dismiss a drafted reply the user does not want sent.
+
+        Writes 'dismissed', which is one of PROTECTED_REPLY_STATUSES, so the next
+        re-analysis leaves it alone. It used to write NULL -- and NULL is NOT
+        protected, so the conversation looked "never processed" to the next W2 scan,
+        which would draft a fresh reply and put it back in the approval queue. Same
+        mistake mark_reply_sent once made: a user decision must not be recorded as a
+        neutral state, or the automation treats it as unfinished work.
+
+        NOTE: the dashboard's dismiss endpoint goes through update_reply_approval()
+        and already wrote 'dismissed' correctly; this method has no production
+        caller. It is fixed rather than deleted because a plausible-looking helper
+        with the wrong semantics is exactly what gets wired up later by mistake.
+        """
         with self.conn:
             cur = self.conn.execute(
-                "UPDATE hr_conversations SET reply_status = NULL WHERE conv_id = ?",
+                "UPDATE hr_conversations SET reply_status = 'dismissed' WHERE conv_id = ?",
                 (conv_id,),
             )
         return cur.rowcount > 0

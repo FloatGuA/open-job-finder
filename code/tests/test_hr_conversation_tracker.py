@@ -183,7 +183,14 @@ def test_pending_and_approved_replies_returned(tracker):
     assert "c2" in conv_ids
 
 
-def test_dismiss_reply_clears_reply_status(tracker):
+def test_dismiss_reply_records_dismissed_not_null(tracker):
+    """'dismissed' is PROTECTED; NULL is not.
+
+    Writing NULL made the conversation look "never processed" to the next W2 scan,
+    which would draft a fresh reply and put it straight back in the approval queue.
+    A user decision must not be recorded as a neutral state -- same mistake
+    mark_reply_sent once made.
+    """
     conv = _make_conv("c1")
     tracker.upsert_hr_conversation(conv)
     tracker.update_hr_analysis("c1", "info_request", "建议", "pending")
@@ -191,7 +198,23 @@ def test_dismiss_reply_clears_reply_status(tracker):
     tracker.dismiss_reply("c1")
 
     cached = tracker.get_hr_conversation("c1")
-    assert cached.reply_status is None
+    assert cached.reply_status == "dismissed"
+
+
+def test_dismissed_reply_survives_reanalysis(tracker):
+    """The point of using a protected status: a later scan must not resurrect the
+    draft the user just rejected."""
+    conv = _make_conv("c1")
+    tracker.upsert_hr_conversation(conv)
+    tracker.update_hr_analysis("c1", "info_request", "建议", "pending")
+    tracker.dismiss_reply("c1")
+
+    # Next W2 round analyses the conversation again and would like to draft.
+    tracker.update_hr_analysis("c1", "resume_request", "新草稿", "pending")
+
+    cached = tracker.get_hr_conversation("c1")
+    assert cached.reply_status == "dismissed"
+    assert cached.reply_text == "建议"  # the rejected draft is not replaced either
 
 
 def test_dismiss_reply_removes_from_pending(tracker):
