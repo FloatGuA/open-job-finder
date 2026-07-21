@@ -2277,8 +2277,12 @@ async def trigger_regression_smoke(background_tasks: BackgroundTasks, body: dict
         # Live smoke really sends greetings -> honour the same daily-cap gate as selfcheck.
         if _is_rate_limited_today():
             raise HTTPException(status_code=409, detail="今日已达 Boss 沟通上限，暂停真跑冒烟")
-        w1_max = int(body.get("w1_max", 1))
-        w2_max = int(body.get("w2_max", 1))
+        # 5, not 1: with a single card the run frequently has nothing to apply to
+        # (already applied / filtered out), so the apply path reports "not covered"
+        # and the gate never actually closes. A slightly larger batch makes real
+        # coverage the normal outcome rather than a lucky one.
+        w1_max = int(body.get("w1_max", 5))
+        w2_max = int(body.get("w2_max", 5))
 
     # Workflow knobs mirror the console's so the smoke can reproduce a real run's
     # conditions. score_threshold matters most: at the stock 60 a smoke may apply

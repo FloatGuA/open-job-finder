@@ -768,8 +768,11 @@ function SmokeCard() {
   const [report, setReport] = useState<SmokeReport | null>(null)
   const [running, setRunning] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [w1Max, setW1Max] = useState(1)
-  const [w2Max, setW2Max] = useState(1)
+  // 5 rather than 1: a single card often has nothing applicable left, so the apply
+  // path reports "not covered" and the gate never closes. Must match the server's
+  // live-mode default (server.py) -- the frontend always sends an explicit value.
+  const [w1Max, setW1Max] = useState(5)
+  const [w2Max, setW2Max] = useState(5)
   // Workflow knobs mirroring the console's. score_threshold defaults BELOW the
   // stock 60 on purpose: at 60 a smoke often applies nothing, and a run that
   // applies nothing verifies nothing (covered=false), so the gate never closes.

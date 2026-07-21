@@ -72,7 +72,17 @@ class UpsertApplication(BaseTool):
                                           THEN excluded.salary ELSE salary END,
                         score      = CASE WHEN excluded.score IS NOT NULL
                                           THEN excluded.score ELSE score END,
-                        applied_at = CASE WHEN applications.applied_at IS NULL
+                        -- applied_at means LAST applied, not first. Every consumer
+                        -- reads it that way: count_today counts rows whose
+                        -- applied_at is today, purge_stale_applications ages rows
+                        -- out by it, find_application_by_company orders by it.
+                        -- Keeping the original value meant a REJECTED job re-applied
+                        -- today (an intentional flow -- postings reopen) neither
+                        -- counted toward today's total nor reset its staleness clock,
+                        -- so it could be purged on the strength of an apply that had
+                        -- since been superseded. NULL still leaves the stored value
+                        -- alone, so callers that omit it cannot blank it.
+                        applied_at = CASE WHEN excluded.applied_at IS NOT NULL
                                           THEN excluded.applied_at ELSE applications.applied_at END
                     """,
                     (
