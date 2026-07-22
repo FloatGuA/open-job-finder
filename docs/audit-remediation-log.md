@@ -177,9 +177,16 @@ APScheduler 的所有权（build/rebuild、两个 scheduled 入口、`_scheduler
 - 新增 `test_scheduler_service.py`（7 例，内联时只能经 HTTP 触达）
 - **真机验证**：启动装配 `_scheduler_running=True` / `/api/schedule` 正常 / live 冒烟 `ok=True fully_covered=True` 无异常 / count_today Δ+1
 
-### A-2 workflow_orchestration — 待做
+### A-2 OrchestrationService — `0717cdb`（-280 行，2539→2259，审计 High 本体）
 
-queue_runner + `_run_*_workflow` + selfcheck_cycle + smoke + rate_limit（~335 行）。审计 High 本体，动队列执行路径，耦合最深。
+server.py 长出的工作流执行下沉：队列 runner、三个 W1/W2/W3 runner、Boss 日限流态、自检周期、冒烟驱动 → `services/workflow_orchestration.py`。这是 live 冒烟真正走的路径，耦合最深、风险最高。
+
+- **`get_state` 访问器而非 import app**：耦合 app.state 不可避免，但调用时读（此时 `_initialize_state` 已填充），service 不依赖 FastAPI、可 fake 测
+- 接线：`_get_orch()` 懒构造 / `WorkflowQueue(runner=orch.run_item)` / scheduler 注入改指 orch / 冒烟端点改调 orch；`_is_rate_limited_today`/`_run_selfcheck_cycle` 留薄 alias
+- 新增 `test_workflow_orchestration.py`（10 例）；`test_server` 两个 patch 目标改指 service 方法
+- **真机验证**：启动装配成功 / live 冒烟 `ok=True fully_covered=True` 无异常 / `trigger=smoke_live` 正确 / W1 投递 Δ+1 + W2 真发简历1 均落库
+
+**批 A 累计 -379 行（2638→2259）**。
 
 ### B run_log_reader 归并 / C session helpers — 待做
 
