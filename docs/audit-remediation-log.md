@@ -188,7 +188,18 @@ server.py 长出的工作流执行下沉：队列 runner、三个 W1/W2/W3 runne
 
 **批 A 累计 -379 行（2638→2259）**。
 
-### B run_log_reader 归并 / C session helpers — 待做
+### B run_log_reader — `2699cd7`（-221 行，2259→2038）
+
+run JSONL 只读解析（列表摘要 / 分组明细 / ProgressEvent[] 回放）下沉为 `services/run_log_reader.py`。**纯函数 + runs_dir 传参**（无状态，非 service 类——依赖注入方式按「有无状态」选）。
+
+- 不与 `run_diagnostics` 强并：都读 run JSONL，但后者产出健康判决、前者产出展示形状，purpose 不同
+- `_validate_run_pipeline` 留 server.py（抛 HTTPException，是请求校验非读取）
+- 三日志端点改调 `run_log_reader.*(RUNS_DIR,...)`；新增 `test_run_log_reader.py`（12 例）
+- **验证**：三端点真机全走新模块返回真实数据（110 runs / detail 29 steps / replay 100 events）。纯读不碰执行路径，pytest + 端点验证，不跑 live 冒烟
+
+**批 A+B 累计 -600 行（2638→2038）。审计 High「server.py 超重 + 编排混在接线层」实质解决。**
+
+### C session helpers — 可选，收益小（31 行），基本可收尾
 
 ## 单拎 · 位置隔离方案 A — 待做
 
