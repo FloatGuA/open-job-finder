@@ -37,6 +37,7 @@ from services.tracker import ApplicationTracker
 from tools.biz_logic.wechat_id import wechat_id_from
 from pipeline.run_logger import _ui_status
 from services.scheduler_service import SchedulerService
+from services.workflow_orchestration import OrchestrationService
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -105,6 +106,7 @@ _SCHEDULE_DEFAULTS = {
 }
 
 _scheduler_service: "SchedulerService | None" = None
+_orch_service: "OrchestrationService | None" = None
 
 
 def _utcnow_iso() -> str:
@@ -150,7 +152,7 @@ def _initialize_state() -> None:
         # explicit queue add / composed chain) is enqueued and run one at a time.
         # is_busy defers the worker while a non-queue browser op owns the session.
         app.state.workflow_queue = WorkflowQueue(
-            runner=_queue_runner,
+            runner=_get_orch().run_item,
             is_busy=lambda: bool(getattr(app.state.emitter, "current_workflow", None)),
         )
         # item_id -> raw runner summary, for callers blocking on a queued item
@@ -515,236 +517,31 @@ def _save_schedule_config(cfg: dict) -> None:
         _yaml.safe_dump(cfg, file, allow_unicode=True, sort_keys=False)
 
 
-def _china_today():
-    """Boss's daily greeting cap resets at China-local midnight, so 'today' for the
-    cap is the China (UTC+8) date, not the UTC date."""
-    from datetime import timedelta
-    return (datetime.now(timezone.utc) + timedelta(hours=8)).date()
+def _get_orch() -> OrchestrationService:
+    """Lazily build the single OrchestrationService, wiring in the state accessor and
+    the two log writers it needs. Cheap; constructs no runners."""
+    global _orch_service
+    if _orch_service is None:
+        _orch_service = OrchestrationService(
+            get_state=lambda: app.state,
+            ensure_state=_initialize_state,
+            data_dir=DATA_DIR,
+            write_schedule_log=_write_schedule_log,
+            write_selfcheck_log=_write_selfcheck_log,
+            smoke_log_path=REGRESSION_SMOKE_LOG,
+        )
+    return _orch_service
 
 
-def _mark_rate_limited_today() -> None:
-    """Record that W1 hit Boss's daily cap today so scheduled apply + selfcheck pause
-    until the China date rolls over (in-memory; a server restart clears it, which only
-    means one extra attempt that will re-trip the cap and re-mark)."""
-    app.state.rate_limited_date = _china_today()
-    logger.info("W1 hit Boss daily cap; pausing scheduled apply + selfcheck for %s", app.state.rate_limited_date)
-
-
+# Thin module-level aliases kept for the scheduler injection and endpoints that
+# already reference these names; the implementations now live on the service.
 def _is_rate_limited_today() -> bool:
-    return getattr(app.state, "rate_limited_date", None) == _china_today()
-
-
-def _run_apply_workflow(overrides: dict[str, Any]) -> tuple[str, dict]:
-    from pipeline.w1_runner import run_w1
-    from services.settings_resolver import resolve_params
-    _initialize_state()
-    p = resolve_params("w1", overrides, app.state.config, DATA_DIR)
-    # 兼容旧调度 params：apply_limit 旧名 → max_cards
-    max_cards_raw = p.get("max_cards") or overrides.get("apply_limit") or 0
-    max_cards = int(max_cards_raw) if max_cards_raw and int(max_cards_raw) > 0 else None
-    summary = run_w1(
-        config=app.state.config,
-        tracker=app.state.tracker,
-        model_router=app.state.model_router,
-        emitter=getattr(app.state, "emitter", None),
-        dry_run=bool(p.get("dry_run", False)),
-        score_threshold=int(p.get("score_threshold", 60)),
-        max_cards=max_cards,
-        search_url=overrides.get("search_url") or None,
-        headless=bool(p.get("headless", True)),
-        debug=bool(overrides.get("debug", True)),
-        data_dir=DATA_DIR,
-        trigger=overrides.get("_trigger", "manual"),
-    )
-    # A Boss daily-cap hit pauses today's scheduled apply + selfcheck (China-date scoped).
-    if isinstance(summary, dict) and summary.get("rate_limited"):
-        _mark_rate_limited_today()
-    # (log line, raw summary): the schedule log wants prose, the smoke needs the
-    # actual counters to assert on. Returning both keeps one execution path.
-    return "apply 工作流完成", (summary if isinstance(summary, dict) else {})
-
-
-def _run_check_workflow(overrides: dict[str, Any]) -> tuple[str, dict]:
-    from pipeline.w2_runner import run_w2
-    from services.settings_resolver import resolve_params
-    _initialize_state()
-    p = resolve_params("w2", overrides, app.state.config, DATA_DIR)
-    summary = run_w2(
-        config=app.state.config,
-        tracker=app.state.tracker,
-        model_router=app.state.model_router,
-        emitter=getattr(app.state, "emitter", None),
-        dry_run=bool(p.get("dry_run", False)),
-        max_conversations=int(p.get("max_conversations", 200)),
-        no_response_days=int(p.get("no_response_days", 14)),
-        stale_conv_days=int(p.get("stale_conv_days", 30)),
-        headless=bool(p.get("headless", True)),
-        debug=bool(overrides.get("debug", True)),
-        data_dir=DATA_DIR,
-        trigger=overrides.get("_trigger", "manual"),
-    )
-    return "check 工作流完成", (summary if isinstance(summary, dict) else {})
+    return _get_orch().is_rate_limited_today()
 
 
 def _run_selfcheck_cycle(*, w1_max: int, w2_max: int, with_probes: bool, trigger_type: str) -> dict:
-    """One full self-check cycle: optional infra probes, then (if green) a REAL W1
-    (max_cards=w1_max) followed by W2 (max_conversations=w2_max), sequentially. Writes a
-    history entry to selfcheck_log.jsonl. The real W1/W2 are ENQUEUED on the shared
-    workflow queue (source=selfcheck) so they never bypass it; the cycle is skipped
-    only if the probes fail or the Boss daily cap was hit today."""
-    _initialize_state()
-    entry: dict[str, Any] = {
-        "trigger_type": trigger_type,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "params": {"w1_max": w1_max, "w2_max": w2_max, "with_probes": with_probes},
-        "stages": [],
-    }
-
-    # Boss daily-cap gate: skip the whole self-check cycle once W1 hit the cap today —
-    # its point is W1 apply liveness, moot at the cap; scheduled W2 runs independently.
-    if _is_rate_limited_today():
-        entry["ok"] = True
-        entry["skipped_reason"] = "今日已达 Boss 沟通上限，暂停自检"
-        entry["finished_at"] = datetime.now(timezone.utc).isoformat()
-        _write_selfcheck_log(entry)
-        return entry
-
-    emitter = app.state.emitter
-    if with_probes:
-        if emitter.current_workflow:
-            # Something is using the single Boss browser; the probes open it too,
-            # so skip them this cycle. W1/W2 are still enqueued below — they queue
-            # behind the running work rather than being dropped.
-            entry["stages"].append({
-                "stage": "probes", "label": "探针", "ok": True, "duration_ms": 0,
-                "detail": "浏览器忙，本轮跳过探针（W1/W2 仍入队）",
-            })
-        else:
-            from services import selfcheck
-            # Hold the browser mutex so the queue worker doesn't start a run while
-            # the probe has the browser open (single-user; the check-then-set gap
-            # is negligible in practice).
-            emitter.current_workflow = "selfcheck"
-            try:
-                rep = selfcheck.run_probes(
-                    data_dir=DATA_DIR, tracker=app.state.tracker, model_router=app.state.model_router,
-                )
-            finally:
-                emitter.current_workflow = None
-            for pr in rep.get("probes", []):
-                entry["stages"].append({
-                    "stage": pr["name"], "label": pr["label"], "ok": pr["ok"],
-                    "duration_ms": pr["duration_ms"], "detail": pr["detail"],
-                })
-            if not rep.get("ok"):
-                entry["ok"] = False
-                entry["skipped_reason"] = "探针未通过，跳过真跑"
-                entry["finished_at"] = datetime.now(timezone.utc).isoformat()
-                _write_selfcheck_log(entry)
-                return entry
-
-    # Unified scheduling: enqueue the real W1/W2 on the shared workflow queue
-    # (source=selfcheck) instead of running them inline. A self-check that fires
-    # while something else runs now queues behind it rather than being skipped;
-    # each run's outcome is recorded in the schedule log / queue history.
-    q = app.state.workflow_queue
-    it1 = q.enqueue("w1", {"max_cards": w1_max, "dry_run": False}, source="selfcheck", coalesce=True)
-    it2 = q.enqueue("w2", {"max_conversations": w2_max, "dry_run": False}, source="selfcheck", coalesce=True)
-    entry["stages"].append({
-        "stage": "enqueue", "label": "W1/W2 入队",
-        "ok": True, "duration_ms": 0,
-        "detail": f"已排入队列顺序执行（w1={it1.id} · w2={it2.id}）",
-    })
-    entry["ok"] = True
-    entry["finished_at"] = datetime.now(timezone.utc).isoformat()
-    _write_selfcheck_log(entry)
-    logger.info(
-        "selfcheck cycle done: ok=%s stages=%s",
-        entry["ok"], [f"{s['stage']}={'ok' if s['ok'] else 'FAIL'}" for s in entry["stages"]],
-    )
-    return entry
-
-
-def _run_reply_workflow(overrides: dict[str, Any]) -> tuple[str, dict]:
-    from pipeline.w3_runner import run_w3
-    _initialize_state()
-    hl = overrides.get("headless")
-    run_w3(
-        config=app.state.config,
-        tracker=app.state.tracker,
-        model_router=app.state.model_router,
-        emitter=getattr(app.state, "emitter", None),
-        dry_run=bool(overrides.get("dry_run") or False),
-        max_replies=int(overrides.get("max_replies") or 50),
-        headless=bool(hl) if hl is not None else False,
-        debug=bool(overrides.get("debug", True)),
-        data_dir=DATA_DIR,
-    )
-    return "reply 工作流完成", {}
-
-
-def _queue_runner(item) -> None:
-    """Execute ONE queued workflow item (blocks until it finishes).
-
-    Sets the emitter mutex up front (closes the race with interactive browser
-    ops that only READ current_workflow), dispatches to the matching runner,
-    writes a schedule-log entry, and — because the runners clear the mutex only
-    on success — clears it here on error and re-raises so the queue records the
-    failure. trigger_type is derived from where the item came from.
-    """
-    import time as _time
-
-    emitter: ProgressEmitter = app.state.emitter
-    emitter.current_workflow = item.workflow
-
-    # 'smoke'/'smoke_live' come from the regression smoke, which enqueues like any
-    # other caller. Keeping the trigger distinct is what lets run_diagnostics find
-    # the smoke's own runs in the log archive afterwards.
-    trig_param = {"manual": "manual", "queue": "manual",
-                  "scheduled": "scheduled", "selfcheck": "selfcheck",
-                  "smoke": "smoke", "smoke_live": "smoke_live"}.get(item.source, "manual")
-    log_trigger = {"manual": "manual", "queue": "manual",
-                   "scheduled": "scheduler", "selfcheck": "selfcheck",
-                   "smoke": "smoke", "smoke_live": "smoke_live"}.get(item.source, "manual")
-    log_wf = {"w1": "apply", "w2": "check", "w3": "reply"}[item.workflow]
-    params = {**item.params, "_trigger": trig_param}
-    triggered_at = datetime.now(timezone.utc).isoformat()
-    start_time = _time.monotonic()
-    try:
-        if item.workflow == "w1":
-            summary, raw = _run_apply_workflow(params)
-        elif item.workflow == "w2":
-            summary, raw = _run_check_workflow(params)
-        else:
-            summary, raw = _run_reply_workflow(params)
-        # Hand the raw counters to whoever is waiting on this item (the smoke).
-        # Bounded so a long-lived server doesn't accumulate them.
-        if item.source.startswith("smoke"):
-            app.state.smoke_summaries[item.id] = raw
-            if len(app.state.smoke_summaries) > 50:
-                app.state.smoke_summaries.pop(next(iter(app.state.smoke_summaries)))
-        _write_schedule_log({
-            "workflow": log_wf,
-            "trigger_type": log_trigger,
-            "triggered_at": triggered_at,
-            "result": "success",
-            "skipped_reason": None,
-            "summary": summary,
-            "duration_seconds": round(_time.monotonic() - start_time),
-        })
-    except Exception as exc:
-        logger.exception("queue run %s failed: %s", item.workflow, exc)
-        _write_schedule_log({
-            "workflow": log_wf,
-            "trigger_type": log_trigger,
-            "triggered_at": triggered_at,
-            "result": "error",
-            "skipped_reason": None,
-            "summary": str(exc),
-            "duration_seconds": round(_time.monotonic() - start_time),
-        })
-        emitter.finish_workflow(item.workflow, f"执行失败: {exc}", status="error")
-        raise
+    return _get_orch().run_selfcheck_cycle(
+        w1_max=w1_max, w2_max=w2_max, with_probes=with_probes, trigger_type=trigger_type)
 
 
 def _sched_enqueue(wf: str, params: dict, source: str, coalesce: bool):
@@ -2053,83 +1850,6 @@ def run_regression_invariants() -> JSONResponse:
     return JSONResponse(report)
 
 
-SMOKE_ITEM_TIMEOUT_S = 3600
-
-
-def _queue_submit_and_wait(workflow: str, params: dict) -> dict:
-    """Enqueue ONE workflow with source='smoke' and block until it finishes.
-
-    This is the `submit` the smoke injects, so its runs go through the same queue
-    path as manual/scheduled ones. Returns the runner's summary dict, or a dict with
-    an "error" key -- run_smoke's checks already treat `error` as a failure, so a
-    queue-side failure surfaces as a failed check rather than an exception.
-    """
-    import time as _time
-
-    q = app.state.workflow_queue
-    # `trigger` is not a runner kwarg here: the queue derives it from `source`, so
-    # the smoke's runs get the same trigger treatment as every other queued run.
-    params = dict(params)
-    source = params.pop("trigger", "smoke")
-    item = q.enqueue(workflow, params, source=source)
-
-    deadline = _time.monotonic() + SMOKE_ITEM_TIMEOUT_S
-    while _time.monotonic() < deadline:
-        snap = q.snapshot()
-        done = next((i for i in snap["recent"] if i["id"] == item.id), None)
-        if done is not None:
-            if done.get("status") == "error":
-                return {"error": done.get("error") or "queue item failed"}
-            # The runner stores each workflow's summary here for the smoke to assert on.
-            return app.state.smoke_summaries.get(item.id) or {}
-        pending = any(i["id"] == item.id for i in snap["pending"])
-        running = (snap.get("current") or {}).get("id") == item.id
-        if not pending and not running:
-            # Vanished without landing in recent: treat as failure rather than hang.
-            return {"error": "queue item disappeared"}
-        _time.sleep(1.0)
-    return {"error": f"queue item timed out after {SMOKE_ITEM_TIMEOUT_S}s"}
-
-
-def _run_regression_smoke(dry_run: bool = True, w1_max: int = 2, w2_max: int = 5,
-                          score_threshold: int | None = None,
-                          no_response_days: int | None = None,
-                          stale_conv_days: int | None = None) -> None:
-    """Background: real-machine smoke (W1+W2 tiny scale). dry_run=True is harmless
-    (read-path only); dry_run=False actually applies/sends and asserts persistence.
-
-    Runs its workflows THROUGH THE QUEUE (source='smoke') rather than calling the
-    runners directly. That keeps exactly one execution path for W1/W2: the queue
-    runner also writes the schedule log, maps the trigger and clears the mutex on
-    error, and a private second path would silently miss anything added there later.
-    It also means the smoke queues up behind a running workflow instead of being
-    rejected outright.
-
-    Note it must NOT set emitter.current_workflow itself -- that flag IS the queue's
-    is_busy signal, so holding it here would deadlock the worker it is waiting on.
-    The mutex is held per item by _queue_runner, which is the correct owner.
-    Appends the result to regression_smoke_log.jsonl for the dashboard to poll."""
-    _initialize_state()
-    from services import regression
-    try:
-        report = regression.run_smoke(
-            submit=_queue_submit_and_wait, tracker=app.state.tracker,
-            dry_run=dry_run, w1_max=w1_max, w2_max=w2_max,
-            score_threshold=score_threshold, no_response_days=no_response_days,
-            stale_conv_days=stale_conv_days,
-        )
-    except Exception as exc:
-        report = {"ran_at": datetime.now(timezone.utc).isoformat(), "ok": False,
-                  "mode": "dry" if dry_run else "live",
-                  "duration_s": 0, "checks": [], "error": f"{type(exc).__name__}: {exc}"}
-    try:
-        with open(REGRESSION_SMOKE_LOG, "a", encoding="utf-8") as f:
-            f.write(_json.dumps(report, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
-    logger.info("regression smoke: ok=%s %ss", report.get("ok"), report.get("duration_s"))
-
-
 @app.post("/api/regression/smoke")
 async def trigger_regression_smoke(background_tasks: BackgroundTasks, body: dict | None = None) -> JSONResponse:
     """Layer 3: trigger real-machine smoke (W1+W2) in the background. Opens a real
@@ -2167,7 +1887,7 @@ async def trigger_regression_smoke(background_tasks: BackgroundTasks, body: dict
     no_response_days = _opt_int("no_response_days")
     stale_conv_days = _opt_int("stale_conv_days")
 
-    background_tasks.add_task(_run_regression_smoke, dry_run=dry_run,
+    background_tasks.add_task(_get_orch().run_regression_smoke, dry_run=dry_run,
                               w1_max=w1_max, w2_max=w2_max,
                               score_threshold=score_threshold,
                               no_response_days=no_response_days,

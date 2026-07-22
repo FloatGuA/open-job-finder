@@ -707,13 +707,15 @@ class TestWorkflow:
         # patch so no real W1 run leaks out after the patch context exits.
         import threading
         ran = threading.Event()
-        with patch("dashboard.server._run_apply_workflow",
-                   side_effect=lambda p: (ran.set(), "ok")[1]):
+        # The runner now lives on OrchestrationService; patch it there. It returns a
+        # (log_line, summary) pair, which the queue runner unpacks.
+        with patch("services.workflow_orchestration.OrchestrationService._run_apply_workflow",
+                   side_effect=lambda *a, **k: (ran.set(), ("ok", {}))[1]):
             r = client.post("/api/workflow/apply", json={})
             assert r.status_code == 200
             assert r.json()["status"] == "started"
             assert ran.wait(5)
-        # _queue_runner sets the mutex; the patched runner skips finish_workflow, so clear it.
+        # run_item sets the mutex; the patched runner skips finish, so clear it.
         app.state.emitter.current_workflow = None
 
     def test_apply_dry_run_flag_propagated(self, client):
@@ -744,8 +746,8 @@ class TestWorkflow:
     def test_check_starts_and_returns_started(self, client):
         import threading
         ran = threading.Event()
-        with patch("dashboard.server._run_check_workflow",
-                   side_effect=lambda p: (ran.set(), "ok")[1]):
+        with patch("services.workflow_orchestration.OrchestrationService._run_check_workflow",
+                   side_effect=lambda *a, **k: (ran.set(), ("ok", {}))[1]):
             r = client.post("/api/workflow/check", json={})
             assert r.status_code == 200
             assert r.json()["status"] == "started"
