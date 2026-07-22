@@ -35,7 +35,7 @@ from services.resume_manager import ResumeManager
 from services.resume_parser import parse_resume_file
 from services.tracker import ApplicationTracker
 from tools.biz_logic.wechat_id import wechat_id_from
-from pipeline.run_logger import _ui_status
+from services import run_log_reader
 from services.scheduler_service import SchedulerService
 from services.workflow_orchestration import OrchestrationService
 
@@ -274,159 +274,6 @@ def _validate_run_pipeline(pipeline: str | None) -> str | None:
     return pipeline
 
 
-def _iter_run_files(pipeline: str | None = None) -> list[Path]:
-    if not RUNS_DIR.exists():
-        return []
-    pattern = f"{pipeline}_*.jsonl" if pipeline else "*.jsonl"
-    return list(RUNS_DIR.glob(pattern))
-
-
-def _summarize_run_file(path: Path) -> dict[str, Any] | None:
-    lines: list[str] = []
-    with path.open("r", encoding="utf-8") as file:
-        for line in file:
-            line = line.strip()
-            if line:
-                lines.append(line)
-    if not lines:
-        return None
-    first = _json.loads(lines[0])
-    last = _json.loads(lines[-1])
-    if first.get("event") != "run_start":
-        return None
-    run_id = first.get("run_id", path.stem)
-    pipeline = first.get("pipeline", "")
-    ended = last.get("event") == "run_end"
-    return {
-        "run_id": run_id,
-        "pipeline": pipeline,
-        "filename": path.name,
-        "started_at": first.get("ts"),
-        "status": last.get("status") if ended else "running",
-        "duration_ms": last.get("duration_ms") if ended else None,
-        "summary": last.get("summary") if ended else None,
-    }
-
-
-def _find_run_file(run_id: str) -> Path | None:
-    """Find the JSONL file for the given run_id by matching the run_start event's run_id field."""
-    for path in _iter_run_files():
-        try:
-            with path.open("r", encoding="utf-8") as file:
-                first_line = file.readline().strip()
-            if not first_line:
-                continue
-            first = _json.loads(first_line)
-            if first.get("run_id") == run_id:
-                return path
-        except (OSError, _json.JSONDecodeError):
-            continue
-    return None
-
-
-def _parse_run_detail(path: Path) -> dict[str, Any]:
-    """Parse a JSONL run file into grouped steps + tools + business_events structure."""
-    lines: list[str] = []
-    with path.open("r", encoding="utf-8") as file:
-        for line in file:
-            line = line.strip()
-            if line:
-                lines.append(line)
-
-    if not lines:
-        return {}
-
-    first = _json.loads(lines[0])
-    last = _json.loads(lines[-1])
-    ended = last.get("event") == "run_end"
-
-    run_id = first.get("run_id", path.stem)
-    pipeline = first.get("pipeline", "")
-
-    # Collect step and tool events; everything else that is not run_start/run_end is a business event
-    step_events: list[dict[str, Any]] = []
-    tool_events: list[dict[str, Any]] = []
-    business_events: list[dict[str, Any]] = []
-
-    known_meta_events = {"run_start", "run_end"}
-    known_trace_events = {"step", "tool"}
-
-    for raw_line in lines:
-        try:
-            entry = _json.loads(raw_line)
-        except _json.JSONDecodeError:
-            continue
-        event = entry.get("event", "")
-        if event in known_meta_events:
-            continue
-        if event == "step":
-            step_events.append(entry)
-        elif event == "tool":
-            tool_events.append(entry)
-        else:
-            business_events.append(entry)
-
-    # Sort by timestamp
-    step_events.sort(key=lambda e: e.get("ts", ""))
-    tool_events.sort(key=lambda e: e.get("ts", ""))
-    business_events.sort(key=lambda e: e.get("ts", ""))
-
-    # Build steps list; attach tools to the most recent preceding step
-    steps: list[dict[str, Any]] = []
-    for se in step_events:
-        steps.append({
-            "step": se.get("step", ""),
-            "scope": se.get("scope") or {},
-            "status": se.get("status", ""),
-            "duration_ms": se.get("duration_ms"),
-            "data": se.get("data") or {},
-            "error": se.get("error"),
-            "ts": se.get("ts", ""),
-            "tools": [],
-        })
-
-    for te in tool_events:
-        tool_ts = te.get("ts", "")
-        # Find the most recent step whose ts <= tool_ts
-        best_idx = -1
-        for idx, step in enumerate(steps):
-            if step["ts"] <= tool_ts:
-                best_idx = idx
-        target_idx = best_idx if best_idx >= 0 else (len(steps) - 1 if steps else -1)
-        tool_entry: dict[str, Any] = {
-            "tool": te.get("tool", ""),
-            "scope": te.get("scope") or {},
-            "status": te.get("status", ""),
-            "duration_ms": te.get("duration_ms"),
-            "data": te.get("data") or {},
-            "error": te.get("error"),
-            "ts": te.get("ts", ""),
-        }
-        if target_idx >= 0:
-            steps[target_idx]["tools"].append(tool_entry)
-
-    be_list: list[dict[str, Any]] = [
-        {
-            "event": be.get("event", ""),
-            "scope": be.get("scope") or {},
-            "data": be.get("data") or {},
-            "ts": be.get("ts", ""),
-        }
-        for be in business_events
-    ]
-
-    return {
-        "run_id": run_id,
-        "pipeline": pipeline,
-        "status": last.get("status") if ended else "running",
-        "started_at": first.get("ts"),
-        "duration_ms": last.get("duration_ms") if ended else None,
-        "summary": last.get("summary") if ended else None,
-        "steps": steps,
-        "business_events": be_list,
-    }
-
-
 def _write_schedule_log(entry: dict) -> None:
     """Append one JSON line to schedule_log.jsonl. Thread-safe via GIL + append mode."""
     SCHEDULE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -629,8 +476,8 @@ async def get_runs(pipeline: str | None = None) -> JSONResponse:
     pipeline = _validate_run_pipeline(pipeline)
     runs = [
         summary
-        for path in _iter_run_files(pipeline)
-        if (summary := _summarize_run_file(path)) is not None
+        for path in run_log_reader.iter_run_files(RUNS_DIR, pipeline)
+        if (summary := run_log_reader.summarize_run_file(path)) is not None
     ]
     runs.sort(key=lambda item: item.get("started_at") or item["filename"], reverse=True)
     return JSONResponse({"runs": runs, "total": len(runs)})
@@ -638,91 +485,23 @@ async def get_runs(pipeline: str | None = None) -> JSONResponse:
 
 @app.get("/api/runs/{run_id}")
 async def get_run_detail(run_id: str) -> JSONResponse:
-    path = _find_run_file(run_id)
+    path = run_log_reader.find_run_file(RUNS_DIR, run_id)
     if path is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
-    detail = _parse_run_detail(path)
+    detail = run_log_reader.parse_run_detail(path)
     if not detail:
         raise HTTPException(status_code=404, detail=f"Run {run_id} is empty")
     return JSONResponse(detail)
-
-
-def _iso_to_epoch(ts: str) -> float:
-    if not ts:
-        return 0.0
-    try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return 0.0
-
-
-def _parse_run_events(path: Path) -> list[dict[str, Any]]:
-    """Flatten a run JSONL into frontend ProgressEvent[] (the live-stream shape), so
-    a finished run can be replayed into WorkflowTrack via the same buildTree the SSE
-    stream feeds. The in-memory SSE buffer is capped (200, shared across workflows)
-    and lost on restart, so it cannot show a *complete* past run -- the JSONL can.
-
-    Domain status -> UI status here (single source: _ui_status); ISO ts -> epoch
-    seconds; workflow field added (only run_start/step carry `pipeline` in the file,
-    so it is taken once from run_start); message synthesized to match what the SSE
-    path emits (run_logger.log_step / log_tool / log)."""
-    lines = [ln.strip() for ln in path.open("r", encoding="utf-8") if ln.strip()]
-    if not lines:
-        return []
-    first = _json.loads(lines[0])
-    pipeline = first.get("pipeline", "") or path.stem.split("_")[0]
-
-    out: list[dict[str, Any]] = []
-    for raw in lines:
-        try:
-            e = _json.loads(raw)
-        except _json.JSONDecodeError:
-            continue
-        event = e.get("event", "")
-        scope = e.get("scope") or {}
-        data = e.get("data") or {}
-        status = e.get("status", "")
-        ts = _iso_to_epoch(e.get("ts", ""))
-        if event == "run_start":
-            out.append({"workflow": pipeline, "step": "start", "tool": None, "status": "running",
-                        "message": f"开始 {pipeline} workflow", "scope": {},
-                        "detail": e.get("meta") or {}, "ts": ts})
-        elif event == "run_end":
-            out.append({"workflow": pipeline, "step": "done", "tool": None, "status": _ui_status(status),
-                        "message": str(e.get("summary") or {}), "scope": {}, "detail": e.get("summary") or {}, "ts": ts})
-        elif event == "step":
-            step = e.get("step", "")
-            out.append({"workflow": pipeline, "step": step, "tool": None, "status": _ui_status(status),
-                        "message": f"Step {step}: {status}", "scope": scope, "detail": data, "ts": ts})
-        elif event == "tool":
-            tool = e.get("tool", "")
-            out.append({"workflow": pipeline, "step": e.get("step", ""), "tool": tool, "status": _ui_status(status),
-                        "message": f"[tool] {tool}: {status}", "scope": scope, "detail": data, "ts": ts})
-        else:
-            # business event. Skip file-only per-conversation traces the live SSE never
-            # showed (logged visible=False), so replay mirrors the live view instead of
-            # surfacing one phantom instance per filtered-out conversation. Newer logs
-            # persist `visible`; older logs predate it, so also skip the known file-only
-            # event (filter_decision) by name.
-            if e.get("visible") is False or event == "filter_decision":
-                continue
-            # job_scored / job_skipped / intent_analyzed / ...: no status in file; SSE
-            # emits these with status "info"; detail carries the human-readable payload
-            # (score / reason / intent) the interpret layer uses.
-            out.append({"workflow": pipeline, "step": event, "tool": None, "status": "info",
-                        "message": f"[event] {event}", "scope": scope, "detail": {**scope, **data}, "ts": ts})
-    out.sort(key=lambda x: x["ts"])
-    return out
 
 
 @app.get("/api/runs/{run_id}/events")
 async def get_run_events(run_id: str) -> JSONResponse:
     """Full persisted event stream for one run, in frontend ProgressEvent shape, so
     WorkflowTrack can replay a finished run's complete view (not the capped buffer)."""
-    path = _find_run_file(run_id)
+    path = run_log_reader.find_run_file(RUNS_DIR, run_id)
     if path is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
-    return JSONResponse({"events": _parse_run_events(path)})
+    return JSONResponse({"events": run_log_reader.parse_run_events(path)})
 
 
 @app.get("/api/apply-failure/{name}")
