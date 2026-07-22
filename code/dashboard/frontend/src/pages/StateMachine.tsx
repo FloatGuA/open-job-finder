@@ -43,6 +43,24 @@ function Section({ badge, title, sub, children }: {
   )
 }
 
+// \u53ef\u5c55\u5f00\u7684\u6280\u672f\u8bb2\u89e3\u5757\uff1a\u6807\u9898\u59cb\u7ec8\u53ef\u89c1\uff0c\u6df1\u5165\u5185\u5bb9\u70b9\u5f00\u624d\u663e\u793a——\u907f\u514d\u6574\u9875\u5806\u6ee1\u957f\u6587\u3002
+function Collapsible({ title, hint, accent, children, defaultOpen = false }: {
+  title: string; hint?: string; accent: string; children: React.ReactNode; defaultOpen?: boolean
+}) {
+  return (
+    <details open={defaultOpen} className="group rounded-xl" style={{ background: `${accent}0f`, border: `1px solid ${accent}30` }}>
+      <summary
+        className="flex cursor-pointer select-none list-none items-center gap-2 px-3.5 py-2.5 [&::-webkit-details-marker]:hidden"
+      >
+        <span className="text-[13px] transition-transform duration-150 group-open:rotate-90" style={{ color: accent }}>{'▸'}</span>
+        <span className="text-[15px] font-semibold" style={{ color: accent }}>{title}</span>
+        {hint && <span className="text-[13.5px] text-text-3">{hint}</span>}
+      </summary>
+      <div className="px-3.5 pb-3.5 pt-0.5">{children}</div>
+    </details>
+  )
+}
+
 // -- (1) architecture tab ---------------------------------------------
 
 type Layer = { layer: string; color: string; what: string; judge: string; files: string }
@@ -56,13 +74,13 @@ const LAYER_ROWS: Layer[] = [
     judge: '\u662f\u4e0d\u662f\u67d0\u6761\u5de5\u4f5c\u6d41\u91cc\u7684\u4e00\u6bb5',
     files: 'w1/ \u00b7 w2/ \u00b7 w3/ \u00b7 common' },
   { layer: 'services/', color: '#ff9f0a',
-    what: '\u5171\u4eab\u57fa\u5efa/\u5355\u4f8b\uff08BrowserSession\u3001tracker\u3001llm_client\u3001config_manager\uff09',
-    judge: '\u662f\u4e0d\u662f\u88ab\u591a\u5904\u5171\u7528\u7684\u57fa\u5efa',
-    files: 'browser_context \u00b7 tracker \u00b7 llm_client' },
+    what: '\u5171\u4eab\u57fa\u5efa/\u5355\u4f8b\uff08tracker\u3001llm_client\u3001config_manager\uff09+ \u4ece server.py \u4e0b\u6c89\u7684\u7f16\u6392 service',
+    judge: '\u662f\u4e0d\u662f\u88ab\u591a\u5904\u5171\u7528\u7684\u57fa\u5efa\uff0c\u6216\u4ece\u63a5\u7ebf\u5c42\u62c6\u51fa\u7684\u6709\u72b6\u6001\u7f16\u6392',
+    files: 'tracker \u00b7 llm_client \u00b7 config_manager \u00b7 scheduler_service \u00b7 workflow_orchestration \u00b7 run_log_reader \u00b7 run_diagnostics' },
   { layer: 'dashboard/server.py', color: '#bf5af2',
-    what: '\u53ea\u505a HTTP \u63a5\u7ebf\uff1a\u89e3\u6790\u8bf7\u6c42 \u2192 \u8c03 tool/step/service \u2192 \u5e8f\u5217\u5316\u8fd4\u56de',
-    judge: '\u7aef\u70b9\u4e0d\u51c6\u5185\u8054\u6d4f\u89c8\u5668/LLM/\u4e1a\u52a1\u903b\u8f91',
-    files: 'server.py + SSE + \u8c03\u5ea6' },
+    what: '\u53ea\u505a HTTP \u63a5\u7ebf\uff1a\u89e3\u6790\u8bf7\u6c42 \u2192 \u8c03 tool/step/service \u2192 \u5e8f\u5217\u5316\u8fd4\u56de\uff082026-07 \u51cf\u91cd 2638\u21922038 \u884c\uff09',
+    judge: '\u7aef\u70b9\u4e0d\u51c6\u5185\u8054\u6d4f\u89c8\u5668/LLM/\u4e1a\u52a1\u903b\u8f91\uff0c\u7f16\u6392\u4e0b\u6c89 service',
+    files: 'server.py + SSE\uff08\u8c03\u5ea6/\u961f\u5217\u6267\u884c/\u81ea\u68c0/\u65e5\u5fd7\u89e3\u6790\u5df2\u4e0b\u6c89\uff09' },
 ]
 
 function ArchTab({ live, running }: { live: ArchitectureLive | null; running: string | null }) {
@@ -94,17 +112,35 @@ function ArchTab({ live, running }: { live: ArchitectureLive | null; running: st
             </div>
           ))}
         </div>
-        <div className="mt-3 rounded-xl p-3" style={{ background: 'rgba(10,132,255,0.06)', border: '1px solid rgba(10,132,255,0.18)' }}>
-          <p className="text-[15px] font-semibold text-signal-bright">{'ToolRegistry\uff1a\u628a\u56db\u5c42\u7c98\u8d77\u6765'}</p>
-          <p className="mt-1 text-[14.5px] leading-relaxed text-text-2">
-            {'step \u4e0d\u76f4\u63a5 new tool\uff0c\u800c\u662f registry.call(name, ...)\u3002registry \u6301\u6709 browser/db/llm \u5171\u4eab\u8d44\u6e90\uff0c\u5e76\u5728\u6bcf\u6b21\u8c03\u7528\u524d\u540e\u81ea\u52a8\u8bb0 trace + \u63a8 SSE\u2014\u2014\u7ed5\u5f00 registry \u5c31\u6ca1\u4e86\u53ef\u89c2\u6d4b\u6027\u3002'}
-          </p>
-        </div>
-        <div className="mt-2 rounded-xl p-3" style={{ background: 'rgba(255,69,58,0.06)', border: '1px solid rgba(255,69,58,0.18)' }}>
-          <p className="text-[15px] font-semibold text-signal-red">{'\u94c1\u5f8b\uff1a\u7aef\u70b9\u4e0d\u51c6\u5185\u8054\u526f\u4f5c\u7528'}</p>
-          <p className="mt-1 text-[14.5px] leading-relaxed text-text-2">
-            {'\u7aef\u70b9\u5185\u8054\u6d4f\u89c8\u5668/LLM/\u4e1a\u52a1\u903b\u8f91 \u2192 \u5fc5\u7136\u5236\u9020\u4e24\u4efd\u5206\u53c9\u5b9e\u73b0\uff08\u52a0\u56fa\u4e00\u4e2a\u6f0f\u4e00\u4e2a\uff09+ \u4e0d\u53ef\u89c2\u6d4b\u3002\u7eaf\u8bfb\u7aef\u70b9\uff08GET /api/jobs\u3001/api/stats\uff09\u53ef\u76f4\u8c03 tracker\uff0c\u4e0d\u5f3a\u884c tool \u5316\u3002'}
-          </p>
+        <div className="mt-3 space-y-2">
+          <Collapsible title={'ToolRegistry\uff1a\u628a\u56db\u5c42\u7c98\u8d77\u6765'} hint={'\u4e3a\u4ec0\u4e48 step \u4e0d\u76f4\u63a5 new tool'} accent="#0a84ff">
+            <p className="text-[14.5px] leading-relaxed text-text-2">
+              {'step \u4e0d\u76f4\u63a5 new tool\uff0c\u800c\u662f registry.call(name, ...)\u3002registry \u6301\u6709 browser/db/llm \u5171\u4eab\u8d44\u6e90\uff0c\u5e76\u5728\u6bcf\u6b21\u8c03\u7528\u524d\u540e\u81ea\u52a8\u8bb0 trace + \u63a8 SSE\u2014\u2014\u7ed5\u5f00 registry \u5c31\u6ca1\u4e86\u53ef\u89c2\u6d4b\u6027\u3002'}
+            </p>
+          </Collapsible>
+          <Collapsible title={'\u94c1\u5f8b\uff1a\u7aef\u70b9\u4e0d\u51c6\u5185\u8054\u526f\u4f5c\u7528'} hint={'\u4e3a\u4ec0\u4e48\u8fd9\u6761\u6700\u8981\u547d'} accent="#ff453a">
+            <p className="text-[14.5px] leading-relaxed text-text-2">
+              {'\u7aef\u70b9\u5185\u8054\u6d4f\u89c8\u5668/LLM/\u4e1a\u52a1\u903b\u8f91 \u2192 \u5fc5\u7136\u5236\u9020\u4e24\u4efd\u5206\u53c9\u5b9e\u73b0\uff08\u52a0\u56fa\u4e00\u4e2a\u6f0f\u4e00\u4e2a\uff09+ \u4e0d\u53ef\u89c2\u6d4b\u3002\u7eaf\u8bfb\u7aef\u70b9\uff08GET /api/jobs\u3001/api/stats\uff09\u53ef\u76f4\u8c03 tracker\uff0c\u4e0d\u5f3a\u884c tool \u5316\u3002'}
+            </p>
+          </Collapsible>
+          <Collapsible title={'\u94c1\u5f8b 2\uff1a\u4e00\u4e2a\u72b6\u6001\u8f6c\u6362\u53ea\u80fd\u6709\u4e00\u4efd SQL'} hint={'\u4e00\u6b21\u5ba1\u67e5\u8fde\u6293\u56db\u4f8b\u5206\u53c9'} accent="#ff453a">
+            <p className="text-[14.5px] leading-relaxed text-text-2">
+              {'tracker \u72ec\u5360\u8fde\u63a5/schema/\u8fc1\u79fb\u4e0e\u6bcf\u4e2a\u5199\u64cd\u4f5c\u7684\u552f\u4e00\u5b9e\u73b0\uff1btools/db/* \u662f\u8584\u58f3\u8c03 tracker\uff1b\u7aef\u70b9\u65e0 SQL\u3002\u540c\u4e00\u8f6c\u6362\u5b58\u5728\u4e24\u4efd\u5b9e\u73b0\u5fc5\u7136\u6f02\u79fb\u2014\u20142026-07 \u4e00\u6b21\u5ba1\u67e5\u8fde\u6293\u56db\u4f8b\uff1a\u6807\u8bb0\u5df2\u53d1\u9001\uff08\u4e00\u4efd\u5199 NULL \u800c\u975e sent \u2192 \u53ef\u80fd\u4e8c\u6b21\u53d1\u9001\uff09\u3001\u5199\u5206\u6790\u7ed3\u679c\uff08\u7f3a\u6c34\u4f4d\u7ebf\u5b57\u6bb5\uff09\u3001\u6295\u9012\u65f6\u95f4\u8bed\u4e49\u76f8\u53cd\u3001\u5192\u70df\u81ea\u6301\u6267\u884c\u8def\u5f84\u3002\u5224\u636e\uff1a\u540c\u4e00\u5217\u5728\u4e0d\u540c\u5b9e\u73b0\u91cc\u7684 CASE \u5206\u652f\u4e0d\u4e00\u81f4\u3002'}
+            </p>
+          </Collapsible>
+          <Collapsible title={'server.py \u51cf\u91cd\uff1a\u7f16\u6392\u4e0b\u6c89 service\uff082026-07\uff0c-600 \u884c\uff09'} hint={'\u63a5\u7ebf\u5c42\u600e\u4e48\u7626\u8eab\u7684'} accent="#bf5af2">
+            <p className="text-[14.5px] leading-relaxed text-text-2">
+              {'server.py \u66fe\u628a\u8c03\u5ea6\u3001\u961f\u5217\u6267\u884c\u3001\u81ea\u68c0\u3001\u9650\u6d41\u3001run \u65e5\u5fd7\u89e3\u6790\u7b49\u6709\u72b6\u6001\u7f16\u6392\u6df7\u8fdb\u63a5\u7ebf\u5c42\uff082638 \u884c\uff09\u3002\u4e09\u6279\u4e0b\u6c89\u4e3a service\uff1a'}
+            </p>
+            <ul className="mt-2 space-y-1.5 text-[14px] text-text-2">
+              <li><span className="font-mono text-signal-amber">scheduler_service</span>{' \u2014 APScheduler \u751f\u547d\u5468\u671f\uff0c\u8de8\u7c07\u4f9d\u8d56\u6ce8\u5165'}</li>
+              <li><span className="font-mono text-signal-amber">workflow_orchestration</span>{' \u2014 \u961f\u5217 runner + W1/W2/W3 \u6267\u884c + \u9650\u6d41 + \u81ea\u68c0 + \u5192\u70df\uff0cget_state \u8bbf\u95ee\u5668'}</li>
+              <li><span className="font-mono text-signal-amber">run_log_reader</span>{' \u2014 run \u65e5\u5fd7\u53ea\u8bfb\u89e3\u6790\uff0c\u7eaf\u51fd\u6570'}</li>
+            </ul>
+            <p className="mt-2 text-[13.5px] leading-relaxed text-text-3">
+              {'\u4f9d\u8d56\u6ce8\u5165\u65b9\u5f0f\u6309\u300c\u6709\u65e0\u72b6\u6001\u300d\u9009\uff1a\u6709\u72b6\u6001\u7684\u7528 service \u7c7b + \u6ce8\u5165\u4f9d\u8d56\uff08\u53ef\u8131\u79bb FastAPI \u5355\u6d4b\uff09\uff0c\u65e0\u72b6\u6001\u7684\u7528\u7eaf\u51fd\u6570 + \u8def\u5f84\u4f20\u53c2\u3002\u7aef\u70b9\u56de\u5f52\u8584\u63a5\u7ebf\uff0cserver.py \u964d\u5230 2038 \u884c\u3002'}
+            </p>
+          </Collapsible>
         </div>
       </Section>
     </div>
