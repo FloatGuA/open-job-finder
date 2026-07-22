@@ -164,10 +164,28 @@ server.py 内联正则解析，注释自承 "mirrors Chat.tsx"，前端持第二
 
 ---
 
-## 单拎（不在本轮）
+## 单拎 · server.py 减重（进行中，v2.9.0）
 
-- **server.py 减重**：2549 行，调度/队列/自检/限流编排下沉为 orchestration service
-- **位置隔离方案 A**：统一 `private/` 目录，改 `DATA_DIR`/`RUNS_DIR` 等路径常量
+方案见发布的 artifact（三新模块 + 依赖注入 (c) service 类）。**消费方分析后不照搬方案的"批 A 一次搬 535 行"**——scheduler 是 orchestration 的消费者、schedule 配置被 7 处端点共用，真实边界更细，先抽耦合最浅的。
+
+### A-1 SchedulerService — `596d430`（-99 行，2638→2539）
+
+APScheduler 的所有权（build/rebuild、两个 scheduled 入口、`_scheduler` 全局+锁）下沉为 `services/scheduler_service.py` 的 SchedulerService 类。跨簇依赖（入队/限流/自检/调度日志/配置读/last_run_time）作为 callable 注入 → 不依赖 app.state，可 fake 测试。
+
+- schedule 配置 load/save **留在 server.py**（7 处端点用它，共享基建），作为 `load_config` 注入
+- `/api/schedule` 不再遍历 `_scheduler.get_jobs()`，改调 service 的 `next_run_times()`
+- 新增 `test_scheduler_service.py`（7 例，内联时只能经 HTTP 触达）
+- **真机验证**：启动装配 `_scheduler_running=True` / `/api/schedule` 正常 / live 冒烟 `ok=True fully_covered=True` 无异常 / count_today Δ+1
+
+### A-2 workflow_orchestration — 待做
+
+queue_runner + `_run_*_workflow` + selfcheck_cycle + smoke + rate_limit（~335 行）。审计 High 本体，动队列执行路径，耦合最深。
+
+### B run_log_reader 归并 / C session helpers — 待做
+
+## 单拎 · 位置隔离方案 A — 待做
+
+统一 `private/` 目录，改 `DATA_DIR`/`RUNS_DIR` 等路径常量。
 
 ---
 
