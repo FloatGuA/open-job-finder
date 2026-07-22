@@ -201,9 +201,30 @@ run JSONL 只读解析（列表摘要 / 分组明细 / ProgressEvent[] 回放）
 
 ### C session helpers — 可选，收益小（31 行），基本可收尾
 
-## 单拎 · 位置隔离方案 A — 待做
+## 单拎 · 位置隔离方案 A — `2a5ee71`（轻量版，重版评估后放弃）
 
-统一 `private/` 目录，改 `DATA_DIR`/`RUNS_DIR` 等路径常量。
+**放弃重版**（搬 DATA_DIR 到 `private/`）：个人数据已全被 gitignore 覆盖 + PII 内容扫描守护，物理搬迁 1.3GB（含 browser_profile 登录 session）+ 改 ~15 路径常量 + 存量迁移的风险，远大于"把已 ignore 的数据换位置"的收益。
+
+**轻量版根治黑名单漂移**：
+- `.gitignore` 黑名单枚举（`logs/runs/`、`logs/task_*/`…）→ 整目录 `/logs/` `/data/`。实测 `logs/final/` 与任何新建 logs/ 子目录原本会漏（`git check-ignore` 证实），收敛后天然被挡。
+- pre-commit 加 `check_staged_locations`：暂存文件落在运行时根目录下即拦。**位置**防线，与既有**内容**扫描互补——按文件所在位置拦整个个人数据文件（.db/二进制内容扫不出）。实测 `git add -f code/data/x` 被拦。
+
+**三道防线合璧**：gitignore 挡日常 / 位置护栏挡 `-f` 强推 / 内容扫描挡文档里抄的真实数据。
+
+---
+
+## 整改总收官
+
+审计四路发现（架构分层 / W2 正确性 / 数据+隐私 / 测试+前端）的 High/Medium/Low 全部处理完毕：
+
+- **阶段 0** 冒烟测试可信化（covered 三态 + run 诊断器 + 走队列）
+- **阶段 1** P0 隐私（orphan 重建历史 + PII 扫描器）
+- **阶段 2** High（mark-sent/update_hr_analysis/新会话丢写/applied_at + live 冒烟验证）
+- **阶段 3** Medium（停滞口径 / 配置统一 / 微信解析下沉；too_old 顺序与 upsert 双实现审查后维持）
+- **阶段 4** Low（score_job 补测 / interval 泄漏 / 铁律措辞）
+- **单拎** server.py 减重 -600 行（scheduler / orchestration / run_log_reader 三 service）+ 位置隔离轻量版
+
+基线 2638 行 → 2038 行；测试 ~478 → 590 passed。
 
 ---
 
