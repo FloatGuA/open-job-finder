@@ -36,9 +36,7 @@ from services.resume_parser import parse_resume_file
 from services.tracker import ApplicationTracker
 from tools.biz_logic.wechat_id import wechat_id_from
 from pipeline.run_logger import _ui_status
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
+from services.scheduler_service import SchedulerService
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -106,8 +104,7 @@ _SCHEDULE_DEFAULTS = {
     },
 }
 
-_scheduler: BackgroundScheduler | None = None
-_scheduler_lock = threading.Lock()
+_scheduler_service: "SchedulerService | None" = None
 
 
 def _utcnow_iso() -> str:
@@ -750,129 +747,48 @@ def _queue_runner(item) -> None:
         raise
 
 
-def _scheduled_run(workflow: str) -> None:
-    """
-    Called by APScheduler in a background thread. workflow: "apply" | "check".
-    Enqueues the run (coalescing duplicates) instead of running inline — the
-    single queue worker serialises it with manual/other scheduled runs, so a
-    scheduled tick that lands while something else runs waits its turn rather
-    than being dropped.
+def _sched_enqueue(wf: str, params: dict, source: str, coalesce: bool):
+    """The scheduler's queue hook: ensure app.state exists, then enqueue.
+
+    The SchedulerService itself knows nothing about app.state; server owns that
+    coupling and hands it in here.
     """
     _initialize_state()
-    triggered_at = datetime.now(timezone.utc).isoformat()
-
-    # Boss daily-cap gate: once W1 hit the cap today, pause scheduled apply until the
-    # China date rolls over. W2 'check' is unaffected — it sends no greetings.
-    if workflow == "apply" and _is_rate_limited_today():
-        _write_schedule_log({
-            "workflow": workflow,
-            "trigger_type": "scheduler",
-            "triggered_at": triggered_at,
-            "result": "skipped",
-            "skipped_reason": "今日已达 Boss 沟通上限，暂停定时投递",
-            "summary": None,
-            "duration_seconds": 0,
-        })
-        logger.info("Scheduled apply skipped: Boss daily cap reached today")
-        return
-
-    wf = {"apply": "w1", "check": "w2"}[workflow]
-    cfg = _load_schedule_config()
-    params = {**cfg.get(workflow, {}).get("params", {})}
-    # coalesce: if an identical scheduled item is still pending, don't pile another on.
-    app.state.workflow_queue.enqueue(wf, params, source="scheduled", coalesce=True)
-    logger.info("Scheduled %s enqueued", workflow)
+    return app.state.workflow_queue.enqueue(wf, params, source=source, coalesce=coalesce)
 
 
-def _scheduled_selfcheck() -> None:
-    """APScheduler entry for the recurring full self-check cycle (reads live config)."""
-    sc = _load_schedule_config().get("selfcheck", {})
-    _run_selfcheck_cycle(
-        w1_max=int(sc.get("w1_max", 10)),
-        w2_max=int(sc.get("w2_max", 300)),
-        with_probes=bool(sc.get("with_probes", True)),
-        trigger_type="scheduler",
-    )
-
-
-def _build_scheduler(cfg: dict, restore_interval_times: bool = False) -> BackgroundScheduler:
-    """Build a fresh BackgroundScheduler from config. Caller must start() it.
-
-    restore_interval_times: if True, set start_date from last run log so the interval
-    continues across restarts. If False (user-triggered save), start from now.
-    """
-    import pytz
-
-    tz = pytz.timezone("Asia/Shanghai")
-    sched = BackgroundScheduler(timezone=tz)
-
-    for workflow in ("apply", "check"):
-        workflow_cfg = cfg.get(workflow, {})
-        cron_enabled = bool(workflow_cfg.get("enabled", False))
-        interval_enabled = bool(workflow_cfg.get("interval_enabled", False))
-        interval_minutes = int(workflow_cfg.get("interval_minutes", 0))
-
-        if cron_enabled:
-            for time_str in workflow_cfg.get("times", []):
-                try:
-                    hour, minute = map(int, time_str.split(":"))
-                    sched.add_job(
-                        _scheduled_run,
-                        CronTrigger(hour=hour, minute=minute, timezone=tz),
-                        args=[workflow],
-                        id=f"{workflow}_cron_{time_str.replace(':', '')}",
-                        replace_existing=True,
-                    )
-                except (ValueError, TypeError):
-                    logger.warning("Invalid schedule time %r for %s", time_str, workflow)
-
-        if interval_enabled and interval_minutes > 0:
-            start_date = _get_last_run_time(workflow) if restore_interval_times else None
-            sched.add_job(
-                _scheduled_run,
-                IntervalTrigger(minutes=interval_minutes, timezone=tz, start_date=start_date),
-                args=[workflow],
-                id=f"{workflow}_interval",
-                replace_existing=True,
-            )
-
-    sc = cfg.get("selfcheck", {})
-    if bool(sc.get("enabled", False)) and int(sc.get("interval_minutes", 0)) > 0:
-        sched.add_job(
-            _scheduled_selfcheck,
-            IntervalTrigger(minutes=int(sc["interval_minutes"]), timezone=tz),
-            id="selfcheck_interval",
-            replace_existing=True,
+def _get_scheduler() -> SchedulerService:
+    """Lazily build the single SchedulerService, wiring in the cross-cutting pieces
+    it consumes but does not own (rate-limit gate, self-check cycle, schedule log)."""
+    global _scheduler_service
+    if _scheduler_service is None:
+        _scheduler_service = SchedulerService(
+            load_config=_load_schedule_config,
+            get_last_run_time=_get_last_run_time,
+            enqueue=_sched_enqueue,
+            rate_limited_today=_is_rate_limited_today,
+            run_selfcheck=_run_selfcheck_cycle,
+            write_schedule_log=_write_schedule_log,
         )
-
-    return sched
+    return _scheduler_service
 
 
 def _rebuild_scheduler(cfg: dict, restore_interval_times: bool = False) -> None:
-    """Stop existing scheduler (if any), build and start a new one."""
-    global _scheduler
-
-    with _scheduler_lock:
-        if _scheduler is not None and _scheduler.running:
-            _scheduler.shutdown(wait=False)
-        _scheduler = _build_scheduler(cfg, restore_interval_times=restore_interval_times)
-        _scheduler.start()
-        logger.info("Scheduler started with %d jobs", len(_scheduler.get_jobs()))
+    """Thin wrapper kept for the endpoints that already call it."""
+    _get_scheduler().rebuild(cfg, restore_interval_times=restore_interval_times)
 
 
 @app.on_event("startup")
 async def startup() -> None:
     _initialize_state()
     app.state.emitter = getattr(app.state, "emitter", None) or ProgressEmitter()
-    cfg = _load_schedule_config()
-    _rebuild_scheduler(cfg, restore_interval_times=True)
+    _get_scheduler().rebuild(_load_schedule_config(), restore_interval_times=True)
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    global _scheduler
-    if _scheduler is not None and _scheduler.running:
-        _scheduler.shutdown(wait=False)
+    if _scheduler_service is not None:
+        _scheduler_service.shutdown()
     tracker = getattr(app.state, "tracker", None)
     if tracker is not None:
         tracker.close()
@@ -2013,25 +1929,10 @@ async def workflow_stop() -> JSONResponse:
 async def get_schedule() -> JSONResponse:
     _initialize_state()
     cfg = _load_schedule_config()
-    next_runs: dict[str, str | None] = {"apply": None, "check": None}
-    next_interval_runs: dict[str, str | None] = {"apply": None, "check": None}
-    with _scheduler_lock:
-        sched = _scheduler
-    if sched and sched.running:
-        for job in sched.get_jobs():
-            workflow = job.id.split("_")[0]
-            next_run_time = job.next_run_time
-            next_run_str = next_run_time.isoformat() if next_run_time else None
-            if next_run_str:
-                if "_interval" in job.id:
-                    next_interval_runs[workflow] = next_run_str
-                else:
-                    existing = next_runs.get(workflow)
-                    if existing is None or next_run_str < existing:
-                        next_runs[workflow] = next_run_str
-    cfg["_next_runs"] = next_runs
-    cfg["_next_interval_runs"] = next_interval_runs
-    cfg["_scheduler_running"] = bool(sched and sched.running)
+    nrt = _get_scheduler().next_run_times()
+    cfg["_next_runs"] = nrt["cron"]
+    cfg["_next_interval_runs"] = nrt["interval"]
+    cfg["_scheduler_running"] = nrt["running"]
     from services.settings_resolver import resolve_params
     cfg["daily_limit"] = int(resolve_params("w1", {}, app.state.config, DATA_DIR).get("daily_limit", 0))
     return JSONResponse(cfg)
