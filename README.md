@@ -69,6 +69,15 @@ cd open-job-finder/code
 pip install -r requirements.txt
 ```
 
+若你会向本仓库提交代码，安装 pre-commit 钩子，防止个人数据（真实 HR 姓名、公司、聊天内容）误提交——它按文件位置和内容双重扫描暂存区。
+
+If you will commit to this repo, install the pre-commit hook to keep personal data (real HR names, companies, chat content) from being committed by mistake — it scans staged changes by both file location and content.
+
+```bash
+# 在仓库根目录运行 / Run at the repo root
+python code/scripts/install_hooks.py
+```
+
 ---
 
 ## 使用方式 / Usage

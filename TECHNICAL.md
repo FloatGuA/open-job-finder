@@ -19,7 +19,11 @@ main.py (CLI 入口: --once/--check/--onboarding/--dry-run；注意 W3 无 CLI �
             ├── ApplicationTracker        (SQLite 状态机)
             └── RunLogger                 (JSONL 结构化日志 + SSE 推送)
 
-dashboard/server.py  (FastAPI，独立进程；内嵌 BackgroundScheduler 调度 w1/w2/selfcheck；/api/config/* 管理配置)
+dashboard/server.py  (FastAPI，独立进程；只做 HTTP 接线，编排下沉 service；2026-07-22 减重 2638→2038 行)
+services/scheduler_service.py       (SchedulerService：APScheduler 生命周期 + scheduled 入口，跨簇依赖注入)
+services/workflow_orchestration.py  (OrchestrationService：队列 runner + W1/W2/W3 runner + 限流 + 自检 + 冒烟，get_state 访问器)
+services/run_log_reader.py          (run JSONL 只读解析：列表/明细/回放，纯函数)
+services/run_diagnostics.py         (run 日志确定性诊断：是否收尾/参数生效/外发落库，不调 LLM)
 services/workflow_queue.py  (WorkflowQueue 单例：内存 FIFO + 单守护 worker，串行化所有工作流启动)
 services/config_manager.py  (ConfigManager 单例，config.yaml + profile.yaml 统一读写)
 services/browser_session.py (BrowserSession 单例：唯一交互浏览器，open-in-browser/登录/检查共用)
@@ -239,9 +243,10 @@ run_w3()
   - 第 5 步（`_step5_scan_history`）：首次运行时可扫描历史聊天，回溯标记 `stage="resume_sent"` 的会话（依据 `_has_sent_resume` 检测结果）。
   - **登录态实际存于 `data/browser_profile/`**（DrissionPage user-data 目录）；`_session_is_valid()` 仍引用的 `data/session.json` 是废弃占位。是否登录的权威判断是 `VerifySessionStep`（访问 `geek/recommend` 读 `window._PAGE.name`），而非 session.json。
 
-### dashboard/server.py — FastAPI Dashboard
+### dashboard/server.py — FastAPI Dashboard（接线层，2026-07-22 减重 -600 行）
 
-- 职责：可视化求职状态，支持简历上传、HR 会话浏览、workflow 触发/停止、SSE 实时进度推送；同时内嵌 APScheduler BackgroundScheduler 管理 W1/W2 定时触发。
+- 职责：**只做 HTTP 接线**——解析请求 → 委托 tool/step/service → 序列化返回。调度、队列执行、自检、限流、run 日志解析等**编排逻辑已下沉为独立 service**（见下三节），server.py 从 2638 行降到 2038 行。
+- 减重前 server.py 混进了大量有状态编排（A 视角审视标为 High）；三批下沉后端点回归薄接线，编排可脱离 FastAPI 单测。构造用懒加载（`_get_scheduler()`/`_get_orch()`），依赖注入方式按「有无状态」选。
 - 关键实现：
   - PDF 上传同时保存为 `data/resume_attachment.pdf`（用于聊天附件发送）和解析后的 `data/resume_base.yaml`。
   - 上传文件大小限制 10MB，超限返回 HTTP 400。
@@ -249,20 +254,46 @@ run_w3()
   - **加微信提醒 API**：`GET /api/conversations/wechat-pending`（返回待加微信会话列表 + 微信号，供 Dashboard 强提醒卡 + 「待加微信」筛选）；`POST /api/conversations/{conv_id}/dismiss-wechat`（点掉/已添加 → 置 `wechat_dismissed=1`）。
   - **Workflow SSE 推送**：`/api/workflow/stream` 使用 Server-Sent Events，`ProgressEmitter` 单例持有当前 workflow 状态（`current_workflow`、`stop_requested`）。前端通过 SSE 接收 `step`/`status`/`message` 字段更新线路图。
   - **停止 workflow**：`POST /api/workflow/stop` 检查 `emitter.current_workflow` 是否为 None——为 None 时返回 `{"ok": false, "detail": "..."}`，不返回 ok:true，防止前端误等永远不会到来的 SSE done 事件。
-  - **内嵌调度器**：`BackgroundScheduler`（APScheduler）在 startup 钩子中与 FastAPI 进程同步启动；`threading.Lock` 保护 `_rebuild_scheduler` 的原子替换；调度线程与 DrissionPage 工作线程不重叠（DrissionPage 本身在 BackgroundTask 中执行）。
-  - **全量重建模式**（`_rebuild_scheduler`）：每次配置变更时先 `scheduler.shutdown(wait=False)`，再新建 BackgroundScheduler 并重新注册所有 job，避免孤儿 job 残留。触发模式：`CronTrigger(hour=H, minute=M, timezone='Asia/Shanghai')` 用于指定时间点，`IntervalTrigger(hours=N)` 用于固定间隔；两种模式可同时配置。
-  - **冲突检测**：`_scheduled_run` 先检查 `emitter.current_workflow` 非空则写 `result="skipped"` 到 JSONL 日志后直接返回，不抢占正在进行的手动/自动触发。
-  - **调度配置持久化**：`data/schedule.yaml`（PyYAML `safe_dump`/`safe_load`，`deepcopy` 默认值防止对象污染）。
+  - **调度器**：APScheduler 的所有权已下沉 `SchedulerService`（见下）。server.py 在 startup 钩子经 `_get_scheduler().rebuild(...)` 装配；`/api/schedule` 经 `service.next_run_times()` 取下次运行时间，不再直接遍历 scheduler 内部。触发模式仍是 `CronTrigger`（指定时间点）+ `IntervalTrigger`（固定间隔），China 时区。
+  - **队列统一执行**：所有 workflow 启动（手动/定时/自检/冒烟）都经 `WorkflowQueue` 排队，单 worker 顺序跑，runner 回调是 `OrchestrationService.run_item`（见下）。不再有绕过队列的第二条执行路径。
+  - **调度配置持久化**：`data/schedule.yaml`（PyYAML；`_load_schedule_config`/`_save_schedule_config` 留在 server.py，因 7 处端点共用，作为 `load_config` 注入 SchedulerService）。
   - **调度运行记录**：`data/schedule_log.jsonl`（追加写，append 模式；Python GIL 保证多线程追加安全）。
   - **新 API 端点**：`GET /api/schedule`（返回配置 + `_next_runs` + `_scheduler_running`）；`PUT /api/schedule`（接收 `SchedulePayload`，热重载 scheduler，返回 `{ok, config}`）；`GET /api/schedule/log?limit=N`（倒序读取 JSONL，返回 `{log, total}`）。
   - **调度 selfcheck**：`_SCHEDULE_DEFAULTS` 除 apply/check 外新增 `selfcheck`（`enabled` / `interval_minutes=720`（12h）/ `w1_max=10` / `w2_max=300` / `with_probes`），与 apply/check 一起走 schedule 的 load/build/PUT 全链路；`_scheduled_selfcheck` 经 `_run_selfcheck_cycle` 触发，同样受 `current_workflow` 冲突检测保护。
   - **自检 API 端点**：`POST /api/selfcheck`（只跑探针，返回三项健康状态）；`POST /api/selfcheck/cycle`（完整周期：探针 + 真跑 W1/W2，落 `data/selfcheck_history.jsonl`）；`GET /api/selfcheck/history`（倒序读历史记录）。
   - **简历 API 端点**：`/api/resume/blocks` GET/PUT + `/api/resume/blocks/build`（LLM 解析）；`/api/resume/templates` GET/PUT；`/api/resume/tailor/resume`、`/api/resume/tailor/greeting`（岗位特化生成）；`/api/resume/plan/{job_id}` GET、`/api/resume/plan/{job_id}/pdf`（`FileResponse` 返回渲染好的 PDF）。
   - **每日投递上限**：`daily_limit`（Boss直聘 硬上限 150）从自动化页挪到 Dashboard 可编辑；`/api/stats` 与 `/api/schedule` 经 `resolve_params("w1")` 读取，写回走 workflow defaults。
-  - **run 事件回放**：`GET /api/runs/{run_id}/events`（`_parse_run_events`）把持久化 JSONL 解析成 UI 事件序列（`_ui_status` 映射、`_iso_to_epoch` 时间戳），跳过 `visible is False` 与 `filter_decision` 噪声事件，供「日志」navigator 做类 live 可读视图（不再直接展示原始 JSON）。配合 `run_logger.log_business_event` 新增并持久化 `visible` 字段。
-  - **run 元信息（2026-07-03）**：`run_start` 新增 `meta={trigger, params}`。`trigger` = 谁触发（manual/scheduled/selfcheck/cli），由各调用方经 `overrides["_trigger"]` 传入 `_run_apply/check_workflow` → `run_w1/w2(trigger=...)`；`params` 由 runner 自组。经 `emitter.start_workflow(meta)` 放进 start 事件 detail（live SSE）+ `_parse_run_events` run_start→start detail（回放），前端 Live 标题栏据此显示「触发来源 + 本次参数」。
+  - **run 事件回放 / 列表 / 明细**：`GET /api/runs`、`/api/runs/{id}`、`/api/runs/{id}/events` 全部委托 `run_log_reader`（见下），传 `RUNS_DIR`。回放跳过 `visible is False` 与 `filter_decision` 噪声事件，做类 live 可读视图。`_validate_run_pipeline`（抛 HTTPException）留在 server.py——请求校验不属读取。
+  - **run 诊断**：`GET /api/runs/{id}/diagnose`、`/api/runs/diagnose/recent` 委托 `services/run_diagnostics.py`，从 run JSONL 得确定性健康判决（见「模块说明」）。
+  - **run 元信息**：`run_start` 的 `meta={trigger, params}`。`trigger` 由队列按 item.source 映射（manual/scheduled/selfcheck/smoke/smoke_live），`OrchestrationService.run_item` 组装并传给 `run_w1/w2`；run_diagnostics 据此定位冒烟自己的 run。
   - **投递失败截图（2026-07-03）**：`GET /api/apply-failure/{name}`（`FileResponse`，只允许裸 `.png` 名、防路径穿越）读 `data/apply_failures/`，供前端点开「投递失败截图」。W1 投递技术失败（button_not_found/dialog_blocked/error）经 `card_pipeline` 发可见 `job_apply_failed` 事件（带 result + 截图名）、返回 `FAILED`（**不再误计入 applied**，pipeline 新增 `errors` 计数）。
   - 前端为 React 18 SPA，构建产物输出到 `dashboard/static/`，server.py 无需改动。
+
+### services/scheduler_service.py — SchedulerService（server.py 减重 A-1，2026-07-22）
+
+- 职责：APScheduler 生命周期 + 两个 scheduled 入口（`_scheduled_run`/`_scheduled_selfcheck`），从 server.py 下沉。
+- 关键实现：持有 `_scheduler` + 锁；跨簇依赖（入队/限流检查/自检/调度日志/配置读/last_run_time）作为 callable **注入**，故不依赖 app.state、可 fake 测试。`rebuild(cfg, restore_interval_times)`（重建并启动）、`next_run_times()`（给 `/api/schedule` 的下次运行时间，端点不再摸内部）。有状态 → 用 service 类。
+
+### services/workflow_orchestration.py — OrchestrationService（server.py 减重 A-2，审计 High 本体）
+
+- 职责：工作流的实际执行——队列 runner（`run_item`）、三个 W1/W2/W3 runner、Boss 日限流态、自检周期、冒烟驱动。这是 live 冒烟真正走的路径。
+- 关键实现：对 app.state 的耦合不可避免（需 tracker/config/model_router/emitter/队列），故收 `get_state` 访问器**在调用时**读 app.state（此时 `_initialize_state` 已填充），而非 import app。`run_item` 是 `WorkflowQueue` 的 runner 回调：设 emitter 互斥 → 按 workflow 分派 runner → 写 schedule 日志 → 错误清互斥并 re-raise。`is_rate_limited_today`/`mark_rate_limited_today`（限流态）、`run_selfcheck_cycle`（探针→入队 W1/W2）、`submit_and_wait`（冒烟的队列钩子，enqueue + 阻塞等 item 完成）、`run_regression_smoke`（冒烟后台任务，走队列不自持互斥）。
+- **同一转换只能有一份 SQL**：整改中连抓四例「同一转换多份实现」漂移（mark_reply_sent/update_hr_analysis/upsert_application applied_at/冒烟自持执行路径），均收敛。识别判据：同一列在不同实现里的 CASE 分支不一致。
+
+### services/run_log_reader.py — run JSONL 只读解析（server.py 减重 B）
+
+- 职责：run 列表摘要 / 分组 step+tool+业务事件明细 / 扁平化 ProgressEvent[] 回放，供「日志」navigator。
+- 关键实现：**纯函数 + runs_dir 传参**（无状态 → 不用 service 类，依赖注入方式按有无状态选）。`iter_run_files`/`summarize_run_file`/`find_run_file`/`parse_run_detail`/`parse_run_events`/`iso_to_epoch`。与 `run_diagnostics.py` 是姊妹（都读 run JSONL，但后者产出健康判决、前者产出展示形状），刻意分开不强并。
+
+### services/run_diagnostics.py — run 日志诊断器（冒烟可信化，2026-07-21）
+
+- 职责：从 run JSONL 得**确定性**健康判决——是否收尾、参数是否真生效、外发是否落库、step/失败统计。可诊断任意历史 run（不只冒烟自己的）。
+- 关键实现：全程 code decides **不调 LLM**（是否有 run_end、35 是否等于 35 都有唯一答案）；`diagnose_run(run_id)` / `render_report(diag)` / `check_params_applied` / `find_runs`；脏日志（未配对 surrogate/非法字节）做边界净化，否则恰在最该诊断的崩溃 run 上失败。读日志三条铁律见 `docs/run-log-guide.md`（run_id 是 UTC / 无 run_end 可能只是还在写 / run_end 用 done,step 用 successful 是两套词汇表）。
+
+### 隐私防护 — pre-commit PII 扫描器 + gitignore 整目录（2026-07-22）
+
+- 职责：防止个人数据（真实 HR 姓名/公司/聊天/头像 URL）误提交到公开 repo。三道防线互补。
+- 关键实现：`scripts/precommit_pii_scan.py`——**内容**扫描（硬模式：头像 CDN URL/手机/邮箱/微信号 + 从 jobs.db 实时读真实姓名公司比对，误报压到 0，测试夹具/知名雇主降级）+ **位置**护栏（`check_staged_locations`：暂存文件落在 `code/data/`、`logs/` 等运行时根目录即拦，靠位置拦整个 .db/二进制）。`scripts/install_hooks.py` 装薄 shim。`.gitignore` 黑名单枚举收敛为整目录 `/logs/`、`/data/`（枚举子路径会漏新建子目录，正是历史泄露成因）。
 
 ### dashboard/frontend/ — React 前端
 
@@ -668,6 +699,9 @@ FOUND ──投递成功──▶ APPLIED ──▶ INTERVIEWING ──▶ OFFER
 - **LLM 结构化输出：optional output_schema 穿透（2026-07-07）** → 给 ModelRouter/FallbackChain/provider.complete 加 optional `output_schema`，ollama 用 `format`、codex 用 `--output-schema` 约束 JSON，其余接受即忽略、`safe_parse_json` 仍兜底。选 optional kwarg 穿透（标准、非 hacky）而非给 provider 硬编码 schema（不同工具 JSON 形状不同）。
 - **hr_messages 按内容去重（3 列 UNIQUE）** → Boss 的 msg_time 是不稳定相对显示串，含 msg_time 的 4 列 UNIQUE 会让同消息重扫累积重复；改 (conv_id,sender,text) 3 列按内容去重。放弃「保留 msg_time 精确去重」——重扫噪声大于精确价值。
 - **count_today 排除 backfill 重构行** → `AND score IS NOT NULL`：backfill_application_from_conversation 补录历史投递时 score=NULL、applied_at=now()，会灌水「今日投递」（一次补 96 条→147 vs 真 51）；真 W1 投递 score 恒非 NULL，据此干净分离。
+- **一个状态转换只能有一份 SQL（2026-07-22）** → tracker 独占连接/schema/迁移与每个写操作的唯一实现，`tools/db/*` 是薄壳调 tracker（提供 ToolResult 契约与 registry trace/SSE），端点一律无 SQL。整改中连抓四例「同一转换多份实现」漂移：mark_reply_sent 三份两义（一份写 NULL 而非 'sent' → 可能二次发送）、update_hr_analysis 双实现（tracker 版缺 last_analyzed_ts）、upsert_application 的 applied_at 语义相反（保留首次 vs 更新为最后）、冒烟自持执行路径。识别判据：**同一列在不同实现里的 CASE 分支不一致**。发现分叉不两边同步，选正确那版收敛。放弃的旧措辞「禁止 tool 层直接执行 SQL」——与 `tools/db` 全部复用 tracker.conn 的 sanctioned 形态冲突，读起来像被集体违反。
+- **server.py 减重：依赖注入方式按「有无状态」选（2026-07-22）** → 编排从「接线层」下沉三个 service。有状态的（SchedulerService 持 scheduler+锁、OrchestrationService 持限流态+队列引用）用 **service 类 + 跨簇依赖注入**（callable/`get_state` 访问器，不 import app，可 fake 测）；无状态的（run_log_reader 纯文件读）用**纯函数 + 路径传参**。放弃一刀切统一为 service 类——无状态逻辑用纯函数更简单最好测。`OrchestrationService` 用 `get_state` 而非 import app：在调用时读 app.state（`_initialize_state` 已填充），保留对懒填充的依赖又解耦 FastAPI。
+- **冒烟测试可信化：covered 独立于 ok（2026-07-21）** → 「本轮没投没发」旧逻辑直接 ok=True = 门形同虚设。加 `covered` 维度独立于 `ok`，验收看 `fully_covered` 而非 `ok`。覆盖判据必须选「能被主动触发的路径」（W1 有 score_threshold 旋钮可强制投；W2 发简历依赖 HR 索要、无旋钮 → 覆盖改看主链路 convs_processed，发送分支的落库断言在真发生时仍从严）。断言基于 run log 而非内存报告——log 每行 flush、崩溃仍在（`run_diagnostics`）。放弃发明 force_apply 开关——复用既有 score_threshold 旋钮。
 
 ## 协作基础设施
 
@@ -679,6 +713,8 @@ FOUND ──投递成功──▶ APPLIED ──▶ INTERVIEWING ──▶ OFFER
 ---
 
 ## 已知限制与可改进方向
+
+> **2026-07-22 整改收口**：四路独立审视的 High/Med/Low + server.py 减重已全部处理（明细见 `docs/audit-remediation-log.md`）。审查中确认两处「双实现」是**有意设计**非缺陷、维持原样：`upsert_hr_conversation`（工具版=运行时身份/stage、tracker 版=onboarding 播种，列集与调用方不重叠）、`filter_conversations` 的 `too_old` 优先于 `unanalyzed`（分析两月前死线程无收益，真机 909 会话靠此窗口收敛到约 12）。剩余可选项：server.py 减重批 C（session helpers，31 行，收益小）。
 
 **必须改（影响正确性）**
 

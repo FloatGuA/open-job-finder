@@ -5,11 +5,12 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-13（会话搜索 + 排序 + 「在库但未分析」根因修复 + 对账/回填脚本） |
-| 当前版本 | 2.7.0.1                         |
+| 最后更新 | 2026-07-22（四路独立审视整改交付：冒烟可信化 + P0 隐私 + High/Med/Low 修复 + server.py 减重 -600 行） |
+| 当前版本 | 2.9.0.3                         |
 
 ## 待跟进（另开会话）
 
+- **[2026-07-22 已被整改收口] 冒烟测试相关待跟进**：下方 2026-07-10 的层2/层3 冒烟条目均已被 2026-07-21~22 的「阶段0 冒烟可信化」取代——冒烟加了 covered 三态、走队列、run_diagnostics 诊断器，并多次 live 冒烟真机验证（ok=True/fully_covered=True）。历史条目保留可追溯，不再是活跃待办。
 - **[已验收 2026-07-10] 回归测试层3 真机端到端冒烟**：真机 `run_smoke` 跑通 **ok=True 148s**（登录态有效=浮瓜；W1 dry-run cards_viewed=2/scored=1/74s + W2 dry-run convs_processed=5/无 error/74s）。真机验证了层3 冒烟工作 + 直开 D 生效（5 会话 74s，旧版会慢死）。
 - **[已澄清 2026-07-10] ~~层2 抓到的 9 条空正文~~ 是不变量误报、非脏数据**：9 条全 sent 状态，`reply_text` 是「working reply, cleared after send」——sent 后清空正文是**设计行为**。已修层2 不变量 `_REPLY_NEEDS_TEXT` 去掉 sent（只 approved/revision 待发送才须有正文），层2 现全绿。教训：不变量要用真机数据校准。
 - **[已验证 2026-07-10] W2 回复生成 think 拆分 + 直开 D**：真机 W2 dry-run 跑通 analyze 链路无 error、直开 D 生效；generate_reply 单点已真机验证（think=true 7.4s 得体回复）。
@@ -27,6 +28,15 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- 四路独立审视整改交付（2026-07-21~22，v2.8.0→2.9.0，478→590 passed，明细见 `docs/audit-remediation-log.md`）
+  - **起因**：起 4 个独立 subagent 从架构分层 / W2 正确性 / 数据+隐私 / 测试+前端四个视角审视全项目，汇总带优先级总评（`docs/audit-remediation-plan.md`），逐阶段整改。
+  - **阶段 0 冒烟测试可信化**：原冒烟「本轮没投没发也全绿」= 门形同虚设。加 `covered` 维度独立于 `ok`，report 出 `fully_covered`/`uncovered`，前端三态（红/黄未全覆盖/绿）；参数（score_threshold 等）透传避免阈值太高永远投不出去；**新建 `services/run_diagnostics.py`** 从 run JSONL 得确定性诊断（可诊断任意历史 run，全程 code decides 不调 LLM）；冒烟改走队列（`run_smoke(submit=...)` 依赖注入）消除 W1/W2 第二条执行路径；L2 数据不变量 +5 条（把历史 bug 变常驻探针）。诊断器扫 553 个历史 run 找出 8 个「真实外发后未收尾」。
+  - **阶段 1 P0 隐私**：`logs/task_*/`（含真实 HR 姓名/公司/聊天/头像 URL）已在公开 repo。orphan 分支重建远程历史（126 commit→1，泄露清除，本地保留完整历史）；**新建 pre-commit PII 扫描器**（硬模式 + 从 jobs.db 实时比对，误报压到 0）；`.gitignore` 黑名单收敛为整目录 + 位置护栏（三道防线）。
+  - **阶段 2 High（同一转换多份实现连抓四例）**：mark-sent 三份两义（一份写 NULL 而非 'sent' → 可能二次发送）/ update_hr_analysis 双实现（tracker 版缺 last_analyzed_ts）/ 新会话首轮分析丢写（analyze 在 upsert 前，纯 UPDATE 匹配 0 行）/ applied_at 语义相反（保留首次 vs 更新为最后 → 重投不计入今日、被提前清理）。收敛为「一个状态转换只能有一份 SQL」，SQL 只留 tracker。每项 live 冒烟验证。
+  - **阶段 3 Medium**：停滞判定改用真实消息时间 `last_msg_ts`（旧用入库时间几乎一直失效，生产实测命中 0→35）；配置读写统一 config_manager（消除单例缓存与内联 yaml 分叉）；微信号解析下沉 `tools/biz_logic/wechat_id.py`（前端冗余拷贝删除）。审查后**维持原样**两项：too_old 优先于 unanalyzed（#51 有意取舍）、upsert_hr_conversation 双实现（有意职责分离）。
+  - **阶段 4 Low**：score_job 加权聚合补 12 测试（唯一测试空白）；SelfCheck interval 泄漏修复；CLAUDE.md 铁律措辞与 tools/db 实际形态对齐。
+  - **单拎 server.py 减重 -600 行（2638→2038）**：调度/队列执行/自检/限流/日志解析等编排逻辑从「接线层」下沉为三个 service——`scheduler_service.py`（SchedulerService，有状态用 service 类）、`workflow_orchestration.py`（OrchestrationService，get_state 访问器 + 跨簇依赖注入）、`run_log_reader.py`（纯函数 + 路径传参，无状态）。依赖注入方式按「有无状态」选。每批 live 冒烟验证。
 
 - W2「读消息 / 分析 intent」解耦：加 `last_analyzed_ts` 独立水位线（2026-07-13，后端，478 passed，生产迁移已验证）
   - **背景**：上一步 `never_analyzed` 修复只盖住"intent 完全为空"的卡死，盖不住更隐蔽的一种——会话已有 intent（如 `general`），HR 再发新消息，重分析又失败 → intent 保持旧值（非空）→ `never_analyzed` 不触发，而 upsert 又把 `last_msg_ts` 推到新消息 → 下轮 `no_change` 跳过 → 新消息读了没分析成、又隐形。根因：**单一水位线（`last_msg_ts`）同时代表"读到哪"和"分析到哪"，且 analyze 失败仍前进**。
@@ -914,3 +924,5 @@
 - 2026-07-09：W2 慢因治标 A+C——A: navigate_to_conversation 搜索步 sleep 0.8~1.2s→0.35~0.55s（失败耗时~减半）；C: W2 加时间预算 max_run_minutes（默认 25，超时优雅结束跑 FinalizeStep+记 stopped），防再跑 5 小时。BD（砍 Phase2 / API securityId 直开）待定。448 passed
 - 2026-07-09：W2 治本 D——navigate_to_conversation 首选 `chat?id=<encryptBossId>&jobId=<encryptJobId>` 直开会话（两 id 均稳定、getGeekFriendList 已存），O(1) 无 DOM 滚动搜索。判定「打开成功」用聊天输入框存在（探针实测：无选中会话时输入框不存在=可靠信号）。真机实测 3.6s 打开+读取正确（旧 DOM 搜索 2~103s，18 次失败各 ~103s 消失）。缺 id/boss=='62001' 回退 DOM 搜索。610/873 会话可直开。452 passed
 - 2026-07-09：LLM 链移除 codex_cli（实测判意图不准：编程 agent，清晰案例全判 general/unknown），fast/balanced 兜底改 claude_cli（判意图准，偶发 exit1=抢主对话配额、无人值守 W2 跑更稳，失败仅退化不错判）。codex --output-schema 的 OpenAI 严格 schema 需求（additionalProperties:false+全required）已知但因移除 codex 无需，analyze_intent schema 回退宽松版（ollama 6/6 验证过）。「选 analyze_intent provider」功能本已存在于 Settings→LLM
+
+- 2026-07-22：四路独立审视整改交付（v2.8.0→2.9.0，478→590 passed，详见「已完成」顶部条目 + `docs/audit-remediation-log.md`）。阶段0 冒烟可信化（covered 三态 + run_diagnostics 诊断器 + 走队列）；阶段1 P0 隐私（orphan 重建历史 + PII 扫描器 + gitignore 整目录收敛 + 位置护栏，三道防线）；阶段2 High（mark-sent/update_hr_analysis/新会话丢写/applied_at 四例「同一转换多份实现」收敛，SQL 只留 tracker，均 live 冒烟验证）；阶段3 Medium（停滞口径改 last_msg_ts、配置统一 config_manager、微信解析下沉 biz_logic；too_old 顺序与 upsert 双实现审查后维持）；阶段4 Low（score_job 补测 / interval 泄漏 / 铁律措辞）；单拎 server.py 减重 -600 行（2638→2038，三 service：scheduler_service/workflow_orchestration/run_log_reader）
