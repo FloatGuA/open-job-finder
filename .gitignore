@@ -1,7 +1,16 @@
-# Runtime data (never commit)
+# Runtime data & personal data — whole directories, never commit.
+# These are the roots for everything runtime/personal: jobs.db, profile.yaml,
+# the browser login profile, all run logs, scraped Boss DOM. Ignored as WHOLE
+# directories on purpose: a blacklist that enumerates known subpaths (logs/runs/,
+# logs/task_*/, ...) silently lets a NEW subdir slip in -- which is how the 2026-07
+# leak happened (logs/task_*/ was tracked before the rule existed, and logs/final/
+# was never enumerated). Anything runtime goes under one of these roots so nothing
+# new can leak by omission. Content is a second line of defence (precommit_pii_scan).
 code/data/
 code/output/
 code/logs/
+/logs/
+/data/
 
 # Python
 __pycache__/
@@ -31,15 +40,11 @@ code/diagnose_*.py
 code/verify_*.py
 code/*.txt
 
-# Factory runtime state
+# Factory runtime state (root /logs/ above already covers logs/factory.log,
+# logs/activity.jsonl, logs/runs/, logs/task_*/, logs/orchestrator.log)
 factory_state.json
-logs/factory.log
-logs/activity.jsonl
 code/.factory/
 .codex/
-
-# Structured run logs (runtime, not source)
-logs/runs/
 
 # Frontend dev artifacts
 code/dashboard/frontend/logs/
@@ -71,7 +76,3 @@ COLLAB.md
 code/memory/
 code/open_boss.py
 
-# Stray root runtime & factory-era logs
-/data/
-/logs/orchestrator.log
-/logs/task_*/

@@ -23,6 +23,46 @@ def _terms(names=(), companies=()):
     return {"names": set(names), "companies": set(companies)}
 
 
+# ---- location guard: a whole file under a runtime-data root -------------------
+
+
+def _staged(monkeypatch, names):
+    """Fake `git diff --cached --name-only` returning the given paths."""
+    class _Proc:
+        stdout = "\n".join(names) + "\n"
+    monkeypatch.setattr(scan.subprocess, "run", lambda *a, **k: _Proc())
+
+
+def test_location_guard_blocks_files_under_runtime_roots(monkeypatch, tmp_path):
+    """A staged file under logs/ or code/data/ is a leak by placement -- the content
+    scan might not recognise a .db or a binary, but its location is enough."""
+    _staged(monkeypatch, [
+        "logs/final/report.md",
+        "code/data/jobs.db",
+        "data/profile.yaml",
+        "code/dashboard/frontend/logs/x.log",
+    ])
+    found = scan.check_staged_locations(tmp_path)
+    assert len(found) == 4
+    assert all(f["severity"] == "high" for f in found)
+
+
+def test_location_guard_allows_normal_source(monkeypatch, tmp_path):
+    _staged(monkeypatch, [
+        "code/services/tracker.py",
+        "code/dashboard/server.py",
+        "docs/audit-remediation-log.md",
+        "logsy_not_a_dir.py",           # startswith 'logs' but not 'logs/'
+    ])
+    assert scan.check_staged_locations(tmp_path) == []
+
+
+def test_location_guard_handles_windows_separators(monkeypatch, tmp_path):
+    _staged(monkeypatch, ["code\\data\\jobs.db"])
+    found = scan.check_staged_locations(tmp_path)
+    assert len(found) == 1
+
+
 # ---- hard patterns ------------------------------------------------------------
 
 

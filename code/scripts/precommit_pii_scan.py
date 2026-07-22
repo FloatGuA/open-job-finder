@@ -205,10 +205,45 @@ def _worktree_files(repo_root: Path) -> dict:
     return files
 
 
+# Runtime-data roots: nothing under these should ever be committed. .gitignore
+# already excludes them by directory, so a staged file here means the guard was
+# bypassed (git add -f) or a rule drifted. This is the LOCATION line of defence,
+# complementary to the content scan: it catches a whole personal-data FILE by where
+# it sits, without needing to recognise anything inside it.
+RUNTIME_DATA_PREFIXES = (
+    "code/data/", "code/output/", "code/logs/", "logs/", "data/",
+    "code/dashboard/frontend/logs/",
+)
+
+
+def check_staged_locations(repo_root: Path) -> list:
+    """Flag any STAGED file that sits under a runtime-data root."""
+    out = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+        cwd=str(repo_root), capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    ).stdout
+    findings = []
+    for rel in out.split("\n"):
+        rel = rel.strip().replace("\\", "/")
+        if not rel:
+            continue
+        if any(rel.startswith(p) for p in RUNTIME_DATA_PREFIXES):
+            findings.append({
+                "file": rel, "line": 0, "kind": "运行时/个人数据目录下的文件（不应提交）",
+                "matched": rel, "severity": "high",
+            })
+    return findings
+
+
 def run(repo_root: Path, db_path: Path, scan_all: bool = False) -> list:
     terms = load_private_terms(db_path)
     files = _worktree_files(repo_root) if scan_all else _staged_additions(repo_root)
     findings = []
+    # Location guard runs only on staged commits (the whole worktree legitimately
+    # contains these dirs; --all scans content, not placement).
+    if not scan_all:
+        findings.extend(check_staged_locations(repo_root))
     for path, lines in files.items():
         # Never scan the scanner: its own placeholder list would self-trigger.
         if path.endswith("precommit_pii_scan.py"):
