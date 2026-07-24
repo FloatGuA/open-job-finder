@@ -83,6 +83,19 @@ const LAYER_ROWS: Layer[] = [
     files: 'server.py + SSE\uff08\u8c03\u5ea6/\u961f\u5217\u6267\u884c/\u81ea\u68c0/\u65e5\u5fd7\u89e3\u6790\u5df2\u4e0b\u6c89\uff09' },
 ]
 
+type FeRow = { part: string; color: string; what: string; files: string }
+const FE_ROWS: FeRow[] = [
+  { part: '\u58f3 / \u5e03\u5c40', color: '#64d2ff', what: 'Sidebar + Topbar + main \u4e09\u6bb5\uff0c\u9875\u9762\u6302\u5728 main \u91cc\u6eda\u52a8', files: 'App.tsx \u00b7 components/layout' },
+  { part: '\u8def\u7531', color: '#0a84ff', what: '\u6ca1\u7528 react-router\uff1a\u4e00\u4e2a page \u72b6\u6001 + \u6620\u5c04\u8868\u624b\u52a8\u5207 8 \u9875', files: 'App.tsx \u00b7 PAGE_COMPONENTS' },
+  { part: '\u72b6\u6001', color: '#bf5af2', what: '\u5355\u4e2a React Context \u7ba1\u5168\u5c40\uff0c\u65e0 Redux/Zustand', files: 'context/app-context.ts' },
+  { part: 'API \u5c42', color: '#30d158', what: '\u7edf\u4e00\u5c01\u88c5 fetch + \u7c7b\u578b\uff0c\u9875\u9762\u53ea\u8c03 API.xxx()', files: 'api/index.ts' },
+  { part: '\u5b9e\u65f6\u6d41', color: '#ff9f0a', what: 'EventSource \u5e38\u9a7b\u8fde\u63a5 + 2s \u65ad\u7ebf\u81ea\u52a8\u91cd\u8fde', files: 'hooks/useWorkflowStream.ts' },
+  { part: '\u7ec4\u4ef6', color: '#5e5ce6', what: 'dev / layout / ui / workflow \u56db\u7ec4\u590d\u7528\u4ef6', files: 'components/' },
+  { part: '\u6784\u5efa', color: '#8e8e93', what: 'Vite \u6253\u5305 \u2192 static/\uff0cversion.ts \u6253\u8fdb\u4ea7\u7269', files: 'vite \u00b7 scripts/build.mjs' },
+]
+const FE_FLOW = ['SSE \u4e00\u5e27 JSON', 'useWorkflowStream \u56de\u8c03', 'pendingEventsRef \u7f13\u51b2', '\u6bcf 200ms flush', 'state \u00b7 \u7559\u6700\u540e 200', '\u91cd\u6e32\u67d3 UI']
+
+
 function ArchTab({ live, running }: { live: ArchitectureLive | null; running: string | null }) {
   void live
   return (
@@ -139,6 +152,57 @@ function ArchTab({ live, running }: { live: ArchitectureLive | null; running: st
             </ul>
             <p className="mt-2 text-[13.5px] leading-relaxed text-text-3">
               {'\u4f9d\u8d56\u6ce8\u5165\u65b9\u5f0f\u6309\u300c\u6709\u65e0\u72b6\u6001\u300d\u9009\uff1a\u6709\u72b6\u6001\u7684\u7528 service \u7c7b + \u6ce8\u5165\u4f9d\u8d56\uff08\u53ef\u8131\u79bb FastAPI \u5355\u6d4b\uff09\uff0c\u65e0\u72b6\u6001\u7684\u7528\u7eaf\u51fd\u6570 + \u8def\u5f84\u4f20\u53c2\u3002\u7aef\u70b9\u56de\u5f52\u8584\u63a5\u7ebf\uff0cserver.py \u964d\u5230 2038 \u884c\u3002'}
+            </p>
+          </Collapsible>
+        </div>
+      </Section>
+      <Section badge={'\u2463'} title={'\u524d\u7aef\u67b6\u6784'} sub={'React SPA \u00b7 \u58f3/\u8def\u7531/\u72b6\u6001/API/\u7ec4\u4ef6 \u00b7 \u4e00\u4efd Context \u7ba1\u5168\u5c40'}>
+        <div className="overflow-hidden rounded-xl" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div className="grid grid-cols-[130px_1fr_1fr] gap-2 px-3 py-2 text-[14px] font-semibold uppercase tracking-wider text-text-3"
+            style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            <span>{'\u90e8\u5206'}</span>
+            <span>{'\u804c\u8d23'}</span>
+            <span>{'\u4ee3\u8868\u6587\u4ef6'}</span>
+          </div>
+          {FE_ROWS.map((r) => (
+            <div key={r.part} className="grid grid-cols-[130px_1fr_1fr] items-start gap-2 px-3 py-2.5"
+              style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+              <span className="flex items-center gap-2">
+                <Dot color={r.color} />
+                <span className="text-[15px] text-text-1">{r.part}</span>
+              </span>
+              <span className="text-[15px] leading-relaxed text-text-2">{r.what}</span>
+              <span className="font-mono text-[14px] leading-relaxed text-text-3">{r.files}</span>
+            </div>
+          ))}
+        </div>
+
+        <p className="mb-2 mt-4 text-[14px] font-semibold uppercase tracking-wider text-text-3">{'\u524d\u7aef\u5185\u90e8\u6570\u636e\u6d41 \u00b7 \u4e00\u5e27 SSE \u5230\u5c4f\u5e55'}</p>
+        <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
+          {FE_FLOW.map((s, i) => (
+            <span key={s} className="flex items-center gap-1">
+              <span className="rounded-lg px-2.5 py-1.5 text-[13.5px] text-text-2"
+                style={{ background: 'rgba(100,210,255,0.08)', border: '1px solid rgba(100,210,255,0.2)' }}>{s}</span>
+              {i < FE_FLOW.length - 1 && <span className="text-text-3">{'\u2192'}</span>}
+            </span>
+          ))}
+        </div>
+        <p className="mt-2 text-[13.5px] leading-relaxed text-text-3">{'\u53e6\u6709 10s \u8f6e\u8be2\u515c\u5e95\u540c\u6b65 workflow / control \u72b6\u6001\uff0cSSE \u65ad\u4e86\u4e5f\u4e0d\u4f1a\u4e00\u76f4\u5361\u5728\u65e7\u72b6\u6001\u3002'}</p>
+
+        <div className="mt-3 space-y-2">
+          <Collapsible title={'\u4e3a\u4ec0\u4e48\u4e0d\u7528 react-router'} hint={'8 \u4e2a\u9875\u9762\u9760\u4e00\u4e2a page \u72b6\u6001\u5207'} accent="#64d2ff">
+            <p className="text-[14.5px] leading-relaxed text-text-2">
+              {'\u6574\u4e2a\u540e\u53f0\u662f\u5355\u9875\u5e94\u7528\uff0c\u4e0d\u9700\u8981\u6d4f\u89c8\u5668 URL \u8def\u7531\u3002App.tsx \u91cc\u4e00\u4e2a page \u72b6\u6001 + PAGE_COMPONENTS \u6620\u5c04\u8868\uff0cSidebar \u70b9\u4e00\u4e0b\u5c31\u6362 main \u91cc\u6302\u7684\u7ec4\u4ef6\u2014\u20148 \u4e2a\u9875\u9762\u5168\u9760\u5b83\u5207\u3002\u7b80\u5355\u80dc\u8fc7\u5f15\u4e00\u4e2a\u8def\u7531\u5e93\u3002'}
+            </p>
+          </Collapsible>
+          <Collapsible title={'SSE \u6d2a\u6d41\u4e3a\u4ec0\u4e48\u8981\u7f13\u51b2\u9650\u6d41'} hint={'\u5426\u5219\u6807\u7b7e\u9875\u80fd\u6da8\u5230\u6570 GB'} accent="#30d158">
+            <p className="text-[14.5px] leading-relaxed text-text-2">
+              {'debug \u6a21\u5f0f\u4e0b\u6bcf\u6b21 registry.call \u90fd\u63a8\u4e00\u4e2a tool \u7ea7\u4e8b\u4ef6\uff0c\u4e00\u6b21\u957f\u8dd1\u4e0a\u4e07\u6761\u3002\u9010\u6761 setState \u4f1a\u628a\u6574\u68f5\u7ec4\u4ef6\u6811\u91cd\u6e32\u67d3\u4e0a\u4e07\u6b21\u3001\u5185\u5b58\u6491\u5230\u6570 GB\u3002\u6240\u4ee5\u4e8b\u4ef6\u5148\u585e\u8fdb pendingEventsRef \u7f13\u51b2\uff0c\u6bcf 200ms(5Hz) \u624d flush \u5230 state\uff0c\u4e14\u53ea\u7559\u6700\u540e 200 \u6761\uff1b\u9a8c\u8bc1\u7801\u63d0\u793a\u8fd9\u7c7b\u4fbf\u5b9c\u7684\u526f\u4f5c\u7528\u4ecd\u9010\u6761\u5373\u65f6\u5904\u7406\u3002'}
+            </p>
+          </Collapsible>
+          <Collapsible title={'\u4e00\u4efd Context \u7ba1\u5168\u5c40'} hint={'\u65e0 Redux/Zustand'} accent="#bf5af2">
+            <p className="text-[14.5px] leading-relaxed text-text-2">
+              {'page / workflowRunning / progressEvents / isPaused \u5168\u653e\u4e00\u4e2a AppContext\uff0c\u4efb\u4f55\u9875\u9762 useAppContext() \u5c31\u80fd\u8bfb\u3002\u6ca1\u5f15\u72b6\u6001\u7ba1\u7406\u5e93\u2014\u2014\u6570\u636e\u89c4\u6a21\u6491\u5f97\u4f4f\uff0c\u518d\u914d\u5408 10s \u8f6e\u8be2\u515c\u5e95\uff0c\u72b6\u6001\u4e0d\u4f1a\u6f02\u3002'}
             </p>
           </Collapsible>
         </div>

@@ -5,8 +5,8 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-22（四路独立审视整改交付：冒烟可信化 + P0 隐私 + High/Med/Low 修复 + server.py 减重 -600 行） |
-| 当前版本 | 2.9.0.3                         |
+| 最后更新 | 2026-07-24（架构页新增 ④前端架构 Section：SPA 分层 + 前端内部数据流 + 技术讲解） |
+| 当前版本 | 2.9.1.1                         |
 
 ## 待跟进（另开会话）
 
@@ -28,6 +28,12 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- 架构页补齐前端架构视图（2026-07-24，前端，v2.9.1.1，`npm run build` 过）
+  - **背景**：架构页（`StateMachine.tsx`）的「架构」标签原本只有 ①系统全景 ②前后端沟通 ③后端四层——全是后端视角，前端自身被压成系统全景 SVG 里「浏览器·React 面板」一个方块，看不出内部结构。
+  - **改动**：在③之后新增 **④前端架构** Section（与③后端四层对称），三块内容：SPA 分层表（壳/路由/状态/API 层/实时流/组件/构建 + 职责 + 代表文件）；前端内部数据流条（`SSE 一帧 → useWorkflowStream 回调 → pendingEventsRef 缓冲 → 每 200ms flush → state·留最后 200 → 重渲染`，附 10s 轮询兜底）；三个可展开技术讲解（为什么不用 react-router / SSE 洪流为什么要缓冲限流 / 一份 Context 管全局），复用现有 `Collapsible` 组件。
+  - **内容与源码核对**：无 react-router（App.tsx 手动 page 状态切页）、单 AppContext、useWorkflowStream 的 ref 缓冲 + 5Hz flush 限流均取自实际代码，非臆造。
+  - **实现方式**：CJK 全 `\uXXXX` 转义，用 scratchpad Python 脚本生成插入（Edit 工具会把 `\uXXXX` 解码回中文，本仓已知坑），文件保持纯 ASCII。纯前端静态内容新增，未触碰 Python，门是 `npm run build`（已过 tsc + esbuild）。
 
 - 四路独立审视整改交付（2026-07-21~22，v2.8.0→2.9.0，478→590 passed，明细见 `docs/audit-remediation-log.md`）
   - **起因**：起 4 个独立 subagent 从架构分层 / W2 正确性 / 数据+隐私 / 测试+前端四个视角审视全项目，汇总带优先级总评（`docs/audit-remediation-plan.md`），逐阶段整改。
@@ -926,3 +932,4 @@
 - 2026-07-09：LLM 链移除 codex_cli（实测判意图不准：编程 agent，清晰案例全判 general/unknown），fast/balanced 兜底改 claude_cli（判意图准，偶发 exit1=抢主对话配额、无人值守 W2 跑更稳，失败仅退化不错判）。codex --output-schema 的 OpenAI 严格 schema 需求（additionalProperties:false+全required）已知但因移除 codex 无需，analyze_intent schema 回退宽松版（ollama 6/6 验证过）。「选 analyze_intent provider」功能本已存在于 Settings→LLM
 
 - 2026-07-22：四路独立审视整改交付（v2.8.0→2.9.0，478→590 passed，详见「已完成」顶部条目 + `docs/audit-remediation-log.md`）。阶段0 冒烟可信化（covered 三态 + run_diagnostics 诊断器 + 走队列）；阶段1 P0 隐私（orphan 重建历史 + PII 扫描器 + gitignore 整目录收敛 + 位置护栏，三道防线）；阶段2 High（mark-sent/update_hr_analysis/新会话丢写/applied_at 四例「同一转换多份实现」收敛，SQL 只留 tracker，均 live 冒烟验证）；阶段3 Medium（停滞口径改 last_msg_ts、配置统一 config_manager、微信解析下沉 biz_logic；too_old 顺序与 upsert 双实现审查后维持）；阶段4 Low（score_job 补测 / interval 泄漏 / 铁律措辞）；单拎 server.py 减重 -600 行（2638→2038，三 service：scheduler_service/workflow_orchestration/run_log_reader）
+- 2026-07-24：架构页「架构」标签新增 ④前端架构 Section（v2.9.1.1，纯前端，`npm run build` 过）。补齐此前只有后端视角的空白——SPA 分层表 + 前端内部数据流条（SSE→缓冲→限流→渲染）+ 三个技术讲解（不用 react-router / SSE 缓冲限流 / 一份 Context 管全局），复用 Collapsible。CJK 全 `\uXXXX`，脚本生成插入
