@@ -750,6 +750,38 @@ class ApplicationTracker:
                     (reply_status, reply_text or None, conv_id),
                 )
 
+    def invalidate_reply_for_reanalysis(self, conv_id: str) -> int:
+        """Void a stale approved/revision reply and reset it to 'unanalyzed'.
+
+        Called when W3 detects, at send time, that the conversation advanced since
+        the reply was approved (someone spoke after the HR message the draft
+        answered -- the user replied by hand, a resume card went out, or a prior
+        send landed unmarked). Sending the draft would double-message or answer an
+        already-handled turn, so instead of sending we:
+          - drop the draft (reply_text='') and its approval (reply_status=NULL) so
+            it leaves the send queue AND is no longer PROTECTED from re-analysis;
+          - clear intent and knock last_analyzed_ts back to 0, which makes
+            filter_conversations re-select the conversation on the next W2 run so
+            AnalyzeStep re-decides intent and re-drafts into the approval queue iff
+            a reply is still due.
+        Only touches a reply still queued to send (approved/revision); a status that
+        already moved on is left alone. Single implementation of this transition
+        (see CLAUDE.md "一个状态转换只能有一份 SQL"). Returns rows updated.
+        """
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                UPDATE hr_conversations
+                SET reply_status     = NULL,
+                    reply_text       = '',
+                    intent           = '',
+                    last_analyzed_ts = 0
+                WHERE conv_id = ? AND reply_status IN ('approved', 'revision')
+                """,
+                (conv_id,),
+            )
+            return cur.rowcount
+
     def dismiss_all_pending_replies(self) -> int:
         """Bulk-dismiss every reply still awaiting approval (reply_status='pending').
         Approved/revision/sent replies are left untouched -- the user has already

@@ -252,6 +252,34 @@ def test_get_approved_replies(tracker):
     assert {c.conv_id for c in approved} == {"c1", "c3"}
 
 
+def test_invalidate_reply_for_reanalysis_voids_and_resets(tracker):
+    """W3's stale-draft handling: an approved reply the conversation has outrun is
+    voided AND knocked back to 'unanalyzed' so the next W2 run re-decides intent."""
+    tracker.upsert_hr_conversation(_make_conv("c1"))
+    tracker.update_hr_analysis("c1", "general", "旧草稿", "approved", last_analyzed_ts=12345)
+
+    assert tracker.invalidate_reply_for_reanalysis("c1") == 1
+
+    conv = tracker.get_hr_conversation("c1")
+    assert conv.reply_status is None
+    assert (conv.reply_text or "") == ""
+    assert (conv.intent or "") == ""
+    assert conv.last_analyzed_ts == 0
+
+
+def test_invalidate_reply_leaves_non_queued_status_alone(tracker):
+    """Only a reply still queued to send (approved/revision) is voided; a 'pending'
+    (or terminal) status is left untouched — idempotent, no accidental revival."""
+    tracker.upsert_hr_conversation(_make_conv("c1"))
+    tracker.update_hr_analysis("c1", "general", "草稿", "pending", last_analyzed_ts=999)
+
+    assert tracker.invalidate_reply_for_reanalysis("c1") == 0
+
+    conv = tracker.get_hr_conversation("c1")
+    assert conv.reply_status == "pending"
+    assert conv.last_analyzed_ts == 999
+
+
 def test_concurrent_writes_no_lock(tracker):
     """Two threads writing at once must not hit 'database is locked'.
 

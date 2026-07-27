@@ -69,6 +69,7 @@ const TOOL_LABELS: Record<string, string> = {
   search_locate_conversation: '\u641c\u7d22\u5b9a\u4f4d\u4f1a\u8bdd',
   send_chat_message: '\u53d1\u9001\u6d88\u606f',
   mark_reply_sent: '\u6807\u8bb0\u5df2\u53d1\u9001',
+  invalidate_stale_reply: '\u4f5c\u5e9f\u9648\u65e7\u56de\u590d',
 }
 
 const INTENT_LABELS: Record<string, string> = {

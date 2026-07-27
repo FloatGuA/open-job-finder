@@ -20,6 +20,7 @@ from tools.browser.w2.read_messages import ReadMessages
 from tools.browser.w2.send_chat_message import SendChatMessage
 from tools.browser.w3 import register_w3_browser_tools
 from tools.db.w2.get_approved_replies import GetApprovedReplies
+from tools.db.w2.invalidate_stale_reply import InvalidateStaleReply
 from tools.db.w2.mark_reply_sent import MarkReplySent
 from tools.db.w2.record_locate_attempt import RecordLocateAttempt
 from tools.db.w2.write_hr_messages import WriteHRMessages
@@ -71,6 +72,7 @@ def run_w3(
         register_w3_browser_tools(registry, page)
         registry.register(GetApprovedReplies(db=tracker))
         registry.register(MarkReplySent(db=tracker))
+        registry.register(InvalidateStaleReply(db=tracker))
         registry.register(RecordLocateAttempt(db=tracker))
         registry.register(WriteHRMessages(db=tracker))
 

@@ -1,13 +1,20 @@
-"""W3 per-reply send pipeline: Locate -> Send -> Verify -> mark.
+"""W3 per-reply send pipeline: Locate -> Freshness -> Send -> Verify -> mark.
 
 Each step has an explicit completion check (not "action performed"):
-- Locate : the conversation actually OPENED (search_locate_conversation.located).
-- Send   : the submit action ran (send_chat_message.ok) — proxy only.
-- Verify : RE-SCAN the open thread with W2's read_messages, persist it with
-           write_hr_messages, and confirm our reply now exists as a 'me' bubble
-           in the freshly-read messages. This shares W2's read/write path and
-           leaves a DB record of the sent message (root-cause fix: the old
-           DOM-prefix probe was unreliable and never wrote to hr_messages).
+- Locate    : the conversation actually OPENED (search_locate_conversation.located).
+- Freshness : re-scan the OPEN thread and confirm we are still the ones being
+              waited on (last non-system bubble is the HR's). If anyone spoke since
+              the reply was approved — the user replied by hand, a resume card went
+              out, or a prior send landed unmarked — the draft is stale; we refuse
+              to send it, void it, and reset the conversation so the next W2 run
+              re-decides intent (see invalidate_stale_reply). This is the guard
+              against blind-sending an outdated draft to a real HR.
+- Send      : the submit action ran (send_chat_message.ok) — proxy only.
+- Verify    : RE-SCAN the open thread with W2's read_messages, persist it with
+              write_hr_messages, and confirm our reply now exists as a 'me' bubble
+              in the freshly-read messages. This shares W2's read/write path and
+              leaves a DB record of the sent message (root-cause fix: the old
+              DOM-prefix probe was unreliable and never wrote to hr_messages).
 Only a passing Verify calls mark_reply_sent; otherwise the reply stays 'approved'
 with its text intact (no false success, no draft loss).
 """
@@ -22,6 +29,20 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", "", s or "")
 
 
+def _last_nonsystem_sender(messages: list) -> Optional[str]:
+    """Sender of the last non-system bubble ('me' | 'hr'), or None if there is none.
+
+    System bubbles (Boss platform nudges, place cards) are not conversation turns,
+    so they don't count as "someone replied since we drafted". We are still owed a
+    reply only when the HR spoke last.
+    """
+    for m in reversed(messages or []):
+        s = m.get("sender")
+        if s in ("me", "hr"):
+            return s
+    return None
+
+
 @dataclass
 class SendReplyOutput:
     conv_id: str
@@ -29,7 +50,9 @@ class SendReplyOutput:
     submitted: bool = False
     delivered: bool = False
     marked_sent: bool = False
-    failure_reason: Optional[str] = None   # locate_failed | submit_failed | deliver_unverified | dry_run | null
+    # locate_failed | locate_gave_up | stale_superseded | freshness_read_failed
+    # | submit_failed | deliver_unverified | dry_run | null
+    failure_reason: Optional[str] = None
 
 
 class SendReplyPipeline:
@@ -84,13 +107,53 @@ class SendReplyPipeline:
                 out.failure_reason = "locate_failed"
             return out
 
-        # ── Send ────────────────────────────────────────────────────────────
-        ts = time.time()
-        self._reg.set_context("send", scope)
+        # ── Dry run: located, but do nothing else ───────────────────────────
+        # Short-circuit BEFORE the freshness gate: a dry run must never read/mutate
+        # (the gate can void a draft), so it stops right after confirming we located.
         if self._cfg.dry_run:
+            ts = time.time()
+            self._reg.set_context("send", scope)
             self._log("send", scope, "skipped", ts, data={"dry_run": True})
             out.failure_reason = "dry_run"
             return out
+
+        # ── Freshness (before Send) ─────────────────────────────────────────
+        # The draft was approved against the conversation as it stood then. Re-scan
+        # the now-open thread: if the last non-system bubble is no longer the HR's,
+        # someone spoke after the message this draft answers (the user replied by
+        # hand, a resume card went out, or a prior send landed unmarked). Sending the
+        # approved text now would double-message or answer an already-handled turn,
+        # so we void the draft + reset the conversation to unanalyzed (the next W2
+        # run re-decides intent and re-drafts into the queue iff still due) instead
+        # of blind-sending. A read FAILURE means we cannot verify freshness -> skip
+        # this run but KEEP the draft: a transient render glitch must not destroy an
+        # approved reply (it retries next run).
+        ts = time.time()
+        self._reg.set_context("freshness", scope)
+        rd0 = self._reg.call("read_messages")
+        if not rd0.ok:
+            out.failure_reason = "freshness_read_failed"
+            self._log("freshness", scope, "failed", ts, data={}, error=rd0.error)
+            return out
+        last_sender = _last_nonsystem_sender(rd0.data.get("messages", []))
+        if last_sender != "hr":
+            self._reg.call("invalidate_stale_reply", conv_id=conv_id)
+            out.failure_reason = "stale_superseded"
+            if self._logger is not None:
+                self._logger.log(
+                    "reply_skipped_stale",
+                    scope=scope,
+                    data={"last_sender": last_sender or "none",
+                          "reason": "conversation advanced since approval; draft voided for re-analysis"},
+                    visible=True,
+                )
+            self._log("freshness", scope, "skipped", ts, data={"last_sender": last_sender or "none"})
+            return out
+        self._log("freshness", scope, "successful", ts, data={"last_sender": "hr"})
+
+        # ── Send ────────────────────────────────────────────────────────────
+        ts = time.time()
+        self._reg.set_context("send", scope)
         snd = self._reg.call("send_chat_message", text=text)
         out.submitted = bool(snd.ok)
         self._log("send", scope, "successful" if out.submitted else "failed", ts,
