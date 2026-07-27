@@ -1,4 +1,3 @@
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, Tuple
@@ -6,6 +5,7 @@ from typing import Optional, Tuple
 from pipeline.base import StepOutput, StepStatus
 from pipeline.w1.steps.fetch_jd import FetchJDStep
 from pipeline.w1.steps.apply import ApplyStep
+from tools.biz_logic.content_fingerprint import compute_content_hash
 
 
 @dataclass
@@ -34,62 +34,26 @@ class CardPipeline:
         # the viewed cards were actually scored vs skipped before scoring.
         scored = False
         scope = {"job_id": card.job_id, "company": card.company}
-        t0 = time.time()
-        self._reg.set_context("classify", {"job_id": card.job_id})
-        cls = self._reg.call("classify_job_for_w1", job_id=card.job_id)
-        if cls.data.get("action") == "skip":
-            # prior_status (APPLIED/CHATTING/INTERVIEWING/OFFER) tells the user WHY this
-            # card was skipped — surfaced on both the step trace and the job_skipped
-            # event so the monitor shows "已投过（CHATTING）" instead of a vague reason.
-            prior_status = cls.data.get("prior_status", "")
-            # Emit a terminal step event so the loop detail shows classify as a
-            # finished "skipped" node (not a stuck pending dot), and the card badge
-            # resolves correctly instead of falling back to "waiting".
-            self._logger.log_step(
-                "classify", scope, "skipped", int((time.time() - t0) * 1000),
-                {"reason": "classify_skip", "prior_status": prior_status},
-            )
-            self._logger.log(
-                "job_skipped",
-                scope=scope,
-                data={"reason": "classify_skip", "prior_status": prior_status},
-                visible=True,
-            )
-            return StepOutput(status=StepStatus.SKIPPED), False, scored
-        self._logger.log_step("classify", scope, "successful", int((time.time() - t0) * 1000), {})
 
+        # W1 no longer skips jobs it thinks were already applied to. The old DB-based
+        # dedup (job_id classify + content fingerprint) was dropping real opportunities:
+        # Boss's search surfaces a posting only when it is NOT already an active
+        # conversation, yet our applications table (proven unreliable — 150 greetings
+        # sent were once recorded as 63, later back-filled) kept flagging these as
+        # APPLIED and skipping them. We now trust Boss's search results and let the
+        # apply step's REAL button state (立即沟通 vs 继续沟通 → already_chatting) be the
+        # sole authority on "already applied" — it never double-greets an HR. Simplifying
+        # the flow this way removes the whole class of "wrongly skipped" bugs at the root.
+        # See PROGRESS 2026-07-28.
         fetch = FetchJDStep(self._reg).run(card_dom_index=card.card_dom_index, job_id=card.job_id)
         if fetch.status != StepStatus.SUCCESSFUL:
             return fetch, False, scored
         jd_text = fetch.jd_text
         salary_decoded = fetch.salary_decoded
 
-        # Content-fingerprint dedup (2nd tier): the cheap job_id classify above misses
-        # the SAME posting re-encountered under a rotated encryptJobId. Now that the JD is
-        # read (panel was opened for scoring anyway), check the content hash before
-        # scoring — a hit means we already applied to this posting (active/successful),
-        # so skip it (saves the LLM score too). content_hash is reused for upsert below.
-        self._reg.set_context("classify", {"job_id": card.job_id})
-        dup = self._reg.call(
-            "check_content_duplicate",
-            title=card.title,
-            company_id=card.company_id,
-            jd_text=jd_text,
-        )
-        content_hash = dup.data.get("content_hash") if dup.ok else None
-        if dup.ok and dup.data.get("is_duplicate"):
-            prior = dup.data.get("prior_status", "")
-            self._logger.log_step(
-                "apply", scope, "skipped", 0,
-                {"reason": "content_duplicate", "prior_status": prior},
-            )
-            self._logger.log(
-                "job_skipped",
-                scope=scope,
-                data={"reason": "content_duplicate", "prior_status": prior},
-                visible=True,
-            )
-            return StepOutput(status=StepStatus.SKIPPED), False, scored
+        # content_hash is still stored on the application row (cheap; kept in case dedup
+        # is ever reintroduced) but is no longer used to skip anything.
+        content_hash = compute_content_hash(card.title, card.company_id, jd_text)
 
         if self._config.score_threshold <= 0:
             # 阈值 <= 0：跳过 LLM 评分，直接投递（纯流程验证，不消耗 LLM）
@@ -260,7 +224,9 @@ class CardPipeline:
         # limit interstitial / navigated away), report it as a visible per-job failure,
         # and do NOT count it as applied.
         self._reg.set_context("apply", scope)
-        snap = self._reg.call("capture_screenshot", label=card.job_id)
+        # Name the shot {run_id}_{job_id} so a failure image maps back to a specific run
+        # AND the specific card within it (the filename is the only handle on which run).
+        snap = self._reg.call("capture_screenshot", label=f"{self._logger.run_id}_{card.job_id}")
         screenshot = snap.data.get("screenshot") if snap.ok else None
         self._logger.log_step("apply", scope, "failed", 0, {"result": result})
         self._logger.log(

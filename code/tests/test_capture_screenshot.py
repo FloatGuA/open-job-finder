@@ -15,12 +15,27 @@ def test_no_browser_returns_error():
     assert "browser not initialized" in res.error
 
 
+class _FakeWindow:
+    def __init__(self, page):
+        self._page = page
+
+    def max(self):
+        self._page.maximized = True
+
+
+class _FakeSetter:
+    def __init__(self, page):
+        self.window = _FakeWindow(page)
+
+
 class _FakePage:
     def __init__(self):
         self.calls = []
+        self.maximized = False
+        self.set = _FakeSetter(self)
 
-    def get_screenshot(self, path=None, name=None):
-        self.calls.append((path, name))
+    def get_screenshot(self, path=None, name=None, full_page=False):
+        self.calls.append((path, name, full_page))
         return f"{path}/{name}"
 
 
@@ -34,6 +49,9 @@ def test_captures_and_returns_filename(tmp_path, monkeypatch):
     assert name.startswith("job_42_") and name.endswith(".png")
     assert (tmp_path / "apply_failures").is_dir()
     assert page.calls and page.calls[0][1] == name
+    # Window is maximized and the shot is full-page (so the apply button is in frame).
+    assert page.maximized is True
+    assert page.calls[0][2] is True
 
 
 def test_screenshot_failure_is_caught(tmp_path, monkeypatch):

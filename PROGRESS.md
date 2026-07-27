@@ -5,11 +5,14 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-24（架构页新增 ④前端架构 Section：SPA 分层 + 前端内部数据流 + 技术讲解） |
-| 当前版本 | 2.9.1.1                         |
+| 最后更新 | 2026-07-28（简化 W1：拆掉两层去重相信 Boss 推送 + 失败截图改最大化/全页/命名带 run_id） |
+| 当前版本 | 2.9.2.1                         |
 
 ## 待跟进（另开会话）
 
+- **[2026-07-31 待做] AI agent prompt 注入可配置化**：当前系统对提示词**没有可配置的注入点**——评分/意图分析/回复生成的 prompt 都是 `prompt_manager` 加载的固定模板，用户无法在不改代码的情况下往里注入自定义指令/上下文（如「我特别看重远程」「这家公司我认识内部人，语气可更主动」等）。需设计一个配置化注入机制：在 profile.yaml / config.yaml 里开可选的 prompt 注入字段，`PromptManager` 渲染时拼接进对应模板。先梳理有哪些 prompt 模板、各自该暴露哪个注入位、注入内容的作用域（全局 vs 每流程）。
+- **[已完成 2026-07-28] ~~W1 又出现大量跳过（skip）~~**：**根因＝去重机制误判，非新 bug**。诊断最近真机 run（`w1_20260724_1018`）：37 个跳过 100% 是 `classify_skip`，`prior_status` 全是 APPLIED/INTERVIEWING——即 DB 认为「已投过」而跳。但用户实测：这些被跳岗的 Boss 按钮**全是「立即沟通」**（= Boss 根本不认为你招呼过），说明 DB 的 APPLIED 记录是脏的（历史「投 150 记 63」+ backfill 补 96 佐证）。**处理：直接拆掉 W1 两层 DB 去重**（见「已完成」），相信 Boss 推送，投没投过唯一以 apply 那步真实按钮状态（`already_chatting`）为准——从根上消灭「误判跳过」这一整类问题。排查「30 天复活/去重为何误判」判定不值得。
+- **[部分完成 2026-07-28] 投递失败截图 + 排查投递失败根因**：①**截图已改好**（见「已完成」）——最大化窗口 + 全页截图（`full_page=True`）+ 命名带 run_id（`{run_id}_{job_id}_{ts}.png`，能定位到某次 run 的某张卡）+ `open_browser` 加 `--window-size=1920,1080`（headless 默认 ~800px 视口是右侧面板被切、按钮不在画面的根因）。②**根因排查待下次真机**：现在失败截图能看到完整详情面板 + 投递按钮区，下次真机 W1 撞 `button_not_found` 就能据图定位（选择器失配？按钮在 footer？未渲染完？）。此前 3 例 `button_not_found` 的旧截图因视口太窄看不到按钮，无法诊断。
 - **[2026-07-22 已被整改收口] 冒烟测试相关待跟进**：下方 2026-07-10 的层2/层3 冒烟条目均已被 2026-07-21~22 的「阶段0 冒烟可信化」取代——冒烟加了 covered 三态、走队列、run_diagnostics 诊断器，并多次 live 冒烟真机验证（ok=True/fully_covered=True）。历史条目保留可追溯，不再是活跃待办。
 - **[已验收 2026-07-10] 回归测试层3 真机端到端冒烟**：真机 `run_smoke` 跑通 **ok=True 148s**（登录态有效=浮瓜；W1 dry-run cards_viewed=2/scored=1/74s + W2 dry-run convs_processed=5/无 error/74s）。真机验证了层3 冒烟工作 + 直开 D 生效（5 会话 74s，旧版会慢死）。
 - **[已澄清 2026-07-10] ~~层2 抓到的 9 条空正文~~ 是不变量误报、非脏数据**：9 条全 sent 状态，`reply_text` 是「working reply, cleared after send」——sent 后清空正文是**设计行为**。已修层2 不变量 `_REPLY_NEEDS_TEXT` 去掉 sent（只 approved/revision 待发送才须有正文），层2 现全绿。教训：不变量要用真机数据校准。
@@ -28,6 +31,13 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- 简化 W1：拆掉两层 DB 去重（相信 Boss 推送）+ 失败截图改最大化/全页/带 run_id 命名（2026-07-28，v2.9.2.1，588 passed，build 绿）
+  - **背景/决策**：用户实测被跳过的岗在 Boss 上按钮全是「立即沟通」，证明 DB 的 APPLIED 记录不可靠、去重在误判丢机会。决定**不排查去重为何误判（不值得），直接删掉整个 DB 去重机制**——「能出现在搜索页的岗都不该跳」，投没投过唯一以 apply 那步真实按钮状态为准（`already_chatting`，绝不二次骚扰 HR）。
+  - **W1 去重拆除**：`card_pipeline.py` 删层① `classify_job_for_w1`（job_id 精确去重，开面板前）+ 层② `check_content_duplicate`（内容指纹去重，抓 encryptJobId 轮换）两个 skip 分支；`content_hash` 仍计算并写入 application 行（改直接 `compute_content_hash`，留列备日后恢复，但不再据此跳）。注销 registry（`tools/db/w1/__init__.py`）+ 删两个 tool 文件。前端连带：`WorkflowTrack.tsx` SKELETON/LOOP_STEPS 去 classify 节点（否则监控显示永久「等待」）、`interpret.ts` 删 4 个死标签、`StateMachine.tsx` 架构流程页删「分类去重/指纹去重」两节点（Python 脚本按 ASCII 锚点删、零裸 CJK）。
+  - **失败截图改进**：`capture_screenshot.py` 截图前 `set.window.max()` 最大化 + `get_screenshot(full_page=True)` 全页截（按钮在 footer 也在画面内）；`browser_context.open_browser` 加 `--window-size=1920,1080`（headless 默认 ~800px 视口是右侧详情面板被切、投递按钮不在旧截图里的根因）。`card_pipeline` 传 `label=f"{run_id}_{job_id}"`，截图名 `{run_id}_{job_id}_{ts}.png` 可回溯到某次 run 的某张卡。
+  - **测试**：`test_content_dedup.py` 删掉 CheckContentDuplicate 两例（保留纯 hash/company_id helper 测试）；`test_card_pipeline_dry_run.py` 给 `_Logger` stub 加 `run_id`、删两个死 stub 分支；`test_capture_screenshot.py` FakePage 加 `set.window.max` + `full_page` kwarg 并断言最大化/全页生效。**588 passed**，build 绿（tsc 无悬空引用），版本 2.9.2.1。
+  - **待办**：下次真机 W1 复核——①去重拆除后已投岗会重新走评分→apply，apply 用真实按钮状态兜住不重复骚扰；②失败截图在真机 headless 下能截到完整面板+按钮，据此定位 `button_not_found` 根因。
 
 - 架构页补齐前端架构视图（2026-07-24，前端，v2.9.1.1，`npm run build` 过）
   - **背景**：架构页（`StateMachine.tsx`）的「架构」标签原本只有 ①系统全景 ②前后端沟通 ③后端四层——全是后端视角，前端自身被压成系统全景 SVG 里「浏览器·React 面板」一个方块，看不出内部结构。

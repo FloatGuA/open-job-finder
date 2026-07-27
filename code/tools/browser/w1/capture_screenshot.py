@@ -30,10 +30,20 @@ class CaptureScreenshot(BaseTool):
         _SHOT_DIR.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         name = f"{_safe(label)}_{ts}.png"
-        # DrissionPage saves to path/name and returns the absolute path. Guard the whole
-        # thing — a screenshot is diagnostic, never worth failing the pipeline over.
+        # Maximize the window before capturing. The old shots were near-useless for
+        # diagnosing button_not_found: taken at the small default viewport, they cut off
+        # the right-side job-detail panel (where the 立即沟通 button lives) entirely.
+        # Guarded — headless may treat max() as a no-op, and a screenshot is diagnostic,
+        # never worth failing the pipeline over. (open_browser also sets --window-size so
+        # headless runs capture at desktop width.)
         try:
-            self._browser.get_screenshot(path=str(_SHOT_DIR), name=name)
+            self._browser.set.window.max()
+        except Exception:
+            pass
+        # full_page captures the ENTIRE scrollable document, so the apply button is in
+        # frame even when it renders below the fold. DrissionPage saves to path/name.
+        try:
+            self._browser.get_screenshot(path=str(_SHOT_DIR), name=name, full_page=True)
         except Exception as exc:
             return ToolResult(ok=False, data={}, error=f"screenshot failed: {exc}")
         # Return just the filename; the dashboard serves it via /api/apply-failure/{name}.

@@ -405,12 +405,8 @@ type FlowStep = { short: string; title: string; node: string; file: string; desc
 const W1_STEPS: FlowStep[] = [
   { short: '\u641c\u7d22', title: '\u641c\u7d22 \u00b7 \u626b\u63cf\u5361', node: 'NavigateStep \u00b7 search_with_panel',
     file: 'pipeline/w1/steps/navigate', desc: '\u6309 profile \u62fc\u641c\u7d22 URL\uff0c\u6eda\u52a8\u52a0\u8f7d\u5361\u7247\u5217\u8868' },
-  { short: '\u5206\u7c7b', title: '\u5206\u7c7b\u53bb\u91cd', node: 'classify_job_for_w1',
-    file: 'tools/biz_logic', desc: '\u6309 job_id \u7cbe\u786e\u53bb\u91cd\uff08REJECTED \u53ef\u91cd\u6295\uff09\uff0c\u4fbf\u5b9c\u8df3\u540c encryptId' },
   { short: '\u6293 JD', title: '\u6293 JD', node: 'FetchJDStep \u00b7 fetch_job_detail',
     file: 'pipeline/w1/steps/fetch_jd', desc: '\u6253\u5f00\u8be6\u60c5\u9875\u6293 JD \u6587\u672c + \u516c\u53f8\u52a0\u5bc6 id' },
-  { short: '\u6307\u7eb9', title: '\u6307\u7eb9\u53bb\u91cd', node: 'check_content_duplicate',
-    file: 'tools/biz_logic', desc: 'sha256(\u6807\u9898|\u516c\u53f8id|JD) \u547d\u4e2d\u5df2\u6295\u5219\u8df3\uff08Boss \u6362\u9a6c\u7532\uff09' },
   { short: '\u8bc4\u5206', title: 'LLM \u8bc4\u5206', node: 'ScoreStep \u00b7 score_job',
     file: 'pipeline/w1/steps + tools/llm', desc: '5 \u7ef4\u5ea6\u72ec\u7acb\u6253\u5206\uff0cPython \u7aef\u52a0\u6743\u6c42\u548c\uff08code decides\uff09' },
   { short: '\u6295\u9012', title: '\u6295\u9012', node: 'ApplyStep \u00b7 apply_job',

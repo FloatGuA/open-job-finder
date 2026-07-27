@@ -9,7 +9,6 @@ export const STEP_LABELS: Record<string, string> = {
   navigate: '\u5bfc\u822a',
   fetch_jd: '\u83b7\u53d6JD',
   apply: '\u6295\u9012',
-  classify: '\u5206\u7c7b',
   upsert: '\u843d\u5e93',
   read: '\u8bfb\u53d6',
   analyze: '\u5206\u6790',
@@ -45,8 +44,6 @@ const TOOL_LABELS: Record<string, string> = {
   verify_current_url: '\u6821\u9a8c\u5f53\u524d\u9875',
   extract_card_list: '\u6293\u53d6\u804c\u4f4d\u5361\u7247',
   scroll_search_results: '\u6eda\u52a8\u52a0\u8f7d',
-  classify_job_for_w1: '\u804c\u4f4d\u5206\u7c7b',
-  check_content_duplicate: '\u5185\u5bb9\u67e5\u91cd',
   click_card_open_panel: '\u6253\u5f00\u804c\u4f4d\u8be6\u60c5',
   read_panel_jd: '\u8bfb\u53d6 JD',
   decode_job_salary: '\u89e3\u6790\u85aa\u8d44',
@@ -100,8 +97,6 @@ const APPLY_FAIL_LABELS: Record<string, string> = {
 
 export const SKIP_REASON_LABELS: Record<string, string> = {
   score_below: '\u8bc4\u5206\u672a\u8fbe\u6807',
-  classify_skip: '\u5df2\u6295\u8fc7',
-  content_duplicate: '\u91cd\u590d\u5c97\u4f4d\uff08\u6362\u9a6c\u7532\uff09',
   llm_error: 'LLM \u8c03\u7528\u5931\u8d25',
 }
 

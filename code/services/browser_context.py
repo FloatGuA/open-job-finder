@@ -145,6 +145,11 @@ def open_browser(data_dir: Path, headless: bool = True) -> ChromiumPage:
     options.set_argument("--no-first-run")
     options.set_argument("--no-default-browser-check")
     options.remove_argument("--enable-automation")
+    # Desktop viewport. Headless Chrome otherwise defaults to ~800x600, which collapses
+    # Boss's two-column search layout and cut the job-detail panel (and its 立即沟通
+    # button) out of failure screenshots. A wide window also keeps the panel/button DOM
+    # laid out the way the apply selectors expect.
+    options.set_argument("--window-size=1920,1080")
     # Mimic a real desktop Chrome session.
     options.set_user_agent(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

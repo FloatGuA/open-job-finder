@@ -31,10 +31,6 @@ class _Reg:
 
     def call(self, tool, **kw):
         self.calls.append(tool)
-        if tool == "classify_job_for_w1":
-            return _Res(data={"action": "process"})
-        if tool == "check_content_duplicate":
-            return _Res(data={"duplicate": False})
         if tool == "score_job":
             return _Res(data={"score": 90, "reason": "fit", "dimensions": {}})
         if tool == "click_card_open_panel":
@@ -56,6 +52,8 @@ class _Reg:
 
 
 class _Logger:
+    run_id = "w1_test"
+
     def __init__(self):
         self.steps = []   # (step, status)
         self.events = []  # event names

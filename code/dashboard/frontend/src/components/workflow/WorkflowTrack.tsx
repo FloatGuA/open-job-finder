@@ -13,7 +13,6 @@ const SKELETON: Record<string, Record<string, string[]>> = {
   w1: {
     navigate: ['navigate_search_url'],
     scan: ['verify_current_url', 'extract_card_list', 'scroll_search_results'],
-    classify: ['classify_job_for_w1', 'check_content_duplicate'],
     fetch_jd: ['click_card_open_panel', 'read_panel_jd', 'decode_job_salary', 'score_job'],
     apply: ['click_apply_button', 'handle_apply_dialog'],
     upsert: ['upsert_application'],
@@ -51,7 +50,7 @@ const RUN_STEPS: Record<string, string[]> = {
   w3: ['scan'],
 }
 const LOOP_STEPS: Record<string, string[]> = {
-  w1: ['classify', 'fetch_jd', 'apply', 'upsert'],
+  w1: ['fetch_jd', 'apply', 'upsert'],
   w2: ['navigate', 'read', 'analyze', 'resume'],
   w3: ['locate', 'send', 'verify'],
 }
@@ -361,7 +360,7 @@ function skipReasonText(inst: InstanceNode): string | null {
   const pick = (): { reason: string; prior: string } | null => {
     const js = inst.steps.get('job_skipped')
     if (js) return { reason: String(js.detail?.reason ?? ''), prior: String(js.detail?.prior_status ?? '') }
-    for (const key of ['classify', 'apply']) {
+    for (const key of ['apply']) {
       const st = inst.steps.get(key)
       if (st?.status === 'skipped')
         return { reason: String(st.detail?.reason ?? ''), prior: String(st.detail?.prior_status ?? '') }
