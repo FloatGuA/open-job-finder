@@ -28,8 +28,18 @@ class W3Pipeline:
         ts = time.time()
         self._reg.set_context("scan", {})
         res = self._reg.call("get_approved_replies")
+        # A failed load is NOT "zero approved replies" — masking it as done would hide a
+        # DB/tool fault and silently skip real approved replies. Fail the run instead.
+        if not res.ok:
+            self._logger.log_step(
+                step="scan", scope={}, status="failed",
+                duration_ms=int((time.time() - ts) * 1000), data={}, error=res.error,
+            )
+            self._logger.close("failed")
+            return {"approved": 0, "located": 0, "replies_sent": 0, "failed": 0,
+                    "error": "load_approved_failed"}
         replies = [
-            c for c in (res.data.get("conversations", []) if res.ok else [])
+            c for c in res.data.get("conversations", [])
             if (c.get("reply_text") or "").strip()
         ]
         if config.max_replies and config.max_replies > 0:
@@ -37,7 +47,7 @@ class W3Pipeline:
         self._logger.log_step(
             step="scan", scope={}, status="successful",
             duration_ms=int((time.time() - ts) * 1000),
-            data={"approved": len(replies)}, error=res.error,
+            data={"approved": len(replies)}, error=None,
         )
 
         if not replies:

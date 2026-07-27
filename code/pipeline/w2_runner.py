@@ -57,12 +57,9 @@ def run_w2(
     if data_dir is None:
         data_dir = Path(__file__).resolve().parent.parent / "data"
 
-    # 1. Load profile
-    try:
-        profile = ProfileLoader(data_dir / "profile.yaml").load()
-    except Exception as exc:
-        logger.error("Failed to load profile: %s", exc)
-        return {"error": str(exc), "convs_processed": 0, "replies_sent": 0}
+    # 1. Load profile (fail fast — see w1_runner: a silent `return {"error":...}` here
+    #    was misrecorded as success by the queue runner and leaked the browser mutex.)
+    profile = ProfileLoader(data_dir / "profile.yaml").load()
 
     # 2. Build prompt manager
     prompt_manager = PromptManager()

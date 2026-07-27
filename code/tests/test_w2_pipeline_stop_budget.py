@@ -43,8 +43,12 @@ def _patch(monkeypatch, n_convs, logger):
                                                     conversations_to_process=[_FakeConv(f"c{i}") for i in range(n_convs)],
                                                     approved_replies={}))
     finalize_called = {"v": False}
+    # FinalizeStep.run now returns a FinalizeStepOutput (pipeline reads .failed_count);
+    # the fake records it ran and hands back an object exposing that field.
     monkeypatch.setattr(w2p, "FinalizeStep",
-                        lambda reg, log: type("F", (), {"run": lambda self, **k: finalize_called.__setitem__("v", True)})())
+                        lambda reg, log: type("F", (), {"run": lambda self, **k: (
+                            finalize_called.__setitem__("v", True),
+                            type("O", (), {"failed_count": 0})())[1]})())
 
     def _conv_run(self, conv, approved):
         logger.calls += 1

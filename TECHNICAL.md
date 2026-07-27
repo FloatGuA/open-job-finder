@@ -3,8 +3,8 @@
 ## 架构概览
 
 ```
-main.py (CLI 入口: --once/--check/--onboarding/--dry-run；注意 W3 无 CLI 入口，仅 Dashboard/API 触发)
-    └── OnboardingChecker       (首次配置引导)
+main.py (CLI 入口: --once/--check/--dry-run；--onboarding 已退役=仅提示改用 Dashboard；缺 session 时同样引导去 Dashboard 登录，不再进死路 onboarding。W3 无 CLI 入口，仅 Dashboard/API 触发)
+    └── OnboardingChecker       (check_all 供 Dashboard 读状态；CLI 交互登录已退役)
     └── run_w1() / run_w2() / run_w3()   (pipeline runner，替代旧 Orchestrator)
             ├── VerifySessionStep          (pipeline/common/: 验证 Boss 登录态)
             ├── ToolRegistry              (工具注册与调用，log_step/log_tool 追踪)

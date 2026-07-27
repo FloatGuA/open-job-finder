@@ -46,6 +46,7 @@ class W2Pipeline:
         resumes_sent = 0
         stage_changes = 0
         llm_degraded = 0
+        conv_errors = 0
 
         total = len(conversations_to_process)
         stopped = False
@@ -78,6 +79,7 @@ class W2Pipeline:
                     self._reg, self._profile, self._logger, config
                 ).run(conv, approved_reply)
             except Exception as exc:
+                conv_errors += 1
                 self._logger.log(
                     "conv_pipeline_error",
                     scope={"conv_id": conv.conv_id, "company": conv.company},
@@ -90,7 +92,7 @@ class W2Pipeline:
             stage_changes += int(out.stage_changed)
             llm_degraded += int(out.llm_degraded)
 
-        FinalizeStep(self._reg, self._logger).run(
+        finalize_out = FinalizeStep(self._reg, self._logger).run(
             no_response_days=config.no_response_days,
             stale_conv_days=config.stale_conv_days,
         )
@@ -103,6 +105,10 @@ class W2Pipeline:
             "resumes_sent": resumes_sent,
             "stage_changes": stage_changes,
             "llm_degraded": llm_degraded,
+            # Surface per-conversation failures (were caught + swallowed with no count)
+            # and finalize DB-tool failures so a run full of errors can't read as clean.
+            "conv_errors": conv_errors,
+            "finalize_errors": finalize_out.failed_count,
         }
         self._logger.close("done", summary=summary)
         return summary

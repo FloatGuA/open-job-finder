@@ -84,13 +84,9 @@ python code/scripts/install_hooks.py
 
 ### 首次配置 / First-time setup
 
-首次运行时需要完成引导配置，包括登录 Boss直聘 并保存 session。
+登录 Boss直聘 由 **Dashboard** 完成（CLI 登录已退役）：启动 Dashboard 后在「设置 → 环境&Session」点「打开登录浏览器」完成登录，登录态保存在 `data/browser_profile/`。`python main.py --onboarding` 现在只会提示改用 Dashboard。
 
-Run the interactive setup on first use to log in to Boss Zhipin and save the session.
-
-```bash
-python main.py --onboarding
-```
+Login to Boss Zhipin is handled by the **Dashboard** (CLI login is retired): start the Dashboard, then under "Settings → Environment & Session" click "Open login browser" to log in; the session lives in `data/browser_profile/`. `python main.py --onboarding` now just points you to the Dashboard.
 
 ### 配置求职偏好 / Configure job search preferences
 

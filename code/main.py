@@ -66,8 +66,19 @@ def main():
     checker = OnboardingChecker(config=config)
     status = checker.check_all()
 
-    if args.onboarding or not status["session"]:
-        checker.run_interactive_setup()
+    # CLI onboarding/login is retired — the Dashboard (BrowserSession + VerifySessionStep)
+    # owns login now. Previously a missing session sent us into run_interactive_setup,
+    # whose _step3_login_boss raises unconditionally: a dead end. Point users to the
+    # Dashboard instead of pretending the CLI can still log in.
+    _DASH_HINT = (
+        "请启动 Dashboard 后在「设置 → 环境&Session」完成登录与配置：\n"
+        "  python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8765 --reload"
+    )
+    if args.onboarding:
+        print("CLI onboarding 已退役。" + _DASH_HINT)
+        return
+    if not status["session"]:
+        print("未检测到有效 Boss session。CLI 不再负责登录——" + _DASH_HINT)
         return
 
     if args.setup_profile:

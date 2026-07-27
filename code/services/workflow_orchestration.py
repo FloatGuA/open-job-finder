@@ -200,6 +200,13 @@ class OrchestrationService:
             })
             emitter.finish_workflow(item.workflow, f"执行失败: {exc}", status="error")
             raise
+        finally:
+            # Backstop the browser mutex: run_item OWNS current_workflow for this item,
+            # so it must guarantee release no matter how we leave. The success path
+            # (runner's finish_workflow) and the except path both already clear it;
+            # this makes a future runner that returns without finishing the workflow
+            # unable to wedge the queue (is_busy stuck true) the way it once did.
+            emitter.current_workflow = None
 
     # -- self-check cycle -------------------------------------------------------
 

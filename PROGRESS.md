@@ -5,11 +5,19 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-28（简化 W1：拆掉两层去重相信 Boss 推送 + 失败截图改最大化/全页/命名带 run_id） |
-| 当前版本 | 2.9.2.1                         |
+| 最后更新 | 2026-07-28（审查整改一批：队列锁泄漏 + 多处 tool 失败当成功 + W1 抓卡误判无结果 + 依赖缺 DrissionPage + CLI 退役 + W2 错误计数） |
+| 当前版本 | 2.9.4.1                         |
 
 ## 待跟进（另开会话）
 
+- **[2026-07-28 待做] W3 新鲜度闸漏「简历已发」system 事件**（审查 Should Fix，用户定本次只记不做）：`send_pipeline._last_nonsystem_sender` 只认 me/hr，简历发送成功是 **system 气泡**。场景：HR 要简历 → W2 `AnalyzeStep` 起草回复(pending) → `ResumeStep` 发附件(system)。此时最后一条非系统消息仍是 HR 的「要简历」→ 新鲜度闸通过 → W3 仍发批准的旧草稿。危害有限（回复与简历互补，非硬冲突），但确是水位盲区。**根治方向**：新鲜度判断纳入 resume-delivered 的 system marker，或记录**审批时的消息水位**（后者更彻底，覆盖所有「审批后发生过 system 事件」的情形）。
+- **[2026-07-28 待做] PDF 简历生成方案未定 + playwright 依赖去留**：PDF 简历功能未做完。当前代码路径是 WeasyPrint（`resume_manager.render_pdf`，Jinja2→WeasyPrint，依赖系统库 libpango；`ResumeManager` 目前 `server.py:137` 初始化但从不调用）。`requirements.txt` 的 `playwright` 当前只被两个根目录诊断脚本用，**暂保留**给未定的 PDF 方案（若改用 headless Chromium print-to-pdf 替代 WeasyPrint 则会用到）。**待办**：定 PDF 方案（WeasyPrint 继续 / 换 playwright），据此收敛 weasyprint / playwright 依赖并接线 `ResumeManager`。
+- **[已完成 2026-07-28] ~~W3 盲发过时草稿~~**：核心担心——用户手动回了 HR 后 W3 仍盲发批准时的旧草稿。**已修（见「已完成」）**：W3 `send_pipeline` 加发送前新鲜度闸——重扫会话，最后一条非系统消息若不是 HR（=批准后有人回过）→ 作废草稿（`invalidate_reply_for_reanalysis`：清 reply_status/text/intent + last_analyzed_ts=0 打回未分析）→ 下一轮 W2 重跑意图判断，要回才重起草进待审批。dry-run 在闸前短路；读失败保守跳过保草稿。**取舍**：重起草归 W2（不在 W3 内联 LLM），故不是当场重发而是下次 W2。**待真机 W2/W3 复核**：①闸在真机能正确识别「末条我方」②作废后下轮 W2 确实重分析（last_analyzed_ts=0 → unanalyzed 命中）。
+- **[2026-07-28 W3 审查遗留，本次未做] W3 其余成熟度问题**（用户定本次只修盲发 #1）：
+  - **#2 `get_approved_replies` 两份实现 + W3 未拿到 W2 的 O(1) 直开**：`tracker.get_approved_replies()`（SELECT *，含 job_id/时间戳）只被测试用；W3 真调的 `tools/db/w2/get_approved_replies.py` 只取 5 列、**无 job_id**，故 W3 定位仍走慢且脆的 `search_locate_conversation`，没吃到 W2 的 `navigate_to_conversation` 直开升级。最敏感的发送反而用最慢定位。
+  - **#3 verify 探针历史假阳性**：verify 用 `reply_text[:16]` 在重扫里找任意 `sender=='me'` 气泡，不区分是否刚发的那条；历史同开头我方消息会误判「已送达」。（本次盲发修复顺带缓解——末条我方会被闸拦下不再发。）
+  - **#4 W3 summary 被丢弃**：`_run_reply_workflow` 返回 `("reply 工作流完成", {})`，把 replies_sent/failed 扔掉，schedule_log 里 reply 行 summary 恒空，可观测性缺口。
+  - **#5 W3 从不自动调度 =【已确认有意设计，非待办，2026-07-28 用户确认】**：scheduler 只挂 W1/W2，批准回复只能靠手动触发/显式链才发出——发真人要人把关，不自动调度是刻意的。勿再当缺口重提。
 - **[2026-07-31 待做] AI agent prompt 注入可配置化**：当前系统对提示词**没有可配置的注入点**——评分/意图分析/回复生成的 prompt 都是 `prompt_manager` 加载的固定模板，用户无法在不改代码的情况下往里注入自定义指令/上下文（如「我特别看重远程」「这家公司我认识内部人，语气可更主动」等）。需设计一个配置化注入机制：在 profile.yaml / config.yaml 里开可选的 prompt 注入字段，`PromptManager` 渲染时拼接进对应模板。先梳理有哪些 prompt 模板、各自该暴露哪个注入位、注入内容的作用域（全局 vs 每流程）。
 - **[已完成 2026-07-28] ~~W1 又出现大量跳过（skip）~~**：**根因＝去重机制误判，非新 bug**。诊断最近真机 run（`w1_20260724_1018`）：37 个跳过 100% 是 `classify_skip`，`prior_status` 全是 APPLIED/INTERVIEWING——即 DB 认为「已投过」而跳。但用户实测：这些被跳岗的 Boss 按钮**全是「立即沟通」**（= Boss 根本不认为你招呼过），说明 DB 的 APPLIED 记录是脏的（历史「投 150 记 63」+ backfill 补 96 佐证）。**处理：直接拆掉 W1 两层 DB 去重**（见「已完成」），相信 Boss 推送，投没投过唯一以 apply 那步真实按钮状态（`already_chatting`）为准——从根上消灭「误判跳过」这一整类问题。排查「30 天复活/去重为何误判」判定不值得。
 - **[部分完成 2026-07-28] 投递失败截图 + 排查投递失败根因**：①**截图已改好**（见「已完成」）——最大化窗口 + 全页截图（`full_page=True`）+ 命名带 run_id（`{run_id}_{job_id}_{ts}.png`，能定位到某次 run 的某张卡）+ `open_browser` 加 `--window-size=1920,1080`（headless 默认 ~800px 视口是右侧面板被切、按钮不在画面的根因）。②**根因排查待下次真机**：现在失败截图能看到完整详情面板 + 投递按钮区，下次真机 W1 撞 `button_not_found` 就能据图定位（选择器失配？按钮在 footer？未渲染完？）。此前 3 例 `button_not_found` 的旧截图因视口太窄看不到按钮，无法诊断。
@@ -31,6 +39,24 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- 审查整改一批：队列锁泄漏 + tool 失败当成功 + W1 抓卡误判 + 依赖 + CLI 退役 + W2 计数（2026-07-28，v2.9.4.1，592 passed，build 绿）
+  - **起因**：一轮代码审查列出 Must/Should/Nice 分级问题，逐条核对源码后确认（无一是把有意设计误当缺陷）。本次做 5 条 Must + 1 条 Should；W3 简历 marker（Should）与 PDF 方案按用户定只记待办。
+  - **#1 队列运行锁可能永久卡住**：`run_item` 先设 `emitter.current_workflow`（is_busy 信号），但 `w1_runner`/`w2_runner` 在 `start_workflow` 前加载 profile，失败时静默 `return {"error":...}`——不抛异常、不 finish_workflow → 队列锁永不释放，且被记为 success。**双修**：①runner 的 profile 加载改 **fail fast**（删 try/except，直接 raise），让 `run_item` 的 except 兜住（写 error 日志 + finish_workflow 清锁 + re-raise）；②`run_item` 加 `finally: emitter.current_workflow = None` 兜底——run_item 独占该 item 的锁生命周期，无论如何离开都保证释放，杜绝将来再出现「不抛不清」路径。
+  - **#2 多处把 tool 失败当成功**（违反 tool 错误契约 + fail fast）：①`W3Pipeline` 取 `get_approved_replies` 失败时原折算空列表 → close("done")，把「读审批回复失败」伪装成「没有待发回复，完成」；改为 `not res.ok` 即记 failed + close("failed") + 返回 `error=load_approved_failed`。②`FinalizeStep` 四个 DB tool（backfill/sync/timeout/purge）失败原静默归 0 却仍报 successful；改为收集 `failures`，有失败则 `log_step(status="degraded")` + 记 `finalize_tool_failures`(visible)，`FinalizeStepOutput` 加 `failed_count` 传导给 W2 summary。
+  - **#3 W1 抓卡失败被当成搜索无结果**：`W1Pipeline` 调 `extract_card_list` 后未查 `result.ok` 直接读 data → 选择器漂移/页面异常/浏览器故障都被解释成 `no_cards_found`。改为 `not result.ok` 时记 `extract_cards_failed`(visible) 并 break，与「真的搜索无结果」区分开，不再掩盖技术故障。
+  - **#4 依赖缺 DrissionPage**：`requirements.txt` 无 `drissionpage`，而 `browser_context.py` 直接 import 它 → 新环境 `pip install -r requirements.txt` 后浏览器层一 import 即崩。补 `drissionpage>=4.1.0`。`playwright` 曾误删，因 PDF 方案未定重新保留（加注释标明用途，见待跟进）。
+  - **#5 CLI onboarding 死路退役**：`main.py` 缺 session（`os.path.exists(session.json)` sentinel）时原进 `run_interactive_setup`，而其 `_step3_login_boss` 无条件 raise、`_session_is_valid` 恒 False = 死路。用户定 CLI 不再负责登录：改为明确提示去 Dashboard（BrowserSession + VerifySessionStep 是唯一登录路径），不再进死路。`OnboardingChecker` 保留（Dashboard 的 check_all 仍用）。
+  - **Should Fix：W2 会话级异常无错误计数**：`W2Pipeline` 逐会话 `except` 后 `continue` 但无计数，summary 照样 done。加 `conv_errors` 计数 + 纳入 `finalize_out.failed_count` 为 `finalize_errors`，一批会话全失败不再读作 clean run。
+  - **测试**：改 2 例（`test_workflow_orchestration` 断言 run_item 的 finally 保证释放锁，取代旧「靠 runner 清」契约；`test_w2_pipeline_stop_budget` 的 FinalizeStep mock 返回带 `failed_count` 的对象）。**592 passed**，`npm run build` 绿，版本 2.9.4.1。
+
+- 修 W3 盲发过时草稿：发送前新鲜度闸 + 作废退回重分析（2026-07-28，v2.9.3.1，592 passed，build 绿）
+  - **背景/根因**：W3 `send_pipeline` 原本 locate 成功后**直接发已批准文本，零核对**会话自批准以来是否变化。用户手动回了 HR、或简历刚发出、或上轮 send 未标记，W3 都照发批准时的旧草稿 → 给真实 HR 发重复/离题消息（唯一对真实 HR 不可逆的缺口）。W2 脏检查能发现用户手动回复并触发重分析，但 `approved` 草稿受 `PROTECTED_REPLY_STATUSES` 保护不被覆盖、而 `last_analyzed_ts` 照常前进 → 草稿变陈旧、水位却追平，W3 仍盲发。
+  - **修复（确定性检测，code decides）**：`send_pipeline` 在 Locate 与 Send 之间加**发送前新鲜度闸**——重扫开着的会话（`read_messages`），取最后一条非系统消息（新增纯函数 `_last_nonsystem_sender`）：**是 HR = 仍在等我回 → 正常发**；**是我方 = 批准后已有人回过 → 判定陈旧，不发**。直接命中「用户手动回复」，也顺带堵住 verify 假阴性引发的重复发送。
+  - **陈旧处置（用户定：作废 + 重走意图判断）**：新 tracker 唯一转换 `invalidate_reply_for_reanalysis`（`reply_status=NULL` + 清 `reply_text`/`intent` + `last_analyzed_ts=0`）→ 把会话打回「未分析」→ 下一轮 W2 `filter_conversations` 命中 `unanalyzed` 重跑意图判断，要回才重新起草进待审批队列。新薄壳工具 `invalidate_stale_reply`（W3 registry 注册），SQL 只在 tracker 一处。**取舍**：重跑意图分析归 W2（intent 的家），W3 不内联 LLM，故再起草在下一次 W2 而非 W3 当场——符合「最小外科手术」。
+  - **两条护栏**：①**dry-run 在闸之前短路**（演练绝不读/作废草稿，locate 后即停）；②**读消息失败=无法核对 → 保守跳过本轮但保留 approved**（瞬时渲染抖动不毁草稿，下轮重试）。
+  - **测试**：`test_w3_send_pipeline.py` 加 2 例（陈旧作废跳发 / 读失败保草稿）+ 改 2 例（发送前读与 verify 读需按序返回不同结果，FakeReg 支持 list 序列响应）；`test_hr_conversation_tracker.py` 加 2 例（作废重置 / 守卫只动 approved+revision）。**592 passed**，`npm run build` 绿（新增 `invalidate_stale_reply` 的 interpret 标签），版本 2.9.3.1。
+  - **待办**：下次真机 W2/W3 复核——①新鲜度闸在真机正确识别「末条我方」不误伤正常发送；②作废后下轮 W2 确实重分析（`last_analyzed_ts=0` → `unanalyzed`）并按需重起草。
 
 - 简化 W1：拆掉两层 DB 去重（相信 Boss 推送）+ 失败截图改最大化/全页/带 run_id 命名（2026-07-28，v2.9.2.1，588 passed，build 绿）
   - **背景/决策**：用户实测被跳过的岗在 Boss 上按钮全是「立即沟通」，证明 DB 的 APPLIED 记录不可靠、去重在误判丢机会。决定**不排查去重为何误判（不值得），直接删掉整个 DB 去重机制**——「能出现在搜索页的岗都不该跳」，投没投过唯一以 apply 那步真实按钮状态为准（`already_chatting`，绝不二次骚扰 HR）。

@@ -57,12 +57,11 @@ def run_w1(
     if data_dir is None:
         data_dir = Path(__file__).resolve().parent.parent / "data"
 
-    # 1. Load profile
-    try:
-        profile = ProfileLoader(data_dir / "profile.yaml").load()
-    except Exception as exc:
-        logger.error("Failed to load profile: %s", exc)
-        return {"error": str(exc), "cards_viewed": 0, "applied": 0, "skipped": 0}
+    # 1. Load profile (fail fast: a load failure here used to `return {"error":...}`
+    #    silently, which the queue runner then recorded as a SUCCESS and — because the
+    #    early return skips start/finish_workflow — never released the browser mutex,
+    #    wedging the queue. Let it raise so run_item's except path logs + clears the lock.)
+    profile = ProfileLoader(data_dir / "profile.yaml").load()
 
     # 2. Build prompt manager
     prompt_manager = PromptManager()

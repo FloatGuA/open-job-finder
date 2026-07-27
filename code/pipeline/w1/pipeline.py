@@ -54,6 +54,17 @@ class W1Pipeline:
                 break
 
             result = self._reg.call("extract_card_list")
+            # A tool failure (selector drift / page error / browser hiccup) must NOT be
+            # read as an empty result — that used to surface as "no_cards_found", masking
+            # a real breakage as "search returned nothing". Surface it and stop.
+            if not result.ok:
+                self._logger.log(
+                    "extract_cards_failed",
+                    scope={},
+                    data={"error": result.error, "seen_so_far": len(seen_job_ids)},
+                    visible=True,
+                )
+                break
             cards = result.data.get("cards", [])
 
             # No cards on first pass means the search returned no results

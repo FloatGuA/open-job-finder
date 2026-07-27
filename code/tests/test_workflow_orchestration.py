@@ -81,7 +81,9 @@ def test_run_item_dispatches_by_workflow_and_logs_success(monkeypatch):
     svc.run_item(_Item("w1"))
 
     assert seen and seen[0]["_trigger"] == "manual"
-    assert state.emitter.current_workflow == "w1"  # mutex set, cleared by the runner
+    # run_item's finally now GUARANTEES the mutex is released, even when the runner
+    # returns without calling finish_workflow (the bug that once wedged the queue).
+    assert state.emitter.current_workflow is None
     assert logs["schedule"][0]["result"] == "success"
     assert logs["schedule"][0]["workflow"] == "apply"
 
