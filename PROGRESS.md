@@ -5,11 +5,14 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-28（W3 成熟度 #3：verify 送达判据改「精确匹配 + 前后气泡数增量」根治历史假阳性；#2/#4 前批已修） |
-| 当前版本 | 2.9.6.2                         |
+| 最后更新 | 2026-07-28（W2 定位失败诊断：截图 + method/source 可观测 + 前端 W1/W2/W3 显示 job_id 与「在 Boss 打开」跳转按钮） |
+| 当前版本 | 2.10.0.1                        |
 
 ## 待跟进（另开会话）
 
+- **[2026-07-28 待做] W3 手动发简历兜底 + W3 新增「发简历」step**：真机发现**有些 HR 索要简历但 W2 没识别到 `needs_resume`**（`detect_resume_request` / intent 漏判），简历没发出去 → 需要人工兜底。**要做**：①前端在会话/W3 界面加「手动发简历」按钮（走 `ResumeStep` 的现成 tool `accept_resume_card`/`click_toolbar_send_resume`，不新造副作用）；②W3 流程新增一个「发简历」step（当前发简历只在 W2 的 `ResumeStep`，W3 只发回复）——让 W3 也能承担发简历，配合手动触发做兜底。**先想清**：W3 发简历与 W2 发简历的职责边界（是否重复）、手动按钮的授权（对真人 HR 不可逆，需 workflowRunning 闸/二次确认）。
+- **[2026-07-28 待做] 意图判断改进：HR 索要简历且简历已发 → 不应再起草回复**：真机发现**HR 请求简历、我们已响应发出简历后，`AnalyzeStep` 仍起草了一条待发回复**——此时其实无需再回复（简历已是对「索要简历」的完整回应）。意图判断不够好：`needs_resume`/`already_sent_resume` 与「是否还需要文字回复」的耦合没理清。**方向**：当本轮意图=索要简历且简历已发（或本轮刚发），应抑制回复起草（`needs_reply=False`），避免生成多余待审批草稿。注意与 [[w3-send-maturity]] 的新鲜度闸区分：那个管「审批后会话推进作废草稿」，这个管「一开始就不该起草」。**「简历已发是否等于不用回复」是确定性判断，code decides，别全交给 LLM。**
+- **[2026-07-28 待做] W2 待审批回复列表没有实时更新**：用户在待审批队列里对某条回复做了操作（批准/驳回）后，该条**没有从待审批列表实时移除**，仍显示在队列里。预期：操作后立即从待审批 tab 消失（乐观更新 or 重新拉取）。**排查方向**：前端 tab 过滤是否按最新 `reply_status` 重算、操作后是否触发列表刷新/乐观更新、后端端点返回后前端 state 是否同步（记忆 #66/#67 复查过驳回后端链路无缺陷，所以**优先怀疑前端没刷新**，不是后端没写库）。先在真机复现：操作一条 → 看 network 是否 200 + 列表是否重拉。
 - **[2026-07-28 待做] W3 新鲜度闸漏「简历已发」system 事件**（审查 Should Fix，用户定本次只记不做）：`send_pipeline._last_nonsystem_sender` 只认 me/hr，简历发送成功是 **system 气泡**。场景：HR 要简历 → W2 `AnalyzeStep` 起草回复(pending) → `ResumeStep` 发附件(system)。此时最后一条非系统消息仍是 HR 的「要简历」→ 新鲜度闸通过 → W3 仍发批准的旧草稿。危害有限（回复与简历互补，非硬冲突），但确是水位盲区。**根治方向**：新鲜度判断纳入 resume-delivered 的 system marker，或记录**审批时的消息水位**（后者更彻底，覆盖所有「审批后发生过 system 事件」的情形）。
 - **[2026-07-28 待做] PDF 简历生成方案未定 + playwright 依赖去留**：PDF 简历功能未做完。当前代码路径是 WeasyPrint（`resume_manager.render_pdf`，Jinja2→WeasyPrint，依赖系统库 libpango；`ResumeManager` 目前 `server.py:137` 初始化但从不调用）。`requirements.txt` 的 `playwright` 当前只被两个根目录诊断脚本用，**暂保留**给未定的 PDF 方案（若改用 headless Chromium print-to-pdf 替代 WeasyPrint 则会用到）。**待办**：定 PDF 方案（WeasyPrint 继续 / 换 playwright），据此收敛 weasyprint / playwright 依赖并接线 `ResumeManager`。
 - **[已完成 2026-07-28] ~~W3 盲发过时草稿~~**：核心担心——用户手动回了 HR 后 W3 仍盲发批准时的旧草稿。**已修（见「已完成」）**：W3 `send_pipeline` 加发送前新鲜度闸——重扫会话，最后一条非系统消息若不是 HR（=批准后有人回过）→ 作废草稿（`invalidate_reply_for_reanalysis`：清 reply_status/text/intent + last_analyzed_ts=0 打回未分析）→ 下一轮 W2 重跑意图判断，要回才重起草进待审批。dry-run 在闸前短路；读失败保守跳过保草稿。**取舍**：重起草归 W2（不在 W3 内联 LLM），故不是当场重发而是下次 W2。**待真机 W2/W3 复核**：①闸在真机能正确识别「末条我方」②作废后下轮 W2 确实重分析（last_analyzed_ts=0 → unanalyzed 命中）。
@@ -39,6 +42,14 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- W2 定位失败诊断 + 前端 job_id 显示与跳转按钮（2026-07-28，v2.10.0.1，600 passed，build 绿）
+  - **诊断（用户问「应该 job_id 直开怎么还报定位错误」）**：先否定「沉底被 Boss 清理」——`filter_conversations` 只遍历本轮实时扫描（`current_convs`，来自 getGeekFriendList），被清理的会话根本不在扫描里、不会进循环、不可能报定位错误。**真因**：`navigate_to_conversation` 的直开（Treatment D）**不是无条件**的，须 `job_id AND boss_conv_id(≠'62001')` 同时具备，否则回退到按 hr_name+company 的慢滚动搜索（2×60 步后放弃 → "conversation not found"）。这俩 id **只来自 getGeekFriendList 的 XHR 抓包**：①整轮扫描退化到 DOM 模式（XHR 钩子没抓到）→ `encryptJobId=""`、`encryptBossId=d-c='62001'` → **每条**都跳过直开走慢搜索 → 大量失败；②单条会话本身缺 encryptJobId。库存 `812/1041 (78%)` 双 id 齐全。**且此前完全不可观测**（scan 没记 source、navigate 没记 method）。XHR 抓包稳定性（真正根子）按用户定本次不挖。
+  - **① W2 定位失败加截图**：W2 注册 `CaptureScreenshot`（复用 W1 通用工具）；`ConversationPipeline` 在 `nav.status==FAILED` 时截图（label=`{run_id}_{conv_id}`）+ 发 visible `conv_navigate_failed`（带 screenshot/method/error），复用 `/api/apply-failure/{name}` 服务 + 前端「查看定位失败截图」按钮。对齐 W1 apply 失败截图做法。
+  - **② 失败原因可观测**：`W2NavigateStep` 日志加 `method`（direct_url / js_click 回退）；`scan_step` 记 `source`（api/dom），DOM 退化时把 scan_list 标 degraded——一眼看出「直开被关掉、退回慢搜索」。
+  - **③ 前端 W1/W2/W3 显示 job_id + 跳转岗位**：W2Navigate / W3 locate 的 scope 补 `job_id`（每实例至少一条事件带上，不改 conv_id 分组）；`WorkflowTrack.buildTree` 把 `scope.job_id` 收进 `InstanceNode.jobId`；`OpenJobButton` 从 W1-only 扩到 W1/W2/W3（构造 `https://www.zhipin.com/job_detail/{job_id}.html`，soft-key sha256 会话无 job_id 不显示），并在按钮旁显示 `job_id`。interpret 加 `conv_navigate_failed` 文案。
+  - **测试**：新 `test_conversation_pipeline_nav_fail.py`（nav 失败→截图+visible 事件+中止，下游 Read 不得运行）。**600 passed**，`npm run build` 绿，v2.10.0.1。
+  - **待办**：真机 W2 复核——①看 scan_list 的 source（若 dom→XHR 抓包才是要修的根子）②定位失败截图能定位真因（沉底 vs 抓包失败）③前端三流程 job_id 与跳转按钮显示正确。
 
 - W3 成熟度 #3：verify 送达判据改「精确匹配 + 前后气泡数增量」，根治历史假阳性（2026-07-28，v2.9.6.2，599 passed，build 绿）
   - **背景/危害**：旧 verify 用 `probe=_norm(text)[:16]` + `any(所有 me 气泡含前缀)` —— 对整段历史做**存在性 substring 匹配**，不区分是不是刚发的那条。回复模板化/开头雷同时，历史里存在一条同开头我方消息，本次即便 `send_chat_message` 静默失败，重扫也撞旧气泡 → 判送达 → `mark_reply_sent`（置 'sent' 保护态 + **清空 reply_text**）→ **真人 HR 没收到、草稿被销毁、终态不再重试**。恰违背 W3「验证到送达才标已发」的立身之本（记忆里的 `duration_ms:1` 老坑）。

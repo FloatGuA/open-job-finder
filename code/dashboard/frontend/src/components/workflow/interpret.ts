@@ -34,6 +34,7 @@ export const STEP_LABELS: Record<string, string> = {
   llm_degraded: '\u964d\u7ea7',
   resume_sent: '\u53d1\u7b80\u5386',
   stage_advanced: '\u9636\u6bb5',
+  conv_navigate_failed: '\u5b9a\u4f4d\u5931\u8d25',
   conv_timeout_closed: '\u8d85\u65f6\u5173\u95ed',
   job_no_response_rejected: '\u65e0\u56de\u5e94\u5173\u95ed',
   job_purged: '\u5df2\u6e05\u7406',
@@ -176,6 +177,16 @@ export function interpretEvent(ev: ProgressEvent): string {
       return 'LLM \u5168\u90e8\u964d\u7ea7\uff0c\u610f\u56fe\u5224\u4e3a\u672a\u8bc6\u522b'
     case 'resume_sent':
       return '\u5df2\u53d1\u9001\u7b80\u5386'
+    case 'conv_navigate_failed': {
+      const method = str(d.method)
+      const m =
+        method === 'js_click'
+          ? '\u6eda\u52a8\u641c\u7d22\u672a\u547d\u4e2d\uff08\u53ef\u80fd\u6c89\u5e95\uff09'
+          : method === 'direct_url'
+            ? '\u76f4\u5f00\u5931\u8d25'
+            : method
+      return `\u4f1a\u8bdd\u5b9a\u4f4d\u5931\u8d25${m ? `\uff1a${m}` : ''}\uff08\u5df2\u622a\u56fe\uff09`
+    }
     case 'conv_timeout_closed':
       return '\u4f1a\u8bdd\u8d85\u65f6\uff0c\u81ea\u52a8\u5173\u95ed'
     case 'job_no_response_rejected':

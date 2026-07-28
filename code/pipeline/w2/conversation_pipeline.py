@@ -64,8 +64,27 @@ class ConversationPipeline:
         conv: ConvBasic,
         approved_reply: Optional[ApprovedReply],
     ) -> ConversationPipelineOutput:
+        # job_id rides on every step scope so the monitor can group + link the
+        # conversation to its Boss job posting (conv_id == job_id when a job_id
+        # exists; a sha256 soft-key conv carries none). Frontend reads scope.job_id.
+        scope = {"conv_id": conv.conv_id, "company": conv.company, "job_id": conv.job_id or ""}
+
         nav = W2NavigateStep(self._reg).run(conv)
         if nav.status == StepStatus.FAILED:
+            # Locate failed: capture what the browser actually showed (wrong page /
+            # chat list stuck / conversation genuinely unreachable) so the failure is
+            # diagnosable from the monitor, mirroring W1's apply-failure screenshot.
+            # The scroll-search fallback (method=js_click) is what fails here; the shot
+            # tells us whether the target simply sank below the loaded window.
+            self._reg.set_context("navigate", scope)
+            snap = self._reg.call("capture_screenshot", label=f"{self._logger.run_id}_{conv.conv_id}")
+            screenshot = snap.data.get("screenshot") if snap.ok else None
+            self._logger.log(
+                "conv_navigate_failed",
+                scope=scope,
+                data={"method": nav.method, "screenshot": screenshot, "error": nav.error},
+                visible=True,
+            )
             return ConversationPipelineOutput(error="navigate_failed")
         boss_conv_id = nav.boss_conv_id_confirmed or conv.boss_conv_id
 

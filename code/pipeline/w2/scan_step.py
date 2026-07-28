@@ -31,8 +31,9 @@ class ScanStep:
         chat_url = _CHAT_URL
         last_error = None
         stop_reason = "reached_end"
+        source = "api"
         for attempt in range(1, _MAX_SCAN_ATTEMPTS + 1):
-            all_convs, chat_url, last_error, stop_reason = self._scan_once(
+            all_convs, chat_url, last_error, stop_reason, source = self._scan_once(
                 logger, force_reload=(attempt > 1)
             )
             if all_convs:
@@ -72,12 +73,17 @@ class ScanStep:
             # (gray), so a non-debug observer can tell a full scan from a truncated
             # one at a glance; the precise reason rides in data.stop_reason.
             truncated = stop_reason in ("page_drift", "scroll_error", "extract_error")
+            # source == "dom" means the getGeekFriendList XHR capture came up empty and
+            # extract fell back to the DOM scrape — which supplies NO job_id and a
+            # useless boss_conv_id ('62001'), so every direct-open is disabled and W2
+            # navigate degrades to the slow (often-failing) scroll-search. Surface it
+            # so a run full of navigate failures is traceable to the scan, not guessed.
             logger.log_step(
                 step="scan_list",
                 scope={},
-                status="degraded" if truncated else "successful",
+                status="degraded" if (truncated or source == "dom") else "successful",
                 duration_ms=0,
-                data={"total_conversations": len(current_convs), "stop_reason": stop_reason},
+                data={"total_conversations": len(current_convs), "stop_reason": stop_reason, "source": source},
             )
 
         # Load approved replies and stored states
@@ -173,12 +179,15 @@ class ScanStep:
     def _scan_once(self, logger, force_reload: bool = False):
         """One navigate + full-scroll pass.
 
-        Returns (all_convs, chat_url, error, stop_reason): error is a string when
-        navigation failed, else None. An empty all_convs with error=None means the
+        Returns (all_convs, chat_url, error, stop_reason, source): error is a string
+        when navigation failed, else None. An empty all_convs with error=None means the
         page loaded but no conversations were present. stop_reason records why the
         scroll loop ended: reached_end / page_drift / scroll_error / nav_failed.
+        source is "api" (getGeekFriendList XHR) or "dom" (fallback scrape) — the last
+        extract's source; "dom" flags a capture failure that disables W2 direct-open.
         """
         start_ts = time.time()
+        source = "api"
 
         # Navigate to chat list
         self._reg.set_context("scan", {})
@@ -193,7 +202,7 @@ class ScanStep:
                     data={},
                     error=nav.error,
                 )
-            return {}, _CHAT_URL, nav.error or "navigate_to_chat_list failed", "nav_failed"
+            return {}, _CHAT_URL, nav.error or "navigate_to_chat_list failed", "nav_failed", source
 
         chat_url = nav.data.get("loaded_url", _CHAT_URL)
         if logger:
@@ -246,6 +255,7 @@ class ScanStep:
                 # truncated (degraded) rather than under-counting in silence.
                 stop_reason = "extract_error"
                 break
+            source = result.data.get("source", source)
             prev_count = len(all_convs)
             for item in result.data.get("items", []):
                 if item["conv_id"] not in all_convs:
@@ -267,4 +277,4 @@ class ScanStep:
                     stop_reason = "reached_end"
                     break
 
-        return all_convs, chat_url, None, stop_reason
+        return all_convs, chat_url, None, stop_reason, source

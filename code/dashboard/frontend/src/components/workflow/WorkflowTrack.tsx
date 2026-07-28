@@ -117,6 +117,7 @@ interface StepNode {
 interface InstanceNode {
   key: string
   label: string
+  jobId: string
   firstTs: number
   lastTs: number
   steps: Map<string, StepNode>
@@ -141,12 +142,17 @@ function buildTree(events: ProgressEvent[], workflow: string): InstanceNode[] {
     const ts = ev.ts ?? 0
     let inst = instances.get(key)
     if (!inst) {
-      inst = { key, label: '', firstTs: ts, lastTs: ts, steps: new Map() }
+      inst = { key, label: '', jobId: '', firstTs: ts, lastTs: ts, steps: new Map() }
       instances.set(key, inst)
     }
     inst.lastTs = Math.max(inst.lastTs, ts)
     const company = (ev.scope?.company as string) || ''
     if (company) inst.label = company
+    // job_id links the instance to its Boss job posting (open-job button). W1 events
+    // scope job_id directly; W2/W3 now carry it on the navigate/locate scope. Empty
+    // for sha256 soft-key conversations, which get no button.
+    const jobId = (ev.scope?.job_id as string) || ''
+    if (jobId) inst.jobId = jobId
 
     let st = inst.steps.get(ev.step)
     if (!st) {
@@ -225,6 +231,7 @@ function OpenJobButton({ jobId }: { jobId: string }) {
       >
         {'\u2197 \u5728 Boss \u6253\u5f00'}
       </button>
+      <span className="font-mono text-[11px] text-text-3" title={'job_id'}>{'job_id: '}{jobId}</span>
       {err && <span className="font-mono text-[11px] text-signal-red">{err}</span>}
     </div>
   )
@@ -245,7 +252,10 @@ function InstanceDetail({
   const instSteps = inst?.steps ?? new Map<string, StepNode>()
   return (
     <div className="overflow-hidden rounded-xl" style={{ border: '1px solid rgba(255,255,255,0.05)' }}>
-      {workflow === 'w1' && inst && inst.key !== RUN_KEY && <OpenJobButton jobId={inst.key} />}
+      {/* Open the job's Boss detail page. Now for all workflows (W1/W2/W3) via the
+          job_id carried on scope; hidden when there is none (run-level node, or a
+          soft-key W2/W3 conversation with no job_id). */}
+      {inst && inst.key !== RUN_KEY && inst.jobId && <OpenJobButton jobId={inst.jobId} />}
       {workflow === 'w1' && inst && applyFailScreenshot(inst) && (
         <div className="flex items-center gap-2 px-3 py-1.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
           <a
@@ -256,6 +266,21 @@ function InstanceDetail({
             style={{ background: 'rgba(255,69,58,0.1)' }}
           >
             {'\u{1F4F7} \u67e5\u770b\u6295\u9012\u5931\u8d25\u622a\u56fe'}
+          </a>
+        </div>
+      )}
+      {/* W2 locate-failure screenshot (conv_navigate_failed). Same failure-diagnostic
+          image path as W1 apply failures, served by /api/apply-failure/{name}. */}
+      {workflow === 'w2' && inst && navFailScreenshot(inst) && (
+        <div className="flex items-center gap-2 px-3 py-1.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+          <a
+            href={`/api/apply-failure/${navFailScreenshot(inst)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-lg px-2.5 py-1 font-mono text-[11.5px] text-signal-red transition hover:bg-signal-red/10"
+            style={{ background: 'rgba(255,69,58,0.1)' }}
+          >
+            {'\u{1F4F7} \u67e5\u770b\u5b9a\u4f4d\u5931\u8d25\u622a\u56fe'}
           </a>
         </div>
       )}
@@ -377,6 +402,13 @@ function skipReasonText(inst: InstanceNode): string | null {
 // detail.screenshot), served by GET /api/apply-failure/{name}. null when none.
 function applyFailScreenshot(inst: InstanceNode): string | null {
   const name = inst.steps.get('job_apply_failed')?.detail?.screenshot
+  return typeof name === 'string' && name ? name : null
+}
+
+// Filename of the W2 locate-failure screenshot (conv_navigate_failed event
+// detail.screenshot), served by GET /api/apply-failure/{name}. null when none.
+function navFailScreenshot(inst: InstanceNode): string | null {
+  const name = inst.steps.get('conv_navigate_failed')?.detail?.screenshot
   return typeof name === 'string' && name ? name : null
 }
 

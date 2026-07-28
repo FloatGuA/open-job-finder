@@ -107,7 +107,10 @@ class SendReplyPipeline:
         company = reply.get("company", "")
         hr_name = reply.get("hr_name", "")
         text = reply.get("reply_text", "") or ""
-        scope = {"conv_id": conv_id, "company": company}
+        # job_id on the scope links this reply to its Boss job posting in the monitor
+        # (open-job button); empty for sha256 soft-key conversations. Grouping stays
+        # keyed on conv_id.
+        scope = {"conv_id": conv_id, "company": company, "job_id": (reply.get("job_id", "") or "").strip()}
         out = SendReplyOutput(conv_id=conv_id)
 
         # ── Locate: direct-open first, search-box fallback ──────────────────

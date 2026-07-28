@@ -1,4 +1,5 @@
 from tools.browser.verify_current_url import VerifyCurrentUrl
+from tools.browser.w1.capture_screenshot import CaptureScreenshot
 from tools.browser.w2.navigate_to_chat_list import NavigateToChatList
 from tools.browser.w2.extract_conversation_list import ExtractConversationList
 from tools.browser.w2.scroll_chat_list import ScrollChatList
@@ -19,6 +20,7 @@ def register_w2_browser_tools(registry, browser) -> None:
     """
     for tool_cls in (
         VerifyCurrentUrl,
+        CaptureScreenshot,
         NavigateToChatList,
         ExtractConversationList,
         ScrollChatList,
