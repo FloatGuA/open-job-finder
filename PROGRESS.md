@@ -5,12 +5,12 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-29（HR 索要简历两面：意图抑制冗余回复 + 手动发简历兜底·装填待发可取消·合并进「待发送」tab·W3 发送） |
+| 最后更新 | 2026-07-29（HR 索要简历两面全链路真机验证通过并收口；下一任务＝prompt 注入可配置化 + 分级） |
 | 当前版本 | 2.11.0.4                        |
 
 ## 待跟进（另开会话）
 
-- **[已完成 2026-07-29] ~~W3 手动发简历兜底~~**：见「已完成」。**装填→待发→可取消→W3 发送**模型（用户纠正了最初「立即发不可撤销」的设计）：点「发简历」只写 `resume_status=queued`（DB，可取消）→ 并入「待发送」tab → W3 运行时 `SendResumePipeline` 幂等发送→清 queued+stage=resume_sent。**前端交互（装填/取消/待发送合并/徽章）已真机验证 OK**。**仍待真机 W3 复核**：跑 W3→导航直开→toolbar 真发简历落地→stage 变 resume_sent（这段还没在真机 W3 跑过）。
+- **[已完成 + 真机验证通过 2026-07-29] ~~W3 手动发简历兜底~~**：见「已完成」。**装填→待发→可取消→W3 发送**模型（用户纠正了最初「立即发不可撤销」的设计）：点「发简历」只写 `resume_status=queued`（DB，可取消）→ 并入「待发送」tab → W3 运行时 `SendResumePipeline` 幂等发送→清 queued+stage=resume_sent。**前端交互（装填/取消/待发送合并/徽章）+ W3 真发简历落地均已真机验证通过（用户确认无问题）。** 本项收口。
 - **[已完成 2026-07-28] ~~意图判断改进：HR 索要简历且简历已发 → 不应再起草回复~~**：见「已完成」。`AnalyzeStep` 加确定性抑制闸——`intent==resume_request 且（needs_resume 本轮将发 或 already_sent 已发）→ needs_reply=False`，覆盖 LLM 误判、生成回复前短路。检测漏判时（needs_resume/already_sent 都 False）**不抑制**、仍起草兜底，正好与手动发简历衔接。**待真机复核**：真机 W2 撞 resume_request 会话不再产生多余待审批草稿。
 - **[已完成 2026-07-28] ~~W2 待审批列表没有实时更新~~**：根因如预判——纯前端。`Chat.tsx`「待审批」tab 的 reply_status 过滤**只在拉取那刻**做一次存进 `conversations`，而批准/驳回/改写是**就地改 `reply_status` 字段、不移除**，且 `displayed` 渲染派生**不再按 reply_status 过滤** + Chat 不轮询 → 操作后该条赖在列表里直到切 tab 重拉。修（见「已完成」）：抽一个 `matchesTabFilter(conv, activeStage)` 单判定，fetch 与 `displayed` 渲染派生**都用它**（消除「拉取时过滤 vs 就地改状态」双源），渲染时按当前 tab **实时**过滤——任何状态变化（批准/驳回/改写/取消）立即从不匹配的 tab 掉出。`selected` 取自 `conversations` 不受影响，详情面板仍显示刚操作的会话。后端无缺陷（#66/#67 已验）。
 - **[2026-07-28 待做] W3 新鲜度闸漏「简历已发」system 事件**（审查 Should Fix，用户定本次只记不做）：`send_pipeline._last_nonsystem_sender` 只认 me/hr，简历发送成功是 **system 气泡**。场景：HR 要简历 → W2 `AnalyzeStep` 起草回复(pending) → `ResumeStep` 发附件(system)。此时最后一条非系统消息仍是 HR 的「要简历」→ 新鲜度闸通过 → W3 仍发批准的旧草稿。危害有限（回复与简历互补，非硬冲突），但确是水位盲区。**根治方向**：新鲜度判断纳入 resume-delivered 的 system marker，或记录**审批时的消息水位**（后者更彻底，覆盖所有「审批后发生过 system 事件」的情形）。
@@ -21,7 +21,7 @@
   - **#3 【已完成 2026-07-28】** ~~verify 探针历史假阳性~~：改用「发送前/后精确匹配我方气泡数增量」（`_reply_landed`），彻底砍掉 16 字前缀 substring。见「已完成」。
   - **#4 【已完成 2026-07-28】** ~~W3 summary 被丢弃~~：`_run_reply_workflow` 现返回 run_w3 的完整 summary，schedule_log reply 行不再恒空。见「已完成」。
   - **#5 W3 从不自动调度 =【已确认有意设计，非待办，2026-07-28 用户确认】**：scheduler 只挂 W1/W2，批准回复只能靠手动触发/显式链才发出——发真人要人把关，不自动调度是刻意的。勿再当缺口重提。
-- **[2026-07-31 待做] AI agent prompt 注入可配置化**：当前系统对提示词**没有可配置的注入点**——评分/意图分析/回复生成的 prompt 都是 `prompt_manager` 加载的固定模板，用户无法在不改代码的情况下往里注入自定义指令/上下文（如「我特别看重远程」「这家公司我认识内部人，语气可更主动」等）。需设计一个配置化注入机制：在 profile.yaml / config.yaml 里开可选的 prompt 注入字段，`PromptManager` 渲染时拼接进对应模板。先梳理有哪些 prompt 模板、各自该暴露哪个注入位、注入内容的作用域（全局 vs 每流程）。
+- **[下一个任务 · 2026-07-29 用户指定] AI agent prompt 注入可配置化 + 注入分级**：当前系统对提示词**没有可配置的注入点**——评分/意图分析/回复生成的 prompt 都是 `prompt_manager` 加载的固定模板，用户无法在不改代码的情况下往里注入自定义指令/上下文（如「我特别看重远程」「这家公司我认识内部人，语气可更主动」等）。**两部分**：①**可配置化**——在 profile.yaml / config.yaml 开可选 prompt 注入字段，`PromptManager` 渲染时拼接进对应模板；②**注入分级**（用户强调，确切含义待确认）——注入不是一个平铺的字符串，要分级别/层次（可能维度：作用域全局 vs 每流程 vs 每职位/每 HR；或注入强度 强指令 vs 软偏好；或按 prompt 类型分级）。**⚠️ 新会话动手前先做两件事（第15条）**：1) 跟用户确认「注入分级」到底指哪种分级维度；2) 先梳理 `prompt_manager` + `prompts/` 下有哪些模板、各暴露哪个注入位。梳理清楚 + 分级语义确认后再动手，别直接写。
 - **[已完成 2026-07-28] ~~W1 又出现大量跳过（skip）~~**：**根因＝去重机制误判，非新 bug**。诊断最近真机 run（`w1_20260724_1018`）：37 个跳过 100% 是 `classify_skip`，`prior_status` 全是 APPLIED/INTERVIEWING——即 DB 认为「已投过」而跳。但用户实测：这些被跳岗的 Boss 按钮**全是「立即沟通」**（= Boss 根本不认为你招呼过），说明 DB 的 APPLIED 记录是脏的（历史「投 150 记 63」+ backfill 补 96 佐证）。**处理：直接拆掉 W1 两层 DB 去重**（见「已完成」），相信 Boss 推送，投没投过唯一以 apply 那步真实按钮状态（`already_chatting`）为准——从根上消灭「误判跳过」这一整类问题。排查「30 天复活/去重为何误判」判定不值得。
 - **[部分完成 2026-07-28] 投递失败截图 + 排查投递失败根因**：①**截图已改好**（见「已完成」）——最大化窗口 + 全页截图（`full_page=True`）+ 命名带 run_id（`{run_id}_{job_id}_{ts}.png`，能定位到某次 run 的某张卡）+ `open_browser` 加 `--window-size=1920,1080`（headless 默认 ~800px 视口是右侧面板被切、按钮不在画面的根因）。②**根因排查待下次真机**：现在失败截图能看到完整详情面板 + 投递按钮区，下次真机 W1 撞 `button_not_found` 就能据图定位（选择器失配？按钮在 footer？未渲染完？）。此前 3 例 `button_not_found` 的旧截图因视口太窄看不到按钮，无法诊断。
 - **[2026-07-22 已被整改收口] 冒烟测试相关待跟进**：下方 2026-07-10 的层2/层3 冒烟条目均已被 2026-07-21~22 的「阶段0 冒烟可信化」取代——冒烟加了 covered 三态、走队列、run_diagnostics 诊断器，并多次 live 冒烟真机验证（ok=True/fully_covered=True）。历史条目保留可追溯，不再是活跃待办。
@@ -43,7 +43,7 @@
 
 ## 已完成
 
-- HR 索要简历场景两面：意图抑制冗余回复（B）+ 手动发简历兜底·装填待发模型（A）（2026-07-29，v2.11.0.4，612 passed，build 绿，前端交互真机验证通过）
+- HR 索要简历场景两面：意图抑制冗余回复（B）+ 手动发简历兜底·装填待发模型（A）（2026-07-29，v2.11.0.4，612 passed，build 绿，**前端 + W3 真机验证全部通过**，已 commit 182157e + push）
   - **待发送合并（v2.11.0.4，真机验证 OK）**：装填的待发简历并入「待发送」tab（`matchesTabFilter` 的 SEND_FILTER = `isQueuedForSend || resume_status==='queued'`），列表行加绿色「待发简历」徽章区分，顶部黄条计数/文案涵盖简历。实时进出 tab（装填/取消即时）。用户已真机验证：装填→待发送 tab 显示带徽章→取消即时消失。**后端重启坑坐实**：之前"点了没反应"根因＝运行中的旧 server 用 `python -m uvicorn ...`（**无 `--reload`**，7/28 启动）没加载新路由 → `/queue-resume` 404 静默回滚；已停旧进程、带 `--reload` 重启，`queue-resume` 探针返回我方 handler 的 404 证明路由生效。
   - **背景**：真机发现 HR 索要简历这一场景有两个相反缺口——① W2 检测漏判（`detect_resume_request` 认不出某些措辞）→ 简历没发出去；② 检测命中并发了简历后，`AnalyzeStep` 仍起草一条**多余**的待审批文字回复。B 补冗余、A 补漏发，按 B→A 顺序做。
   - **B — 意图抑制（确定性，code decides）**：`pipeline/w2/steps/analyze.py` 在拿到 LLM intent/needs_reply 后、生成回复前加抑制闸——`needs_reply and intent=="resume_request" and (needs_resume or already_sent) → needs_reply=False`。语义：**简历本身就是对「索要简历」的完整回应**，本轮将发/已发时再起草文字回复是待审批噪声，覆盖 LLM 的 `needs_reply=True`。**守门**：`(needs_resume OR already_sent)` 为假时（检测没找到简历可发）**不抑制**、仍起草兜底——正是检测漏判情形，与 A 衔接。抑制在 `generate_reply` 前短路；`reply_status=None` 保留用户动作。测试 +2。
