@@ -64,6 +64,7 @@ export interface Conversation {
   status: string
   job_id?: string
   job_url?: string
+  job_title?: string
   message_count?: number
   messages?: ConversationMessage[]
 }

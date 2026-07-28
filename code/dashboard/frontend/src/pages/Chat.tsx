@@ -612,6 +612,11 @@ export default function Chat() {
                         </span>
                       </>
                     )}
+                    {selected.job_title && (
+                      <div className="mt-0.5 truncate text-xs text-text-3" style={{ letterSpacing: '-0.224px' }} title={selected.job_title}>
+                        {'\u5728\u62db\u5c97\u4f4d\uff1a'}{selected.job_title}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">

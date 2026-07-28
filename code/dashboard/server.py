@@ -185,7 +185,7 @@ def _serialize_record(record) -> dict[str, Any]:
 _wechat_id_from = wechat_id_from
 
 
-def _serialize_conversation(conv, messages: list[dict], job_url: str) -> dict[str, Any]:
+def _serialize_conversation(conv, messages: list[dict], job_url: str, job_title: str = "") -> dict[str, Any]:
     """Derive the dashboard's conversation shape from the T030 schema.
 
     HRConversation no longer carries messages / last_msg_text / last_msg_from /
@@ -221,6 +221,10 @@ def _serialize_conversation(conv, messages: list[dict], job_url: str) -> dict[st
         "last_msg_at": messages[-1]["created_at"] if messages else conv.created_at,
         "job_id": conv.job_id,
         "job_url": job_url,
+        # 在招岗位名：会话表不存岗位名（hr_title 是 HR 的职务，不是岗位），岗位名在
+        # applications.title，按 job_id 关联（conv_id==job_id 的硬关联）。W1 投过的岗位
+        # 才有；HR 主动发起、非 W1 投递的会话可能为空。
+        "job_title": job_title,
         "status": conv.stage,
         "stage": conv.stage,
         "intent": conv.intent,
@@ -1120,15 +1124,22 @@ async def get_conversations(
     convs = tracker.get_hr_conversations(stage=stage)
     if status:
         convs = [c for c in convs if c.reply_status == status]
+    # One tracker.get() per distinct job_id yields BOTH the job URL (open-in-Boss)
+    # and the job title (在招岗位名) — the conversation table stores neither; they
+    # live on the applications row, keyed by the hard-association job_id.
     job_urls: dict[str, str] = {}
+    job_titles: dict[str, str] = {}
     for c in convs:
         if c.job_id and c.job_id not in job_urls:
             rec = tracker.get(c.job_id)
             job_urls[c.job_id] = (rec.url or "") if rec else ""
+            job_titles[c.job_id] = (rec.title or "") if rec else ""
     return JSONResponse({
         "conversations": [
             _serialize_conversation(
-                c, tracker.get_hr_messages(c.conv_id), job_urls.get(c.job_id or "", "")
+                c, tracker.get_hr_messages(c.conv_id),
+                job_urls.get(c.job_id or "", ""),
+                job_titles.get(c.job_id or "", ""),
             )
             for c in convs
         ],

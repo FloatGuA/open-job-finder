@@ -5,8 +5,8 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-28（W2 定位失败诊断：截图 + method/source 可观测 + 前端 W1/W2/W3 显示 job_id 与「在 Boss 打开」跳转按钮） |
-| 当前版本 | 2.10.0.1                        |
+| 最后更新 | 2026-07-28（W3 发送失败根因＝聊天输入框选择器漂移，收敛到一处共享解析器；会话 navigator 头部显示在招岗位名；版本↔摘要↔提交留痕规则入 CLAUDE.md） |
+| 当前版本 | 2.10.1.2                        |
 
 ## 待跟进（另开会话）
 
@@ -42,6 +42,13 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- W3 发送失败根因（聊天输入框选择器漂移）+ 会话头部显示在招岗位名 + 版本留痕规则（2026-07-28，v2.10.1.2，602 passed，build 绿）
+  - **W3 发送失败诊断（用户报「有发送错误、确实没发出、但我们应该存了 job_id」）**：先用 DB 坐实——唯一那条 approved 回复的会话 `job_id`+`boss_conv_id` 都在、直开可用，且其消息末条是 **HR 的简历请求卡片**（新鲜度闸会通过），reply dict 也如实把两个 id 传给 send_pipeline。**所以「没存 job_id」被排除**，失败在运行期。**根因＝聊天输入框选择器漂移**：`navigate_to_conversation` 的「已打开」探针用新 id **`#boss-chat-editor-input`**，但 `send_chat_message` 与 `search_locate_conversation` 仍硬编码旧 id **`#chat-input`**。Boss 改 id 后 → 定位探针命中（located=True，看着「定位成功」），但 send 的 `querySelector('#chat-input')` 取到 null → `if(!el)return` **什么都没输入** → "text not set" → submit 失败 → **没发出去**，与现象吻合。
+  - **修复（收敛，根治漂移）**：把输入框选择器收敛到 `tools/browser/helpers.py` 一处——`CHAT_INPUT_SELECTORS`（`_ele_any` 用）+ `CHAT_INPUT_QUERY_JS`（run_js 用，`||` 有序回退保证特定 id 优先于泛型 contenteditable，覆盖 `#chat-input`+`#boss-chat-editor-input`+`.chat-input`+`.chat-editor`）。三处消费者（send / search_locate 探针 / navigate 直开探针）全部改用共享常量，永不再分叉。新增 `test_chat_input_selector_convergence`（断言解析器含两 id + 三文件不得再内联 `querySelector('#chat-input')`）。**待真机 W3 复核**：确认 Boss 当前输入框真实 id + 发送真的落地（本修对两种 id 都安全，只扩不缩）。
+  - **会话 navigator 显示在招岗位名**：查明岗位名**没存在 hr_conversations**（`hr_title` 是 HR 的职务如「招聘专员/HRBP」不是岗位），在招岗位名在 **`applications.title`**，按 job_id 硬关联（conv_id==job_id）。后端 `/api/conversations` 用同一次 `tracker.get(job_id)` 一并取出 url+title（零额外查询），`_serialize_conversation` 加 `job_title` 字段；前端 Chat.tsx 会话头部（公司·HR·职务下方）加一行「在招岗位：…」。W1 投过的岗位才有；HR 主动发起的会话可能为空。
+  - **版本↔摘要↔提交留痕规则入 CLAUDE.md**：用户问「每次 commit 版本号时写改动摘要的规则加了吗」——原来没有显式规则（最接近开发规则#4）。补进「版本管理」段：升 X/Y/Z 的会话收尾必须写带版本号的 PROGRESS「已完成」摘要 + commit 标题带版本号，三者可互相追溯；N 构建号不单独要求摘要。
+  - **测试**：602 passed（+2 convergence）；`npm run build` 绿，v2.10.1.2。
 
 - W2 定位失败诊断 + 前端 job_id 显示与跳转按钮（2026-07-28，v2.10.0.1，600 passed，build 绿）
   - **诊断（用户问「应该 job_id 直开怎么还报定位错误」）**：先否定「沉底被 Boss 清理」——`filter_conversations` 只遍历本轮实时扫描（`current_convs`，来自 getGeekFriendList），被清理的会话根本不在扫描里、不会进循环、不可能报定位错误。**真因**：`navigate_to_conversation` 的直开（Treatment D）**不是无条件**的，须 `job_id AND boss_conv_id(≠'62001')` 同时具备，否则回退到按 hr_name+company 的慢滚动搜索（2×60 步后放弃 → "conversation not found"）。这俩 id **只来自 getGeekFriendList 的 XHR 抓包**：①整轮扫描退化到 DOM 模式（XHR 钩子没抓到）→ `encryptJobId=""`、`encryptBossId=d-c='62001'` → **每条**都跳过直开走慢搜索 → 大量失败；②单条会话本身缺 encryptJobId。库存 `812/1041 (78%)` 双 id 齐全。**且此前完全不可观测**（scan 没记 source、navigate 没记 method）。XHR 抓包稳定性（真正根子）按用户定本次不挖。

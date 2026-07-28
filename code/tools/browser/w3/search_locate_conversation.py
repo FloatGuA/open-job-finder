@@ -1,15 +1,14 @@
 import re
 
 from tools.base import BaseTool, ToolResult
-from tools.browser.helpers import _human_pause
+from tools.browser.helpers import CHAT_INPUT_QUERY_JS, _human_pause
 
 # Chat-list search box (verified live): placeholder「搜索30天内的联系人」.
 _SEARCH_INPUT = "css:input.boss-search-input"
 # Editor that appears once a conversation is actually open — the completion signal.
-_OPEN_PROBE_JS = (
-    "return !!(document.querySelector('#chat-input')"
-    " || document.querySelector('.chat-input[contenteditable]'));"
-)
+# Uses the SHARED input resolver so this "opened" probe can't drift from send/navigate
+# (a stale #chat-input here reported "editor did not open" for a conversation that DID).
+_OPEN_PROBE_JS = "return !!" + CHAT_INPUT_QUERY_JS + ";"
 # Search RESULTS render in a separate dropdown (.boss-search-result > .search-ul > li.search-list),
 # NOT by filtering the main .friend-content-warp list. Each result item:
 #   .boss-name      -> HR name   (chars may be wrapped in <u class="h"> highlights → textContent ok)

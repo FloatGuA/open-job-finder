@@ -22,6 +22,34 @@ def _human_pause(min_sec: float = 2.0, max_sec: float = 5.0) -> None:
     time.sleep(random.uniform(min_sec, max_sec))
 
 
+# ── Boss chat message input — ONE source of selectors ─────────────────────────
+# The message input's DOM id DRIFTED: older markup used `#chat-input`, newer uses
+# `#boss-chat-editor-input`. When locate/probe and the actual send disagree on the
+# id, a nasty split appears: navigate's "is a conversation open?" probe matches the
+# generic contenteditable and reports LOCATED, but send_chat_message's hard-coded
+# `#chat-input` resolves to null → it types nothing → "text not set" → submit_failed.
+# The reply looks sent-attempted but never leaves. Keep every consumer (navigate
+# probe, search-locate probe, send) on the SAME set so they can never diverge again.
+CHAT_INPUT_SELECTORS = (
+    "css:#chat-input[contenteditable='true']",
+    "css:#boss-chat-editor-input[contenteditable='true']",
+    "css:.chat-input[contenteditable='true']",
+    "css:.chat-editor [contenteditable='true']",
+    "css:div[contenteditable='true']",
+)
+
+# JS expression resolving the input element with ORDERED fallbacks. Uses `||` (not a
+# single comma-list querySelector, which returns document order, not selector order)
+# so the specific ids win over the generic contenteditable. Yields the element or
+# null. Wrap with `!!(...)` for a presence probe, or `var el = (...);` to act on it.
+CHAT_INPUT_QUERY_JS = (
+    "(document.querySelector('#chat-input')"
+    " || document.querySelector('#boss-chat-editor-input')"
+    " || document.querySelector(\".chat-input[contenteditable='true']\")"
+    " || document.querySelector('.chat-editor [contenteditable=\"true\"]'))"
+)
+
+
 # Boss inserts an item-system bubble whose text contains the 4-char keyword below
 # ONLY after a resume is actually delivered. Verified 2026-06-11 across 15 sends on
 # both send paths: a mainland "...<kw>... delivered to Boss" bubble, and a cross-

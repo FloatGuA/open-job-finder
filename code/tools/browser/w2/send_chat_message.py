@@ -1,12 +1,10 @@
 from tools.base import BaseTool, ToolResult
-from tools.browser.helpers import _ele_any, _human_pause
-
-_CHAT_INPUT_SELECTORS = [
-    "css:#chat-input[contenteditable='true']",
-    "css:.chat-input[contenteditable='true']",
-    "css:.chat-editor [contenteditable='true']",
-    "css:div[contenteditable='true']",
-]
+from tools.browser.helpers import (
+    CHAT_INPUT_QUERY_JS,
+    CHAT_INPUT_SELECTORS,
+    _ele_any,
+    _human_pause,
+)
 
 
 class SendChatMessage(BaseTool):
@@ -26,7 +24,7 @@ class SendChatMessage(BaseTool):
             return ToolResult(ok=False, data={}, error="browser not initialized")
         page = self._browser
         try:
-            inp = _ele_any(page, _CHAT_INPUT_SELECTORS, timeout=3)
+            inp = _ele_any(page, list(CHAT_INPUT_SELECTORS), timeout=3)
             if not inp:
                 return ToolResult(ok=False, data={}, error="chat input not found")
 
@@ -35,9 +33,11 @@ class SendChatMessage(BaseTool):
             # CJK because IME composition cannot be reproduced via keydown/keyup. Use
             # execCommand('insertText') instead, which React's reconciler intercepts.
             # Note: execCommand is deprecated per spec but still supported in Chrome 2025.
+            # Resolve the input via the SHARED selector set (helpers.CHAT_INPUT_QUERY_JS)
+            # so this typing target can never drift away from navigate's "opened" probe
+            # again (the #chat-input vs #boss-chat-editor-input split silently no-op'd sends).
             page.run_js(
-                "var el = document.querySelector('#chat-input')"
-                "  || document.querySelector('.chat-input[contenteditable]');"
+                "var el = " + CHAT_INPUT_QUERY_JS + ";"
                 "if (!el) return;"
                 "el.focus();"
                 "el.innerHTML = '';"
@@ -52,8 +52,7 @@ class SendChatMessage(BaseTool):
             _human_pause(0.5, 1.0)
 
             actual = page.run_js(
-                "var el = document.querySelector('#chat-input')"
-                "  || document.querySelector('.chat-input[contenteditable]');"
+                "var el = " + CHAT_INPUT_QUERY_JS + ";"
                 "return el ? el.textContent : '';"
             )
             if not actual or not actual.strip():
@@ -77,8 +76,7 @@ class SendChatMessage(BaseTool):
             # Proxy completion check: the input clears after a successful submit.
             # Authoritative delivery confirmation is the caller's VerifyReplyDelivered.
             after = page.run_js(
-                "var el = document.querySelector('#chat-input')"
-                "  || document.querySelector('.chat-input[contenteditable]');"
+                "var el = " + CHAT_INPUT_QUERY_JS + ";"
                 "return el ? el.textContent : '';"
             )
             input_cleared = not (after or "").strip()

@@ -1,7 +1,7 @@
 import re
 
 from tools.base import BaseTool, ToolResult
-from tools.browser.helpers import _human_pause
+from tools.browser.helpers import CHAT_INPUT_QUERY_JS, _human_pause
 
 _CONTAINER_JS = "document.querySelector('.user-list-content') || document.querySelector('.user-list')"
 
@@ -52,10 +52,11 @@ class NavigateToConversation(BaseTool):
             try:
                 page.get(f"https://www.zhipin.com/web/geek/chat?id={boss}&jobId={jid}")
                 _human_pause(2.0, 3.0)  # let the SPA select + load the conversation
-                if page.run_js(
-                    "return !!document.querySelector("
-                    "'#boss-chat-editor-input, .chat-input, [contenteditable]');"
-                ):
+                # "Opened" = the message editor is present. Uses the SHARED resolver
+                # (helpers.CHAT_INPUT_QUERY_JS) so this probe and send_chat_message
+                # target the exact same input — they used to disagree (#chat-input vs
+                # #boss-chat-editor-input), which read as located-but-send-typed-nothing.
+                if page.run_js("return !!" + CHAT_INPUT_QUERY_JS + ";"):
                     return ToolResult(ok=True, data={"method": "direct_url", "boss_conv_id_confirmed": boss})
             except Exception:
                 pass  # fall through to DOM scroll-search
