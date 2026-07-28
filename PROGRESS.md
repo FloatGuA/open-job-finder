@@ -5,14 +5,14 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-28（W3 发送失败根因＝聊天输入框选择器漂移，收敛到一处共享解析器；会话 navigator 头部显示在招岗位名；版本↔摘要↔提交留痕规则入 CLAUDE.md） |
-| 当前版本 | 2.10.1.2                        |
+| 最后更新 | 2026-07-28（W2 待审批列表实时移除：抽 matchesTabFilter 单判定，fetch+渲染同源，状态变化即时掉出当前 tab） |
+| 当前版本 | 2.10.2.3                        |
 
 ## 待跟进（另开会话）
 
 - **[2026-07-28 待做] W3 手动发简历兜底 + W3 新增「发简历」step**：真机发现**有些 HR 索要简历但 W2 没识别到 `needs_resume`**（`detect_resume_request` / intent 漏判），简历没发出去 → 需要人工兜底。**要做**：①前端在会话/W3 界面加「手动发简历」按钮（走 `ResumeStep` 的现成 tool `accept_resume_card`/`click_toolbar_send_resume`，不新造副作用）；②W3 流程新增一个「发简历」step（当前发简历只在 W2 的 `ResumeStep`，W3 只发回复）——让 W3 也能承担发简历，配合手动触发做兜底。**先想清**：W3 发简历与 W2 发简历的职责边界（是否重复）、手动按钮的授权（对真人 HR 不可逆，需 workflowRunning 闸/二次确认）。
 - **[2026-07-28 待做] 意图判断改进：HR 索要简历且简历已发 → 不应再起草回复**：真机发现**HR 请求简历、我们已响应发出简历后，`AnalyzeStep` 仍起草了一条待发回复**——此时其实无需再回复（简历已是对「索要简历」的完整回应）。意图判断不够好：`needs_resume`/`already_sent_resume` 与「是否还需要文字回复」的耦合没理清。**方向**：当本轮意图=索要简历且简历已发（或本轮刚发），应抑制回复起草（`needs_reply=False`），避免生成多余待审批草稿。注意与 [[w3-send-maturity]] 的新鲜度闸区分：那个管「审批后会话推进作废草稿」，这个管「一开始就不该起草」。**「简历已发是否等于不用回复」是确定性判断，code decides，别全交给 LLM。**
-- **[2026-07-28 待做] W2 待审批回复列表没有实时更新**：用户在待审批队列里对某条回复做了操作（批准/驳回）后，该条**没有从待审批列表实时移除**，仍显示在队列里。预期：操作后立即从待审批 tab 消失（乐观更新 or 重新拉取）。**排查方向**：前端 tab 过滤是否按最新 `reply_status` 重算、操作后是否触发列表刷新/乐观更新、后端端点返回后前端 state 是否同步（记忆 #66/#67 复查过驳回后端链路无缺陷，所以**优先怀疑前端没刷新**，不是后端没写库）。先在真机复现：操作一条 → 看 network 是否 200 + 列表是否重拉。
+- **[已完成 2026-07-28] ~~W2 待审批列表没有实时更新~~**：根因如预判——纯前端。`Chat.tsx`「待审批」tab 的 reply_status 过滤**只在拉取那刻**做一次存进 `conversations`，而批准/驳回/改写是**就地改 `reply_status` 字段、不移除**，且 `displayed` 渲染派生**不再按 reply_status 过滤** + Chat 不轮询 → 操作后该条赖在列表里直到切 tab 重拉。修（见「已完成」）：抽一个 `matchesTabFilter(conv, activeStage)` 单判定，fetch 与 `displayed` 渲染派生**都用它**（消除「拉取时过滤 vs 就地改状态」双源），渲染时按当前 tab **实时**过滤——任何状态变化（批准/驳回/改写/取消）立即从不匹配的 tab 掉出。`selected` 取自 `conversations` 不受影响，详情面板仍显示刚操作的会话。后端无缺陷（#66/#67 已验）。
 - **[2026-07-28 待做] W3 新鲜度闸漏「简历已发」system 事件**（审查 Should Fix，用户定本次只记不做）：`send_pipeline._last_nonsystem_sender` 只认 me/hr，简历发送成功是 **system 气泡**。场景：HR 要简历 → W2 `AnalyzeStep` 起草回复(pending) → `ResumeStep` 发附件(system)。此时最后一条非系统消息仍是 HR 的「要简历」→ 新鲜度闸通过 → W3 仍发批准的旧草稿。危害有限（回复与简历互补，非硬冲突），但确是水位盲区。**根治方向**：新鲜度判断纳入 resume-delivered 的 system marker，或记录**审批时的消息水位**（后者更彻底，覆盖所有「审批后发生过 system 事件」的情形）。
 - **[2026-07-28 待做] PDF 简历生成方案未定 + playwright 依赖去留**：PDF 简历功能未做完。当前代码路径是 WeasyPrint（`resume_manager.render_pdf`，Jinja2→WeasyPrint，依赖系统库 libpango；`ResumeManager` 目前 `server.py:137` 初始化但从不调用）。`requirements.txt` 的 `playwright` 当前只被两个根目录诊断脚本用，**暂保留**给未定的 PDF 方案（若改用 headless Chromium print-to-pdf 替代 WeasyPrint 则会用到）。**待办**：定 PDF 方案（WeasyPrint 继续 / 换 playwright），据此收敛 weasyprint / playwright 依赖并接线 `ResumeManager`。
 - **[已完成 2026-07-28] ~~W3 盲发过时草稿~~**：核心担心——用户手动回了 HR 后 W3 仍盲发批准时的旧草稿。**已修（见「已完成」）**：W3 `send_pipeline` 加发送前新鲜度闸——重扫会话，最后一条非系统消息若不是 HR（=批准后有人回过）→ 作废草稿（`invalidate_reply_for_reanalysis`：清 reply_status/text/intent + last_analyzed_ts=0 打回未分析）→ 下一轮 W2 重跑意图判断，要回才重起草进待审批。dry-run 在闸前短路；读失败保守跳过保草稿。**取舍**：重起草归 W2（不在 W3 内联 LLM），故不是当场重发而是下次 W2。**待真机 W2/W3 复核**：①闸在真机能正确识别「末条我方」②作废后下轮 W2 确实重分析（last_analyzed_ts=0 → unanalyzed 命中）。
@@ -42,6 +42,11 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- W2 待审批列表实时移除（2026-07-28，v2.10.2.3，纯前端 Chat.tsx，build 绿）
+  - **根因（纯前端，后端无缺陷）**：`Chat.tsx`「待审批」tab 的 reply_status 过滤只在 `loadConversations` 拉取那一刻做一次、存进 `conversations` state；批准/驳回/改写走乐观更新**就地改 `reply_status`、不从数组移除**；而 `displayed` 渲染派生只做 messages>0 + 搜索过滤、**不按 reply_status 重过滤**；Chat 又不轮询（只在挂载/切 tab 重拉）→ 操作后那条状态虽变但**仍显示在待审批列表**，直到切 tab 才消失。对比 `handleDismissAllPending`/`handleReject`/`handleDismissWechat` 都显式 filter 移除，单条批准/驳回/改写漏了。
+  - **修（用户选方案 B：渲染时按当前 tab 实时过滤）**：抽模块级 `matchesTabFilter(conv, activeStage)` 作为 tab 归属的**唯一判定**（sentinel 按 reply_status/wechat_pending，真实 stage 按 conv.stage，全部→true）；`loadConversations` 的 fetch 过滤 + `displayed` 渲染派生**都调它**（消除「拉取时过滤 vs 就地改状态」双源，本质是同一契约两处实现的老坑）。渲染时实时过滤后，任何状态变化（批准/驳回/改写、以及待发送 tab 的取消）立即从不再匹配的 tab 掉出。`selected` 取自 `conversations`（非 `displayed`），故操作后该条虽移出列表但详情面板仍显示，可看确认。
+  - **测试**：`npm run build` 绿（tsc 无错）；后端未动。**待真机点一次验证**批准/驳回后即时消失。
 
 - W3 发送失败根因（聊天输入框选择器漂移）+ 会话头部显示在招岗位名 + 版本留痕规则（2026-07-28，v2.10.1.2，602 passed，build 绿）
   - **W3 发送失败诊断（用户报「有发送错误、确实没发出、但我们应该存了 job_id」）**：先用 DB 坐实——唯一那条 approved 回复的会话 `job_id`+`boss_conv_id` 都在、直开可用，且其消息末条是 **HR 的简历请求卡片**（新鲜度闸会通过），reply dict 也如实把两个 id 传给 send_pipeline。**所以「没存 job_id」被排除**，失败在运行期。**根因＝聊天输入框选择器漂移**：`navigate_to_conversation` 的「已打开」探针用新 id **`#boss-chat-editor-input`**，但 `send_chat_message` 与 `search_locate_conversation` 仍硬编码旧 id **`#chat-input`**。Boss 改 id 后 → 定位探针命中（located=True，看着「定位成功」），但 send 的 `querySelector('#chat-input')` 取到 null → `if(!el)return` **什么都没输入** → "text not set" → submit 失败 → **没发出去**，与现象吻合。

@@ -155,6 +155,31 @@ function isQueuedForSend(conv: Conversation): boolean {
   return conv.reply_status === 'approved' || conv.reply_status === 'revision'
 }
 
+// Does a conversation belong under the active tab, given its CURRENT state? The ONE
+// predicate for tab membership — used both at fetch (initial scoping) AND live in the
+// render derivation. Applying it live is what makes optimistic status changes real-
+// time: approve/dismiss/revise on 待审批 (or cancel on 待发送) flips reply_status, and
+// the item immediately drops out of the tab it no longer matches — instead of
+// lingering until the next refetch (the "list doesn't update" bug). Sentinel filters
+// key off reply_status / wechat_pending; real stages match conv.stage; 全部 (undefined)
+// matches all.
+function matchesTabFilter(conv: Conversation, activeStage: string | undefined): boolean {
+  switch (activeStage) {
+    case undefined:
+      return true
+    case PENDING_FILTER:
+      return conv.reply_status === 'pending'
+    case SEND_FILTER:
+      return isQueuedForSend(conv)
+    case WECHAT_FILTER:
+      return !!conv.wechat_pending
+    case STALE_FILTER:
+      return conv.stage === 'closed' && conv.intent !== 'rejection'
+    default:
+      return conv.stage === activeStage
+  }
+}
+
 export default function Chat() {
   const { workflowRunning } = useAppContext()
   const [activeStage, setActiveStage] = useState<string | undefined>(undefined)
@@ -178,16 +203,11 @@ export default function Chat() {
       || activeStage === WECHAT_FILTER || activeStage === STALE_FILTER
     API.getConversations(clientFilter ? undefined : activeStage)
       .then((d) => {
+        // Initial scoping for the sentinel (client-side) filters. Same predicate the
+        // render derivation applies live, so fetch and render can't disagree.
         let convs = d.conversations
-        if (activeStage === SEND_FILTER) {
-          convs = convs.filter((c) => c.reply_status === 'approved' || c.reply_status === 'revision')
-        } else if (activeStage === PENDING_FILTER) {
-          convs = convs.filter((c) => c.reply_status === 'pending')
-        } else if (activeStage === WECHAT_FILTER) {
-          convs = convs.filter((c) => c.wechat_pending)
-        } else if (activeStage === STALE_FILTER) {
-          // Stalled (soft-closed by timeout), not an explicit HR rejection.
-          convs = convs.filter((c) => c.stage === 'closed' && c.intent !== 'rejection')
+        if (clientFilter) {
+          convs = convs.filter((c) => matchesTabFilter(c, activeStage))
         }
         // \u540e\u7aef\u6309 created_at DESC\uff08\u4f1a\u8bdd\u9996\u6b21\u5165\u5e93\u65f6\u95f4\uff09\u8fd4\u56de\uff0c\u4f1a\u628a\u300c\u6709\u65b0\u6d88\u606f\u7684\u8001\u4f1a\u8bdd\u300d\u57cb\u5728\u4e0b\u9762\u3002
         // \u524d\u7aef\u6309 last_msg_at\uff08\u6700\u540e\u4e00\u6761\u6d88\u606f\u65f6\u95f4\uff09\u964d\u5e8f\u91cd\u6392\uff0c\u8ba9\u6700\u8fd1\u6709\u52a8\u9759\u7684\u4f1a\u8bdd\u6d6e\u5230\u9876\u90e8\u3002
@@ -236,10 +256,14 @@ export default function Chat() {
   // Until they reply there is no conversation to speak of, so showing them here
   // just dilutes the threads that do have messages. Hidden by default, counted
   // and toggleable \u2014 the information is not lost, it belongs on the jobs page.
-  const unanswered = conversations.filter((c) => (c.messages?.length ?? 0) === 0)
+  // Apply the active tab filter LIVE (not just at fetch): after an optimistic
+  // reply_status change, an item that no longer matches the current tab drops out
+  // immediately, instead of lingering until the next refetch.
+  const tabScoped = conversations.filter((c) => matchesTabFilter(c, activeStage))
+  const unanswered = tabScoped.filter((c) => (c.messages?.length ?? 0) === 0)
   const base = showUnanswered
-    ? conversations
-    : conversations.filter((c) => (c.messages?.length ?? 0) > 0)
+    ? tabScoped
+    : tabScoped.filter((c) => (c.messages?.length ?? 0) > 0)
   const displayed = searchNeedle
     ? base.filter((c) => convMatchesQuery(c, searchNeedle))
     : base
