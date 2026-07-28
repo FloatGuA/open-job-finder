@@ -61,6 +61,7 @@ export interface Conversation {
   needs_reply?: boolean
   reply_status?: 'pending' | 'approved' | 'revision' | 'dismissed' | 'sent'
   reply_draft?: string
+  resume_status?: 'queued' | null
   status: string
   job_id?: string
   job_url?: string
@@ -557,6 +558,10 @@ export const API = {
     requestJson(`/api/conversations/${conv_id}/mark-sent`, { method: 'POST' }),
   openInBrowser: (conv_id: string): Promise<{ ok: boolean; error?: string; code?: string; reason?: string }> =>
     requestJson(`/api/conversations/${conv_id}/open-in-browser`, { method: 'POST' }),
+  queueResume: (conv_id: string): Promise<{ ok: boolean }> =>
+    requestJson(`/api/conversations/${conv_id}/queue-resume`, { method: 'POST' }),
+  cancelResume: (conv_id: string): Promise<{ ok: boolean }> =>
+    requestJson(`/api/conversations/${conv_id}/cancel-resume`, { method: 'POST' }),
   getProfile: (): Promise<Profile> => requestJson('/api/profile'),
   saveProfile: (data: Profile) =>
     requestJson('/api/profile', {

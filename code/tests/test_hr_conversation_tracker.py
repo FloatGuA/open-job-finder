@@ -45,6 +45,33 @@ def test_get_returns_none_for_missing(tracker):
     assert tracker.get_hr_conversation("nonexistent") is None
 
 
+# ── manual resume-send queue (set_resume_status / get_queued_resumes) ────────
+
+def test_queue_resume_and_list(tracker):
+    tracker.upsert_hr_conversation(_make_conv(conv_id="r1"))
+    tracker.upsert_hr_conversation(_make_conv(conv_id="r2"))
+    # Nothing queued initially.
+    assert tracker.get_queued_resumes() == []
+    tracker.set_resume_status("r1", "queued")
+    queued = tracker.get_queued_resumes()
+    assert [c.conv_id for c in queued] == ["r1"]
+    assert tracker.get_hr_conversation("r1").resume_status == "queued"
+
+
+def test_cancel_resume_clears_flag(tracker):
+    tracker.upsert_hr_conversation(_make_conv(conv_id="r1"))
+    tracker.set_resume_status("r1", "queued")
+    tracker.set_resume_status("r1", None)  # cancel (or post-send clear)
+    assert tracker.get_queued_resumes() == []
+    assert tracker.get_hr_conversation("r1").resume_status is None
+
+
+def test_set_resume_status_rejects_bad_value(tracker):
+    tracker.upsert_hr_conversation(_make_conv(conv_id="r1"))
+    with pytest.raises(AssertionError):
+        tracker.set_resume_status("r1", "sent")
+
+
 def test_upsert_updates_last_msg_preview(tracker):
     conv = _make_conv()
     tracker.upsert_hr_conversation(conv)

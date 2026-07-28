@@ -170,7 +170,10 @@ function matchesTabFilter(conv: Conversation, activeStage: string | undefined): 
     case PENDING_FILTER:
       return conv.reply_status === 'pending'
     case SEND_FILTER:
-      return isQueuedForSend(conv)
+      // 待发送 = queued to send on the next W3 run: an approved/revision text reply
+      // OR a manually staged resume (resume_status='queued'). Both are delivered by
+      // W3, so they share this tab; the row shows a 待发简历 badge to tell them apart.
+      return isQueuedForSend(conv) || conv.resume_status === 'queued'
     case WECHAT_FILTER:
       return !!conv.wechat_pending
     case STALE_FILTER:
@@ -186,6 +189,7 @@ export default function Chat() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [showUnanswered, setShowUnanswered] = useState(false)
@@ -354,6 +358,37 @@ export default function Chat() {
     }
   }
 
+  // Resume staging is cancellable (DB-only, browser untouched until W3 delivers),
+  // so no irreversible-confirm dialog \u2014 mirrors approving a text reply. Optimistic.
+  const handleQueueResume = async () => {
+    if (!selected) return
+    const convId = selected.conv_id
+    updateConversation(convId, (conv) => ({ ...conv, resume_status: 'queued' }))
+    setError(null)
+    setNotice(null)
+    try {
+      await API.queueResume(convId)
+      setNotice('\u5df2\u88c5\u586b\u5f85\u53d1\u7b80\u5386\uff0c\u4e0b\u6b21\u8fd0\u884c W3\uff08\u53d1\u9001\u6d41\u7a0b\uff09\u65f6\u53d1\u51fa\uff1b\u53d1\u9001\u524d\u53ef\u968f\u65f6\u53d6\u6d88')
+    } catch (e) {
+      setError((e as Error).message)
+      void loadConversations()
+    }
+  }
+
+  const handleCancelResume = async () => {
+    if (!selected) return
+    const convId = selected.conv_id
+    updateConversation(convId, (conv) => ({ ...conv, resume_status: null }))
+    setError(null)
+    setNotice(null)
+    try {
+      await API.cancelResume(convId)
+    } catch (e) {
+      setError((e as Error).message)
+      void loadConversations()
+    }
+  }
+
   const handleDismissWechat = async () => {
     if (!selected) return
     const convId = selected.conv_id
@@ -397,7 +432,9 @@ export default function Chat() {
     }
   }
 
-  const queuedCount = conversations.filter(isQueuedForSend).length
+  const queuedCount = conversations.filter(
+    (c) => isQueuedForSend(c) || c.resume_status === 'queued',
+  ).length
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -409,7 +446,7 @@ export default function Chat() {
           <span style={{ color: '#ff9f0a' }}>{'\u23f3'}</span>
           <DevLabel name="QueuedBar" />
           <span style={{ color: 'rgba(255,255,255,0.75)' }}>
-            {'\u6709 '}<span className="font-mono" style={{ color: '#ff9f0a' }}>{queuedCount}</span>{' \u6761\u5df2\u6279\u51c6\u56de\u590d\u5f85\u53d1\u9001\uff0c\u9700\u624b\u52a8\u89e6\u53d1 W3 \u53d1\u9001\u3002'}
+            {'\u6709 '}<span className="font-mono" style={{ color: '#ff9f0a' }}>{queuedCount}</span>{' \u6761\u5f85\u53d1\u9001\uff08\u5df2\u6279\u51c6\u56de\u590d / \u5f85\u53d1\u7b80\u5386\uff09\uff0c\u9700\u624b\u52a8\u89e6\u53d1 W3 \u53d1\u9001\u3002'}
           </span>
         </div>
       )}
@@ -570,6 +607,9 @@ export default function Chat() {
                       </span>
                       <div className="flex shrink-0 items-center gap-1.5">
                         {stage && <TintBadge label={stage.label} color={stage.color} />}
+                        {conv.resume_status === 'queued' && (
+                          <TintBadge label={'\u5f85\u53d1\u7b80\u5386'} color="#30d158" />
+                        )}
                         {conv.intent && (
                           <TintBadge label={INTENT_LABELS[conv.intent] ?? conv.intent} color={INTENT_COLORS[conv.intent] ?? '#84848c'} />
                         )}
@@ -636,6 +676,14 @@ export default function Chat() {
                         </span>
                       </>
                     )}
+                    {selected.resume_status === 'queued' && (
+                      <span
+                        className="ml-2 rounded-md px-1.5 py-0.5 text-[11px] font-medium"
+                        style={{ background: 'rgba(48,209,88,0.16)', color: '#30d158' }}
+                      >
+                        {'\u5f85\u53d1\u7b80\u5386'}
+                      </span>
+                    )}
                     {selected.job_title && (
                       <div className="mt-0.5 truncate text-xs text-text-3" style={{ letterSpacing: '-0.224px' }} title={selected.job_title}>
                         {'\u5728\u62db\u5c97\u4f4d\uff1a'}{selected.job_title}
@@ -670,6 +718,27 @@ export default function Chat() {
                       {'\u2197 \u5c97\u4f4d'}
                     </button>
                   )}
+                  {selected.resume_status === 'queued' ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleCancelResume()}
+                      className="rounded-lg px-2.5 py-1 text-xs transition"
+                      style={{ background: 'rgba(255,159,10,0.14)', color: '#ff9f0a' }}
+                      title={'\u53d6\u6d88\u5f85\u53d1\u7b80\u5386\uff08\u5728 W3 \u53d1\u9001\u524d\uff09'}
+                    >
+                      {'\u2715 \u53d6\u6d88\u53d1\u7b80\u5386'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void handleQueueResume()}
+                      className="rounded-lg px-2.5 py-1 text-xs transition"
+                      style={{ background: 'rgba(48,209,88,0.12)', color: '#30d158' }}
+                      title={'\u88c5\u586b\u5f85\u53d1\u7b80\u5386\uff1aW2 \u6f0f\u8bc6\u522b\u65f6\u4eba\u5de5\u8865\u53d1\uff0c\u8fdb W3 \u53d1\u9001\u961f\u5217\uff0c\u53d1\u9001\u524d\u53ef\u53d6\u6d88'}
+                    >
+                      {'\ud83d\udcce \u53d1\u7b80\u5386'}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => void handleReject()}
@@ -685,6 +754,24 @@ export default function Chat() {
                   </span>
                 </div>
               </div>
+
+              {notice && (
+                <div
+                  className="mx-4 mb-1 mt-3 flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm"
+                  style={{ background: 'rgba(48,209,88,0.12)', border: '1px solid rgba(48,209,88,0.35)' }}
+                >
+                  <span style={{ color: '#30d158' }}>{'\u2705'}</span>
+                  <span style={{ color: 'rgba(255,255,255,0.82)' }}>{notice}</span>
+                  <button
+                    type="button"
+                    onClick={() => setNotice(null)}
+                    className="ml-auto shrink-0 rounded-lg px-2.5 py-1 text-xs text-text-2 transition hover:text-text-1"
+                    style={{ background: 'rgba(255,255,255,0.08)' }}
+                  >
+                    {'\u77e5\u9053\u4e86'}
+                  </button>
+                </div>
+              )}
 
               {messages.some(isWechatCard) && !selected.wechat_dismissed && (
                 <div

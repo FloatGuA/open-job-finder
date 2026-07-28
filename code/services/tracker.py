@@ -134,6 +134,7 @@ class ApplicationTracker:
                     last_msg_ts      INTEGER DEFAULT 0,
                     last_analyzed_ts INTEGER DEFAULT 0,
                     locate_fail_count INTEGER DEFAULT 0,
+                    resume_status    TEXT,
                     created_at       TEXT NOT NULL
                 )
                 """
@@ -173,6 +174,15 @@ class ApplicationTracker:
                     "UPDATE hr_conversations SET last_analyzed_ts = last_msg_ts "
                     "WHERE intent IS NOT NULL AND intent != ''"
                 )
+            # Migration: resume_status — the user's manual "queue a resume for this
+            # conversation" intent (NULL | 'queued'). Mirrors reply_status for text
+            # replies: 'queued' means the user staged a resume send (DB-only, browser
+            # untouched, so it is fully cancellable) and W3 will deliver it on its next
+            # run, then clear this back to NULL and advance stage=resume_sent. Existing
+            # rows stay NULL. "Already sent" stays expressed by stage=resume_sent +
+            # detect_resume_request.already_sent (system bubble), NOT duplicated here.
+            if "resume_status" not in hr_conv_cols:
+                self.conn.execute("ALTER TABLE hr_conversations ADD COLUMN resume_status TEXT")
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_hr_conversations_stage ON hr_conversations(stage)"
             )
@@ -314,6 +324,7 @@ class ApplicationTracker:
             wechat_dismissed=bool(row["wechat_dismissed"]) if "wechat_dismissed" in row.keys() else False,
             last_msg_ts=(row["last_msg_ts"] if "last_msg_ts" in row.keys() else 0) or 0,
             last_analyzed_ts=(row["last_analyzed_ts"] if "last_analyzed_ts" in row.keys() else 0) or 0,
+            resume_status=(row["resume_status"] if "resume_status" in row.keys() else None),
             created_at=row["created_at"],
         )
 
@@ -806,6 +817,32 @@ class ApplicationTracker:
     def get_approved_replies(self) -> List[HRConversation]:
         rows = self.conn.execute(
             "SELECT * FROM hr_conversations WHERE reply_status IN ('approved', 'revision')"
+        ).fetchall()
+        return [self._row_to_hr_conv(row) for row in rows]
+
+    # -- manual resume-send queue (W2 detection-miss fallback) -------------------
+    # resume_status mirrors reply_status for the resume side: the user stages a send
+    # (DB-only, browser untouched -> fully cancellable), and W3 delivers it. NULL is
+    # the correct neutral BOTH before queueing AND after a send completes (the fact
+    # that a resume WAS sent is recorded by stage=resume_sent, not here) -- so a
+    # single set_resume_status transition covers queue / cancel / post-send clear.
+
+    def set_resume_status(self, conv_id: str, status: Optional[str]) -> int:
+        """Set the manual resume-queue intent. status='queued' stages a send; None
+        clears it (user cancelled, or W3 finished delivering). Single SQL for this
+        transition. Returns rows updated so callers distinguish a missing conv."""
+        assert status in (None, "queued"), f"invalid resume_status: {status!r}"
+        with self.conn:
+            cur = self.conn.execute(
+                "UPDATE hr_conversations SET resume_status = ? WHERE conv_id = ?",
+                (status, conv_id),
+            )
+            return cur.rowcount
+
+    def get_queued_resumes(self) -> List[HRConversation]:
+        """Conversations the user manually staged for a resume send (W3 delivers)."""
+        rows = self.conn.execute(
+            "SELECT * FROM hr_conversations WHERE resume_status = 'queued'"
         ).fetchall()
         return [self._row_to_hr_conv(row) for row in rows]
 

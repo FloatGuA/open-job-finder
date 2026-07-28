@@ -5,13 +5,13 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-28（W2 待审批列表实时移除：抽 matchesTabFilter 单判定，fetch+渲染同源，状态变化即时掉出当前 tab） |
-| 当前版本 | 2.10.2.3                        |
+| 最后更新 | 2026-07-29（HR 索要简历两面：意图抑制冗余回复 + 手动发简历兜底·装填待发可取消·合并进「待发送」tab·W3 发送） |
+| 当前版本 | 2.11.0.4                        |
 
 ## 待跟进（另开会话）
 
-- **[2026-07-28 待做] W3 手动发简历兜底 + W3 新增「发简历」step**：真机发现**有些 HR 索要简历但 W2 没识别到 `needs_resume`**（`detect_resume_request` / intent 漏判），简历没发出去 → 需要人工兜底。**要做**：①前端在会话/W3 界面加「手动发简历」按钮（走 `ResumeStep` 的现成 tool `accept_resume_card`/`click_toolbar_send_resume`，不新造副作用）；②W3 流程新增一个「发简历」step（当前发简历只在 W2 的 `ResumeStep`，W3 只发回复）——让 W3 也能承担发简历，配合手动触发做兜底。**先想清**：W3 发简历与 W2 发简历的职责边界（是否重复）、手动按钮的授权（对真人 HR 不可逆，需 workflowRunning 闸/二次确认）。
-- **[2026-07-28 待做] 意图判断改进：HR 索要简历且简历已发 → 不应再起草回复**：真机发现**HR 请求简历、我们已响应发出简历后，`AnalyzeStep` 仍起草了一条待发回复**——此时其实无需再回复（简历已是对「索要简历」的完整回应）。意图判断不够好：`needs_resume`/`already_sent_resume` 与「是否还需要文字回复」的耦合没理清。**方向**：当本轮意图=索要简历且简历已发（或本轮刚发），应抑制回复起草（`needs_reply=False`），避免生成多余待审批草稿。注意与 [[w3-send-maturity]] 的新鲜度闸区分：那个管「审批后会话推进作废草稿」，这个管「一开始就不该起草」。**「简历已发是否等于不用回复」是确定性判断，code decides，别全交给 LLM。**
+- **[已完成 2026-07-29] ~~W3 手动发简历兜底~~**：见「已完成」。**装填→待发→可取消→W3 发送**模型（用户纠正了最初「立即发不可撤销」的设计）：点「发简历」只写 `resume_status=queued`（DB，可取消）→ 并入「待发送」tab → W3 运行时 `SendResumePipeline` 幂等发送→清 queued+stage=resume_sent。**前端交互（装填/取消/待发送合并/徽章）已真机验证 OK**。**仍待真机 W3 复核**：跑 W3→导航直开→toolbar 真发简历落地→stage 变 resume_sent（这段还没在真机 W3 跑过）。
+- **[已完成 2026-07-28] ~~意图判断改进：HR 索要简历且简历已发 → 不应再起草回复~~**：见「已完成」。`AnalyzeStep` 加确定性抑制闸——`intent==resume_request 且（needs_resume 本轮将发 或 already_sent 已发）→ needs_reply=False`，覆盖 LLM 误判、生成回复前短路。检测漏判时（needs_resume/already_sent 都 False）**不抑制**、仍起草兜底，正好与手动发简历衔接。**待真机复核**：真机 W2 撞 resume_request 会话不再产生多余待审批草稿。
 - **[已完成 2026-07-28] ~~W2 待审批列表没有实时更新~~**：根因如预判——纯前端。`Chat.tsx`「待审批」tab 的 reply_status 过滤**只在拉取那刻**做一次存进 `conversations`，而批准/驳回/改写是**就地改 `reply_status` 字段、不移除**，且 `displayed` 渲染派生**不再按 reply_status 过滤** + Chat 不轮询 → 操作后该条赖在列表里直到切 tab 重拉。修（见「已完成」）：抽一个 `matchesTabFilter(conv, activeStage)` 单判定，fetch 与 `displayed` 渲染派生**都用它**（消除「拉取时过滤 vs 就地改状态」双源），渲染时按当前 tab **实时**过滤——任何状态变化（批准/驳回/改写/取消）立即从不匹配的 tab 掉出。`selected` 取自 `conversations` 不受影响，详情面板仍显示刚操作的会话。后端无缺陷（#66/#67 已验）。
 - **[2026-07-28 待做] W3 新鲜度闸漏「简历已发」system 事件**（审查 Should Fix，用户定本次只记不做）：`send_pipeline._last_nonsystem_sender` 只认 me/hr，简历发送成功是 **system 气泡**。场景：HR 要简历 → W2 `AnalyzeStep` 起草回复(pending) → `ResumeStep` 发附件(system)。此时最后一条非系统消息仍是 HR 的「要简历」→ 新鲜度闸通过 → W3 仍发批准的旧草稿。危害有限（回复与简历互补，非硬冲突），但确是水位盲区。**根治方向**：新鲜度判断纳入 resume-delivered 的 system marker，或记录**审批时的消息水位**（后者更彻底，覆盖所有「审批后发生过 system 事件」的情形）。
 - **[2026-07-28 待做] PDF 简历生成方案未定 + playwright 依赖去留**：PDF 简历功能未做完。当前代码路径是 WeasyPrint（`resume_manager.render_pdf`，Jinja2→WeasyPrint，依赖系统库 libpango；`ResumeManager` 目前 `server.py:137` 初始化但从不调用）。`requirements.txt` 的 `playwright` 当前只被两个根目录诊断脚本用，**暂保留**给未定的 PDF 方案（若改用 headless Chromium print-to-pdf 替代 WeasyPrint 则会用到）。**待办**：定 PDF 方案（WeasyPrint 继续 / 换 playwright），据此收敛 weasyprint / playwright 依赖并接线 `ResumeManager`。
@@ -42,6 +42,21 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- HR 索要简历场景两面：意图抑制冗余回复（B）+ 手动发简历兜底·装填待发模型（A）（2026-07-29，v2.11.0.4，612 passed，build 绿，前端交互真机验证通过）
+  - **待发送合并（v2.11.0.4，真机验证 OK）**：装填的待发简历并入「待发送」tab（`matchesTabFilter` 的 SEND_FILTER = `isQueuedForSend || resume_status==='queued'`），列表行加绿色「待发简历」徽章区分，顶部黄条计数/文案涵盖简历。实时进出 tab（装填/取消即时）。用户已真机验证：装填→待发送 tab 显示带徽章→取消即时消失。**后端重启坑坐实**：之前"点了没反应"根因＝运行中的旧 server 用 `python -m uvicorn ...`（**无 `--reload`**，7/28 启动）没加载新路由 → `/queue-resume` 404 静默回滚；已停旧进程、带 `--reload` 重启，`queue-resume` 探针返回我方 handler 的 404 证明路由生效。
+  - **背景**：真机发现 HR 索要简历这一场景有两个相反缺口——① W2 检测漏判（`detect_resume_request` 认不出某些措辞）→ 简历没发出去；② 检测命中并发了简历后，`AnalyzeStep` 仍起草一条**多余**的待审批文字回复。B 补冗余、A 补漏发，按 B→A 顺序做。
+  - **B — 意图抑制（确定性，code decides）**：`pipeline/w2/steps/analyze.py` 在拿到 LLM intent/needs_reply 后、生成回复前加抑制闸——`needs_reply and intent=="resume_request" and (needs_resume or already_sent) → needs_reply=False`。语义：**简历本身就是对「索要简历」的完整回应**，本轮将发/已发时再起草文字回复是待审批噪声，覆盖 LLM 的 `needs_reply=True`。**守门**：`(needs_resume OR already_sent)` 为假时（检测没找到简历可发）**不抑制**、仍起草兜底——正是检测漏判情形，与 A 衔接。抑制在 `generate_reply` 前短路；`reply_status=None` 保留用户动作。测试 +2。
+  - **A — 手动发简历兜底（装填→待发→可取消→W3 发送）**：⚠️ 用户纠正了我最初的「点了立即发、不可撤销」设计——应与文字回复对称：**装填（改DB）→ 待发（可取消）→ W3 发送**，可回退（碰 HR 的动作集中在 W3 一步）。最终形态：
+    - **DB**：`hr_conversations` 加 `resume_status`（null|queued）列 + 迁移；tracker 唯一写 `set_resume_status(conv_id, status)`（queue/cancel/发后清 三态都走它，NULL 是正确中性态）+ `get_queued_resumes`。「已发」仍由 stage=resume_sent + detect already_sent 表达，不重复。
+    - **装填/取消端点**：`POST /conversations/{id}/queue-resume`（写 queued，**只碰DB不碰浏览器→可取消**）+ `/cancel-resume`（写 null）。取代之前的立即发端点。
+    - **W3 发送**：`W3Pipeline` 除发已批准回复，再拉 `get_queued_resumes` 逐个 `SendResumePipeline`（新 `pipeline/w3/send_resume_pipeline.py`：locate 直开优先→`detect already_sent` 幂等跳过→复用 W2 `ResumeStep`（card→toolbar）→清 queued + 推进 stage=resume_sent）。**无新鲜度闸**（简历不会过时）。`w3_runner` 注册 resume/detect/upsert/clear/get_queued 工具。触发＝手动跑 W3（与批准回复一致）。
+    - **删除**：之前的立即执行 `send_resume_runner.py` + 队列 `resume` 类型 + `_run_send_resume_workflow` 全部回退（改由 W3 承担）。
+    - **前端**：Chat.tsx 会话头部——`resume_status==='queued'` 时显示「待发简历」标签 +「✕ 取消发简历」按钮，否则「📎 发简历」（装填）。**无 workflowRunning 闸、无不可逆确认**（DB 操作可取消，安全）。`API.queueResume/cancelResume`；序列化加 `resume_status`。interpret.ts +4 事件标签。
+  - **职责边界**：W2 `ResumeStep` 不动（检测命中的自动发路径）；A 是人工兜底，装填后由 W3 发，两者复用同一组发送 tool。W3 文字回复流程未动。
+  - **协作反馈固化**：用户指出我"确认需求前就动手"（A 确认了"触发源"却漏确认"立即 vs 待发"这一维度）→ 记项目记忆 [[confirm-before-acting]]，并（待用户确认措辞后）加进全局 `~/.claude/CLAUDE.md` 第 15 条。
+  - **测试**：612 passed（B +2 / W3 resume pipeline +5 / tracker resume 队列 +3）；`npm run build` 绿。v2.11.0.3。
+  - **CJK 处理坑复现**：Edit 直接写 `\uXXXX` 被解码回中文；本环境 raw CJK 保存后**未**自动转义（磁盘实测裸 CJK 字节）→ 用 scratchpad Python 脚本把 raw CJK/占位符替换为真 `\uXXXX` ASCII 再 build + 产物 utf-8 校验。旧记忆「自动转义生效」不可靠。
 
 - W2 待审批列表实时移除（2026-07-28，v2.10.2.3，纯前端 Chat.tsx，build 绿）
   - **根因（纯前端，后端无缺陷）**：`Chat.tsx`「待审批」tab 的 reply_status 过滤只在 `loadConversations` 拉取那一刻做一次、存进 `conversations` state；批准/驳回/改写走乐观更新**就地改 `reply_status`、不从数组移除**；而 `displayed` 渲染派生只做 messages>0 + 搜索过滤、**不按 reply_status 重过滤**；Chat 又不轮询（只在挂载/切 tab 重拉）→ 操作后那条状态虽变但**仍显示在待审批列表**，直到切 tab 才消失。对比 `handleDismissAllPending`/`handleReject`/`handleDismissWechat` 都显式 filter 移除，单条批准/驳回/改写漏了。

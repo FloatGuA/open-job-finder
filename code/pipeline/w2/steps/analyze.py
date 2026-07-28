@@ -92,6 +92,23 @@ class AnalyzeStep:
         needs_reply = intent_res.data.get("needs_reply", False)
         provider_used = intent_res.data.get("provider_used", "")
 
+        # A resume IS the complete response to a resume request. When the current
+        # intent is a resume request AND a resume has already been delivered
+        # (already_sent) or is about to be sent THIS round by ResumeStep
+        # (needs_resume -- ResumeStep runs right after this step in the pipeline),
+        # a separate drafted text reply is redundant noise in the approval queue.
+        # Whether the resume answers the ask is a deterministic fact, so code
+        # decides it and overrides the LLM's needs_reply=True. Guarded on
+        # (needs_resume OR already_sent): if the deterministic detector found no
+        # resume to send/sent, we KEEP drafting a text reply as the fallback --
+        # that is exactly the case where detect_resume_request missed the request
+        # (manual/W3 resume send covers actual delivery), so the HR still gets a
+        # response instead of silence.
+        suppressed_resume_reply = False
+        if needs_reply and intent == "resume_request" and (needs_resume or already_sent):
+            needs_reply = False
+            suppressed_resume_reply = True
+
         # Reply drafting is a separate step: intent classification ran think=False
         # (fast + direct); the reply is drafted think=True (deliberates over wording)
         # and only when a reply is actually needed. If drafting fails, keep the intent
@@ -132,6 +149,7 @@ class AnalyzeStep:
             "intent": intent,
             "needs_resume": needs_resume,
             "provider_used": provider_used,
+            "suppressed_resume_reply": suppressed_resume_reply,
         })
         return out
 

@@ -17,15 +17,21 @@ from pipeline.common.verify_session import VerifySessionStep
 from pipeline.run_logger import RunLogger
 from pipeline.w3.pipeline import W3Config, W3Pipeline
 from services.browser_context import close_browser, open_browser
+from tools.biz_logic.detect_resume import DetectResumeRequest
+from tools.browser.w2.accept_resume_card import AcceptResumeCard
+from tools.browser.w2.click_toolbar_send_resume import ClickToolbarSendResume
 from tools.browser.w2.navigate_to_chat_list import NavigateToChatList
 from tools.browser.w2.navigate_to_conversation import NavigateToConversation
 from tools.browser.w2.read_messages import ReadMessages
 from tools.browser.w2.send_chat_message import SendChatMessage
 from tools.browser.w3 import register_w3_browser_tools
+from tools.db.w2.clear_resume_queue import ClearResumeQueue
 from tools.db.w2.get_approved_replies import GetApprovedReplies
+from tools.db.w2.get_queued_resumes import GetQueuedResumes
 from tools.db.w2.invalidate_stale_reply import InvalidateStaleReply
 from tools.db.w2.mark_reply_sent import MarkReplySent
 from tools.db.w2.record_locate_attempt import RecordLocateAttempt
+from tools.db.w2.upsert_hr_conversation import UpsertHRConversation
 from tools.db.w2.write_hr_messages import WriteHRMessages
 from tools.registry import ToolRegistry
 
@@ -74,7 +80,14 @@ def run_w3(
         registry.register(SendChatMessage(browser=page))
         registry.register(ReadMessages(browser=page))
         register_w3_browser_tools(registry, page)
+        # Resume-send tools (queued-resume delivery): reuse W2's send tools + detector.
+        registry.register(AcceptResumeCard(browser=page))
+        registry.register(ClickToolbarSendResume(browser=page))
+        registry.register(DetectResumeRequest())
         registry.register(GetApprovedReplies(db=tracker))
+        registry.register(GetQueuedResumes(db=tracker))
+        registry.register(ClearResumeQueue(db=tracker))
+        registry.register(UpsertHRConversation(db=tracker))
         registry.register(MarkReplySent(db=tracker))
         registry.register(InvalidateStaleReply(db=tracker))
         registry.register(RecordLocateAttempt(db=tracker))

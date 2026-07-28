@@ -92,6 +92,7 @@ class HRConversation:
     wechat_dismissed: bool = False       # user dismissed the go-add-WeChat reminder
     last_msg_ts: int = 0                 # getGeekFriendList.lastTS (ms); scan-time last-message time
     last_analyzed_ts: int = 0            # last message ts we SUCCESSFULLY analyzed up to (dirty watermark)
+    resume_status: Optional[str] = None  # null|queued — manual "queue a resume" intent; W3 delivers then clears
     created_at: str = ""
 
 

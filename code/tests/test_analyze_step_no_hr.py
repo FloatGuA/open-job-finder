@@ -104,3 +104,62 @@ def test_hr_message_present_runs_llm():
     assert "analyze_hr_intent" in reg.calls
     assert "generate_reply" in reg.calls
     assert "update_hr_analysis" in reg.calls
+
+
+def _reg_for(detect_data, intent_data):
+    """Build a registry whose detect/intent tools return the given canned data."""
+    reg = _Registry()
+
+    def call(name, **kwargs):
+        reg.calls.append(name)
+        reg.call_kwargs = getattr(reg, "call_kwargs", {})
+        reg.call_kwargs[name] = kwargs
+        if name == "detect_resume_request":
+            return ToolResult(ok=True, data=detect_data)
+        if name == "analyze_hr_intent":
+            return ToolResult(ok=True, data=intent_data)
+        if name == "generate_reply":
+            return ToolResult(ok=True, data={"suggested_reply": "好的马上发", "provider_used": "test"})
+        if name == "update_hr_analysis":
+            return ToolResult(ok=True, data={})
+        raise AssertionError(f"unexpected: {name}")
+
+    reg.call = call
+    return reg
+
+
+def test_resume_request_with_resume_sent_suppresses_reply():
+    """A resume IS the response to a resume request: when intent=resume_request and
+    a resume was/will be delivered, code overrides the LLM's needs_reply=True so no
+    redundant text draft lands in the approval queue."""
+    reg = _reg_for(
+        detect_data={"needs_resume": True, "request_type": "hr_card", "already_sent": False},
+        intent_data={"intent": "resume_request", "needs_reply": True, "provider_used": "test"},
+    )
+    messages = [{"sender": "hr", "text": "[卡片] 发个简历"}]
+    out = AnalyzeStep(reg).run(conv=_Conv(), messages=messages)
+
+    assert out.status == StepStatus.SUCCESSFUL
+    assert out.needs_reply is False
+    assert out.suggested_reply is None
+    # Suppressed BEFORE drafting -- generate_reply must not even be called.
+    assert "generate_reply" not in reg.calls
+    assert reg.call_kwargs["update_hr_analysis"]["reply_status"] is None
+
+
+def test_resume_request_but_detector_missed_still_drafts():
+    """Fallback: LLM says resume_request but the deterministic detector found no
+    resume to send/sent (needs_resume=False, already_sent=False) -> we do NOT
+    suppress, so the HR still gets a text reply instead of silence."""
+    reg = _reg_for(
+        detect_data={"needs_resume": False, "request_type": None, "already_sent": False},
+        intent_data={"intent": "resume_request", "needs_reply": True, "provider_used": "test"},
+    )
+    messages = [{"sender": "hr", "text": "can you send your resume"}]
+    out = AnalyzeStep(reg).run(conv=_Conv(), messages=messages)
+
+    assert out.status == StepStatus.SUCCESSFUL
+    assert out.needs_reply is True
+    assert out.suggested_reply is not None
+    assert "generate_reply" in reg.calls
+    assert reg.call_kwargs["update_hr_analysis"]["reply_status"] == "pending"

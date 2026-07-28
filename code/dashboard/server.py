@@ -232,6 +232,9 @@ def _serialize_conversation(conv, messages: list[dict], job_url: str, job_title:
         "needs_reply": conv.reply_status in ("pending", "approved", "revision"),
         "reply_status": conv.reply_status,
         "reply_draft": reply_text,
+        # Manual resume-send queue state (null | 'queued'): frontend shows a
+        # "待发简历" tag + cancel button when queued (mirrors the reply flow).
+        "resume_status": conv.resume_status,
         "message_count": len(msgs),
     }
 
@@ -1214,6 +1217,33 @@ async def dismiss_reply(conv_id: str) -> JSONResponse:
     if conv is None:
         return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
     tracker.update_reply_approval(conv_id, "dismissed")
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/conversations/{conv_id}/queue-resume")
+async def queue_resume(conv_id: str) -> JSONResponse:
+    """Manually STAGE a resume send for this conversation (W2 detection-miss fallback).
+    DB-only: sets resume_status='queued', browser untouched, so it is fully cancellable
+    until W3 actually delivers it. Not an immediate send — mirrors approving a text
+    reply. Idempotent (re-queueing a queued conv is a no-op)."""
+    _initialize_state()
+    tracker = app.state.tracker
+    conv = tracker.get_hr_conversation(conv_id)
+    if conv is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    tracker.set_resume_status(conv_id, "queued")
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/conversations/{conv_id}/cancel-resume")
+async def cancel_resume(conv_id: str) -> JSONResponse:
+    """Un-stage a queued resume send (before W3 delivers it). Clears resume_status."""
+    _initialize_state()
+    tracker = app.state.tracker
+    conv = tracker.get_hr_conversation(conv_id)
+    if conv is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    tracker.set_resume_status(conv_id, None)
     return JSONResponse({"ok": True})
 
 
