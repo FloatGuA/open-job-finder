@@ -34,7 +34,7 @@ const SKELETON: Record<string, Record<string, string[]>> = {
   },
   w3: {
     scan: ['get_approved_replies', 'navigate_to_chat_list'],
-    locate: ['search_locate_conversation'],
+    locate: ['navigate_to_conversation', 'search_locate_conversation'],
     send: ['send_chat_message'],
     verify: ['read_messages', 'write_hr_messages', 'mark_reply_sent'],
   },

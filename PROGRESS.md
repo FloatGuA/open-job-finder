@@ -5,18 +5,18 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-28（审查整改一批：队列锁泄漏 + 多处 tool 失败当成功 + W1 抓卡误判无结果 + 依赖缺 DrissionPage + CLI 退役 + W2 错误计数） |
-| 当前版本 | 2.9.4.1                         |
+| 最后更新 | 2026-07-28（W3 成熟度 #3：verify 送达判据改「精确匹配 + 前后气泡数增量」根治历史假阳性；#2/#4 前批已修） |
+| 当前版本 | 2.9.6.2                         |
 
 ## 待跟进（另开会话）
 
 - **[2026-07-28 待做] W3 新鲜度闸漏「简历已发」system 事件**（审查 Should Fix，用户定本次只记不做）：`send_pipeline._last_nonsystem_sender` 只认 me/hr，简历发送成功是 **system 气泡**。场景：HR 要简历 → W2 `AnalyzeStep` 起草回复(pending) → `ResumeStep` 发附件(system)。此时最后一条非系统消息仍是 HR 的「要简历」→ 新鲜度闸通过 → W3 仍发批准的旧草稿。危害有限（回复与简历互补，非硬冲突），但确是水位盲区。**根治方向**：新鲜度判断纳入 resume-delivered 的 system marker，或记录**审批时的消息水位**（后者更彻底，覆盖所有「审批后发生过 system 事件」的情形）。
 - **[2026-07-28 待做] PDF 简历生成方案未定 + playwright 依赖去留**：PDF 简历功能未做完。当前代码路径是 WeasyPrint（`resume_manager.render_pdf`，Jinja2→WeasyPrint，依赖系统库 libpango；`ResumeManager` 目前 `server.py:137` 初始化但从不调用）。`requirements.txt` 的 `playwright` 当前只被两个根目录诊断脚本用，**暂保留**给未定的 PDF 方案（若改用 headless Chromium print-to-pdf 替代 WeasyPrint 则会用到）。**待办**：定 PDF 方案（WeasyPrint 继续 / 换 playwright），据此收敛 weasyprint / playwright 依赖并接线 `ResumeManager`。
 - **[已完成 2026-07-28] ~~W3 盲发过时草稿~~**：核心担心——用户手动回了 HR 后 W3 仍盲发批准时的旧草稿。**已修（见「已完成」）**：W3 `send_pipeline` 加发送前新鲜度闸——重扫会话，最后一条非系统消息若不是 HR（=批准后有人回过）→ 作废草稿（`invalidate_reply_for_reanalysis`：清 reply_status/text/intent + last_analyzed_ts=0 打回未分析）→ 下一轮 W2 重跑意图判断，要回才重起草进待审批。dry-run 在闸前短路；读失败保守跳过保草稿。**取舍**：重起草归 W2（不在 W3 内联 LLM），故不是当场重发而是下次 W2。**待真机 W2/W3 复核**：①闸在真机能正确识别「末条我方」②作废后下轮 W2 确实重分析（last_analyzed_ts=0 → unanalyzed 命中）。
-- **[2026-07-28 W3 审查遗留，本次未做] W3 其余成熟度问题**（用户定本次只修盲发 #1）：
-  - **#2 `get_approved_replies` 两份实现 + W3 未拿到 W2 的 O(1) 直开**：`tracker.get_approved_replies()`（SELECT *，含 job_id/时间戳）只被测试用；W3 真调的 `tools/db/w2/get_approved_replies.py` 只取 5 列、**无 job_id**，故 W3 定位仍走慢且脆的 `search_locate_conversation`，没吃到 W2 的 `navigate_to_conversation` 直开升级。最敏感的发送反而用最慢定位。
-  - **#3 verify 探针历史假阳性**：verify 用 `reply_text[:16]` 在重扫里找任意 `sender=='me'` 气泡，不区分是否刚发的那条；历史同开头我方消息会误判「已送达」。（本次盲发修复顺带缓解——末条我方会被闸拦下不再发。）
-  - **#4 W3 summary 被丢弃**：`_run_reply_workflow` 返回 `("reply 工作流完成", {})`，把 replies_sent/failed 扔掉，schedule_log 里 reply 行 summary 恒空，可观测性缺口。
+- **[2026-07-28 W3 审查遗留] W3 其余成熟度问题**（#2/#4 已修，见「已完成」；余 #3）：
+  - **#2 【已完成 2026-07-28】** ~~`get_approved_replies` 两份实现 + W3 未拿到 O(1) 直开~~：tool 收敛为薄壳调 `tracker.get_approved_replies()`（消灭第二份 SQL）+ 带出 job_id/boss_conv_id；W3 定位链改「直开优先（`navigate_to_conversation` Treatment D）→ 搜索兜底」。见「已完成」。
+  - **#3 【已完成 2026-07-28】** ~~verify 探针历史假阳性~~：改用「发送前/后精确匹配我方气泡数增量」（`_reply_landed`），彻底砍掉 16 字前缀 substring。见「已完成」。
+  - **#4 【已完成 2026-07-28】** ~~W3 summary 被丢弃~~：`_run_reply_workflow` 现返回 run_w3 的完整 summary，schedule_log reply 行不再恒空。见「已完成」。
   - **#5 W3 从不自动调度 =【已确认有意设计，非待办，2026-07-28 用户确认】**：scheduler 只挂 W1/W2，批准回复只能靠手动触发/显式链才发出——发真人要人把关，不自动调度是刻意的。勿再当缺口重提。
 - **[2026-07-31 待做] AI agent prompt 注入可配置化**：当前系统对提示词**没有可配置的注入点**——评分/意图分析/回复生成的 prompt 都是 `prompt_manager` 加载的固定模板，用户无法在不改代码的情况下往里注入自定义指令/上下文（如「我特别看重远程」「这家公司我认识内部人，语气可更主动」等）。需设计一个配置化注入机制：在 profile.yaml / config.yaml 里开可选的 prompt 注入字段，`PromptManager` 渲染时拼接进对应模板。先梳理有哪些 prompt 模板、各自该暴露哪个注入位、注入内容的作用域（全局 vs 每流程）。
 - **[已完成 2026-07-28] ~~W1 又出现大量跳过（skip）~~**：**根因＝去重机制误判，非新 bug**。诊断最近真机 run（`w1_20260724_1018`）：37 个跳过 100% 是 `classify_skip`，`prior_status` 全是 APPLIED/INTERVIEWING——即 DB 认为「已投过」而跳。但用户实测：这些被跳岗的 Boss 按钮**全是「立即沟通」**（= Boss 根本不认为你招呼过），说明 DB 的 APPLIED 记录是脏的（历史「投 150 记 63」+ backfill 补 96 佐证）。**处理：直接拆掉 W1 两层 DB 去重**（见「已完成」），相信 Boss 推送，投没投过唯一以 apply 那步真实按钮状态（`already_chatting`）为准——从根上消灭「误判跳过」这一整类问题。排查「30 天复活/去重为何误判」判定不值得。
@@ -39,6 +39,21 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- W3 成熟度 #3：verify 送达判据改「精确匹配 + 前后气泡数增量」，根治历史假阳性（2026-07-28，v2.9.6.2，599 passed，build 绿）
+  - **背景/危害**：旧 verify 用 `probe=_norm(text)[:16]` + `any(所有 me 气泡含前缀)` —— 对整段历史做**存在性 substring 匹配**，不区分是不是刚发的那条。回复模板化/开头雷同时，历史里存在一条同开头我方消息，本次即便 `send_chat_message` 静默失败，重扫也撞旧气泡 → 判送达 → `mark_reply_sent`（置 'sent' 保护态 + **清空 reply_text**）→ **真人 HR 没收到、草稿被销毁、终态不再重试**。恰违背 W3「验证到送达才标已发」的立身之本（记忆里的 `duration_ms:1` 老坑）。
+  - **修复（确定性纯函数，不取巧）**：新增模块级纯函数 `_reply_landed(pre_messages, post_messages, sent_text)`——数「与 sent **归一化后完全相等**的 me 气泡」在发送前/后各几条，`后 > 前`才算送达。复用发送前新鲜度闸那次 `read_messages`（`rd0`）作**零成本基线**（`pre_msgs`）。Verify 段把 substring `any` 换成它，重试/落库/mark 逻辑不变。
+  - **同时盖住两个边界**：①**HR 在验证窗内插话**（末条变 HR）——我方新气泡仍使计数 +1 → 仍判送达（避免「末条==sent」的假阴性→重发）；②**发送静默失败 + 历史有同文旧气泡**——计数不增 → 判未送达、保草稿（避免假阳性丢回复）。位置判据无需引入，增量已编码「新增了一条完全相同的文本」。
+  - **架构决策**：**不新建 Step、不新建 tool**。W3 的 `SendReplyPipeline` 是「每条回复一条流水线」+ inline 四 phase（Locate/Freshness/Send/Verify），不用独立 Step 类；Verify 早是 phase，原地改即可（起 VerifyStep = 造假 Step，违铁律）。三个副作用（`read_messages`/`write_hr_messages`/`mark_reply_sent`）已是现成 tool 复用；新判据是纯计算 → 模块级纯函数（同 `_norm`/`_last_nonsystem_sender` 约定）。
+  - **测试**：`test_w3_send_pipeline` +2（边界 B 发送失败+同文旧气泡→未送达 / 边界 A HR 插话→仍送达）；现有 verify 两例前后序列读法兼容不变。**599 passed**，build 绿，v2.9.6.2。
+  - **待办**：下次真机 W3 复核——真机重扫的消息顺序/文本归一化后与输入一致、增量判据不误伤正常送达。
+
+- W3 成熟度 #2/#4：get_approved_replies 收敛+带 job_id + 定位直开优先 + summary 回传（2026-07-28，v2.9.5.2，597 passed，build 绿）
+  - **#2-a 收敛 tool + 带出 id**：`tools/db/w2/get_approved_replies.py` 原**自持一份 SQL**（`SELECT conv_id,hr_name,company,reply_text,boss_conv_id`，**无 job_id**，违反「tools/db 薄壳、不自持 SQL」铁律）；`tracker.get_approved_replies()`（`SELECT *`，含全字段）反而只被测试用。改 tool 为薄壳调 tracker（SQL 只留一处），序列化**新增 `job_id`、`boss_conv_id`**。
+  - **#2-b W3 定位链升级「直开优先，搜索兜底」**：`send_pipeline` Locate 步——拿到 job_id+boss_conv_id（且 boss≠'62001'）→ 先 `navigate_to_conversation`（Treatment D 直开 `chat?id=&jobId=`，O(1)，其自带 DOM 滚动回退）；`nav.ok` 即 located。未拿到 id 或 navigate 失败 → 回退 `search_locate_conversation`（搜索框，触达沉底会话）。`w3_runner` 注册 `NavigateToConversation`。下游新鲜度闸 + verify 重扫双护栏兜住「开错/没开」的弱情况，故接受 navigate 的 ok 契约安全。三振出局（record_locate_attempt）不动。前端 `WorkflowTrack` W3 locate 骨架加 navigate_to_conversation。
+  - **#4 W3 summary 回传**：`workflow_orchestration._run_reply_workflow` 原返回 `("reply 工作流完成", {})` 丢弃 run_w3 的 summary（approved/located/replies_sent/failed/stopped）→ schedule_log reply 行 summary 恒空。改为 `summary = run_w3(...)` 并返回 `(msg, summary if dict else {})`，与 w1/w2 对称。
+  - **测试**：新 `test_get_approved_replies_tool.py`（2 例：带 job_id/boss_conv_id + 只取 approved/revision）；`test_w3_send_pipeline` +2（有 id 走 navigate 不碰 search / navigate 失败回退 search）；`test_workflow_orchestration` +1（reply summary 传导）。**597 passed**，`npm run build` 绿，v2.9.5.2。
+  - **待办**：下次真机 W3 复核——①直开在真机命中（id 来自 getGeekFriendList）②直开失败真能回退搜索框；余 #3 verify 探针假阳性未修。
 
 - 审查整改一批：队列锁泄漏 + tool 失败当成功 + W1 抓卡误判 + 依赖 + CLI 退役 + W2 计数（2026-07-28，v2.9.4.1，592 passed，build 绿）
   - **起因**：一轮代码审查列出 Must/Should/Nice 分级问题，逐条核对源码后确认（无一是把有意设计误当缺陷）。本次做 5 条 Must + 1 条 Should；W3 简历 marker（Should）与 PDF 方案按用户定只记待办。

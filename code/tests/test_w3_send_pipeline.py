@@ -120,6 +120,50 @@ def test_stale_conversation_voids_draft_and_skips_send():
     assert ("invalidate_stale_reply", {"conv_id": "c1"}) in reg.calls
 
 
+def test_not_delivered_when_only_an_identical_old_bubble_predates_send():
+    # Edge B: an OLD 'me' bubble identical to our draft already exists, but HR spoke
+    # last (fresh -> we send). The send SILENTLY FAILS (nothing appended). The old
+    # substring probe would match that historical bubble and falsely mark delivered
+    # (dropping the reply). Count-delta sees no NEW match -> not delivered, draft kept.
+    reg, out = _run({
+        "search_locate_conversation": ToolResult(ok=True, data={"located": True}),
+        "send_chat_message": ToolResult(ok=True, data={"input_cleared": True}),
+        "read_messages": [
+            ToolResult(ok=True, data={"messages": [
+                {"sender": "me", "text": "你好，方便聊聊吗"},  # old identical send
+                {"sender": "hr", "text": "在吗"},              # HR spoke last -> fresh
+            ]}),
+            ToolResult(ok=True, data={"messages": [           # post: nothing appended
+                {"sender": "me", "text": "你好，方便聊聊吗"},
+                {"sender": "hr", "text": "在吗"},
+            ]}),
+        ],
+    })
+    assert out.submitted is True and out.delivered is False
+    assert out.failure_reason == "deliver_unverified" and out.marked_sent is False
+    assert "mark_reply_sent" not in reg.names()
+
+
+def test_delivered_even_when_hr_interleaves_a_reply_in_verify_window():
+    # Edge A: HR sends another message in the ~5s verify window, so the LAST bubble
+    # is HR's, not ours. A "last message == sent" check would false-negative here;
+    # count-delta still sees our new 'me' bubble -> delivered.
+    reg, out = _run({
+        "search_locate_conversation": ToolResult(ok=True, data={"located": True}),
+        "send_chat_message": ToolResult(ok=True, data={"input_cleared": True}),
+        "read_messages": [
+            ToolResult(ok=True, data={"messages": [{"sender": "hr", "text": "在吗"}]}),
+            ToolResult(ok=True, data={"messages": [
+                {"sender": "hr", "text": "在吗"},
+                {"sender": "me", "text": "你好，方便聊聊吗"},  # our reply landed
+                {"sender": "hr", "text": "好的"},              # HR replied right after
+            ]}),
+        ],
+    })
+    assert out.delivered is True and out.marked_sent is True and out.failure_reason is None
+    assert ("mark_reply_sent", {"conv_id": "c1"}) in reg.calls
+
+
 def test_freshness_read_failure_keeps_draft():
     # Cannot re-scan -> cannot verify freshness -> skip WITHOUT voiding, so a
     # transient render glitch never destroys an approved reply (retries next run).
@@ -130,6 +174,31 @@ def test_freshness_read_failure_keeps_draft():
     assert out.failure_reason == "freshness_read_failed"
     assert "send_chat_message" not in reg.names()
     assert "invalidate_stale_reply" not in reg.names()
+
+
+_REPLY_WITH_IDS = {**_REPLY, "job_id": "encJob1", "boss_conv_id": "encBoss1"}
+
+
+def test_locate_prefers_direct_open_when_ids_present():
+    # job_id + boss_conv_id present -> navigate_to_conversation (O(1) direct-open) is
+    # used; the slow search box is NOT touched. dry_run short-circuits after locate.
+    reg = FakeReg({"navigate_to_conversation": ToolResult(ok=True, data={"method": "direct_url"})})
+    out = SendReplyPipeline(reg, logger=None, config=W3Config(dry_run=True)).run(_REPLY_WITH_IDS)
+    assert out.located is True and out.failure_reason == "dry_run"
+    assert "navigate_to_conversation" in reg.names()
+    assert "search_locate_conversation" not in reg.names()
+
+
+def test_locate_falls_back_to_search_when_direct_open_fails():
+    # Direct-open failed (e.g. ids stale) -> fall back to the search box, which locates
+    # it. Both are attempted, in order.
+    reg = FakeReg({
+        "navigate_to_conversation": ToolResult(ok=False, data={}, error="open didn't take"),
+        "search_locate_conversation": ToolResult(ok=True, data={"located": True}),
+    })
+    out = SendReplyPipeline(reg, logger=None, config=W3Config(dry_run=True)).run(_REPLY_WITH_IDS)
+    assert out.located is True and out.failure_reason == "dry_run"
+    assert reg.names().index("navigate_to_conversation") < reg.names().index("search_locate_conversation")
 
 
 def test_dry_run_locates_but_never_sends():

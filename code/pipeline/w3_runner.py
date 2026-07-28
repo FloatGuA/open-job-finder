@@ -2,10 +2,12 @@
 
 Entry point for dashboard/server.py (_run_reply_workflow) and main.py (--reply).
 W3 = send user-approved replies (approved/revision) with delivery verification.
-Reuses a subset of W2 tools (navigate_to_chat_list / send_chat_message /
-read_messages / write_hr_messages / get_approved_replies / mark_reply_sent)
-+ 1 W3-only tool (search_locate_conversation). Delivery is verified by
-re-scanning the thread with read_messages and persisting via write_hr_messages.
+Reuses a subset of W2 tools (navigate_to_chat_list / navigate_to_conversation /
+send_chat_message / read_messages / write_hr_messages / get_approved_replies /
+mark_reply_sent) + 1 W3-only tool (search_locate_conversation). Locate prefers
+navigate_to_conversation's O(1) direct-open (job_id + boss_conv_id) and only falls
+back to the search box. Delivery is verified by re-scanning the thread with
+read_messages and persisting via write_hr_messages.
 """
 import logging
 from pathlib import Path
@@ -16,6 +18,7 @@ from pipeline.run_logger import RunLogger
 from pipeline.w3.pipeline import W3Config, W3Pipeline
 from services.browser_context import close_browser, open_browser
 from tools.browser.w2.navigate_to_chat_list import NavigateToChatList
+from tools.browser.w2.navigate_to_conversation import NavigateToConversation
 from tools.browser.w2.read_messages import ReadMessages
 from tools.browser.w2.send_chat_message import SendChatMessage
 from tools.browser.w3 import register_w3_browser_tools
@@ -67,6 +70,7 @@ def run_w3(
         registry.logger = run_logger
 
         registry.register(NavigateToChatList(browser=page))
+        registry.register(NavigateToConversation(browser=page))
         registry.register(SendChatMessage(browser=page))
         registry.register(ReadMessages(browser=page))
         register_w3_browser_tools(registry, page)

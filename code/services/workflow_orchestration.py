@@ -132,7 +132,7 @@ class OrchestrationService:
         self._ensure()
         st = self._st
         hl = overrides.get("headless")
-        run_w3(
+        summary = run_w3(
             config=st.config, tracker=st.tracker, model_router=st.model_router,
             emitter=getattr(st, "emitter", None),
             dry_run=bool(overrides.get("dry_run") or False),
@@ -141,7 +141,7 @@ class OrchestrationService:
             debug=bool(overrides.get("debug", True)),
             data_dir=self._data_dir,
         )
-        return "reply 工作流完成", {}
+        return "reply 工作流完成", (summary if isinstance(summary, dict) else {})
 
     # -- the queue runner (WorkflowQueue's runner callback) ---------------------
 

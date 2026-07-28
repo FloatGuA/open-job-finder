@@ -132,6 +132,23 @@ def test_trigger_is_mapped_from_source(monkeypatch):
     assert seen[0] == "smoke_live"
 
 
+# ---- reply (W3) summary propagation -------------------------------------------
+
+
+def test_reply_workflow_propagates_w3_summary(monkeypatch):
+    """W3's summary (approved/located/replies_sent/failed) must reach the caller so
+    the schedule-log reply row isn't recorded with an empty summary. It used to
+    return ('reply 工作流完成', {}), discarding run_w3's counters."""
+    svc, state, _ = _service()
+    summary = {"approved": 2, "located": 2, "replies_sent": 1, "failed": 1, "stopped": False}
+    monkeypatch.setattr("pipeline.w3_runner.run_w3", lambda **kwargs: summary)
+
+    msg, raw = svc._run_reply_workflow({})
+
+    assert msg == "reply 工作流完成"
+    assert raw == summary
+
+
 # ---- daily-cap state ----------------------------------------------------------
 
 
