@@ -20,13 +20,11 @@ def _profile_summary(profile) -> str:
         cities = profile.cities
         salary = profile.salary
         experience = profile.experience
-        notes = profile.extra_notes
     else:
         kw = profile.get("keywords") or []
         cities = profile.get("cities") or []
         salary = profile.get("salary") or ""
         experience = profile.get("experience") or []
-        notes = profile.get("extra_notes") or ""
 
     parts = []
     if kw:
@@ -37,8 +35,6 @@ def _profile_summary(profile) -> str:
         parts.append(f"Expected salary: {salary}")
     if experience:
         parts.append(f"Experience: {'; '.join(experience)}")
-    if notes:
-        parts.append(f"Notes: {notes}")
     return " | ".join(parts)
 
 

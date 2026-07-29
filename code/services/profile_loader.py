@@ -21,7 +21,8 @@ class Profile:
     position_types: List[str] = field(default_factory=list)
     industries: List[str] = field(default_factory=list)
     boss_online: bool = False
-    extra_notes: str = ""
+    # 用户自定义 prompt 注入（global 系统层 + 各 task 层）；见 PromptManager。
+    prompt_injection: dict = field(default_factory=dict)
     name: str = ""  # 投递不使用（Boss 招呼全自动）；保留仅为兼容历史引用
 
 
@@ -50,6 +51,6 @@ class ProfileLoader:
             position_types=list(raw.get("position_types") or []),
             industries=list(raw.get("industries") or []),
             boss_online=bool(raw.get("boss_online", False)),
-            extra_notes=str(raw.get("extra_notes") or ""),
+            prompt_injection=dict(raw.get("prompt_injection") or {}),
             name=str(raw.get("name") or ""),
         )

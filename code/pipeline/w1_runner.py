@@ -63,8 +63,8 @@ def run_w1(
     #    wedging the queue. Let it raise so run_item's except path logs + clears the lock.)
     profile = ProfileLoader(data_dir / "profile.yaml").load()
 
-    # 2. Build prompt manager
-    prompt_manager = PromptManager()
+    # 2. Build prompt manager (with user-configured prompt injection from profile)
+    prompt_manager = PromptManager(injection=profile.prompt_injection)
 
     # 4. Build search URL if not provided
     if not search_url:

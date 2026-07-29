@@ -858,7 +858,7 @@ async def get_profile() -> JSONResponse:
         "districts": profile.get("districts") or [],
         "position_types": profile.get("position_types") or [],
         "industries": profile.get("industries") or [],
-        "extra_notes": profile.get("extra_notes") or "",
+        "prompt_injection": profile.get("prompt_injection") or {},
     })
 
 
@@ -885,10 +885,11 @@ async def save_profile(request: Request) -> JSONResponse:
         "districts": data.get("districts") or [],
         "position_types": data.get("position_types") or [],
         "industries": data.get("industries") or [],
-        # extra_notes (LLM scoring free-text) — preserve when not provided so a
-        # save from a form that omits it does not wipe it. Single source of truth
-        # for all profile.yaml fields now lives on /api/profile (Settings merge).
-        "extra_notes": data.get("extra_notes", existing.get("extra_notes", "")),
+        # prompt_injection (user-customized prompt injection: global + per-task) —
+        # preserve when not provided so a save from a form that omits it does not
+        # wipe it. Single source of truth for all profile.yaml fields now lives on
+        # /api/profile (Settings merge).
+        "prompt_injection": data.get("prompt_injection", existing.get("prompt_injection", {})),
     }
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     cm.save_profile(updates)

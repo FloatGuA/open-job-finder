@@ -67,7 +67,7 @@ config.yaml 的 w1: / w2:            ← 出厂默认（最低优先级 fallback
 
 搜索筛选字段（喂给 `services/boss_search_url.py` 拼搜索 URL）：
 `keywords` / `cities` / `experience` / `degree` / `salary` / `job_types` / `financing` / `districts` / `position_types` / `industries` / `boss_online`。
-另有 `extra_notes`（评分 LLM 的补充说明）。
+另有 `prompt_injection`（用户自定义 prompt 注入，替代旧的 `extra_notes`）：一个字典，`global` 是系统层（注入进评分/意图/回复全部 3 条工作 prompt），`score_job`/`analyze_intent`/`generate_reply` 是任务层（各自只注入进同名 prompt）。全部可选，空/缺省 = 不注入。渲染在 `PromptManager.render()` 出口统一追加一个划界的"求职者本人补充指令"块——全局注入必须在此处而非塞进 `system.md`，因为 `generate_reply` 不吃 system prompt。
 
 > 注意：`profile.yaml` **不含** `score_threshold`（那是 Layer 3 运行旋钮）、也**不需要** `name`（投递的打招呼语由 Boss 平台自动发送，全流程不消费 name）。
 

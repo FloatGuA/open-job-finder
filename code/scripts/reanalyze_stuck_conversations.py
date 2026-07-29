@@ -32,6 +32,7 @@ sys.path.insert(0, str(CODE_DIR))
 from pipeline.w2.steps.analyze import AnalyzeStep
 from services.config_manager import get_config_manager
 from services.llm_client import build_model_router
+from services.profile_loader import ProfileLoader
 from services.prompt_manager import PromptManager
 from services.tracker import ApplicationTracker
 from tools.db.w2 import register_w2_tools
@@ -75,7 +76,9 @@ def main() -> int:
 
     # 真跑：装配与 W2 相同的 registry（无浏览器，只需 db+llm 工具）
     model_router = build_model_router(config)
-    prompt_manager = PromptManager()
+    # 与生产一致：带上用户自定义 prompt 注入
+    profile = ProfileLoader(CODE_DIR / "data" / "profile.yaml").load()
+    prompt_manager = PromptManager(injection=profile.prompt_injection)
     tool_providers = config.get("llm", {}).get("tool_providers", {})
     registry = ToolRegistry(browser=None, db=tracker, llm_client=model_router, prompt_manager=prompt_manager)
     register_w2_tools(registry, tracker, model_router, prompt_manager, tool_providers=tool_providers)

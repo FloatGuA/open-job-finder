@@ -61,8 +61,8 @@ def run_w2(
     #    was misrecorded as success by the queue runner and leaked the browser mutex.)
     profile = ProfileLoader(data_dir / "profile.yaml").load()
 
-    # 2. Build prompt manager
-    prompt_manager = PromptManager()
+    # 2. Build prompt manager (with user-configured prompt injection from profile)
+    prompt_manager = PromptManager(injection=profile.prompt_injection)
 
     # 4. Notify emitter that workflow is starting (run_meta = launcher + run knobs).
     run_meta = {

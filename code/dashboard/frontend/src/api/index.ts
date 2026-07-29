@@ -105,7 +105,12 @@ export interface Profile {
   position_types?: string[]
   industries?: string[]
   boss_online?: boolean
-  extra_notes?: string
+  prompt_injection?: {
+    global?: string
+    score_job?: string
+    analyze_intent?: string
+    generate_reply?: string
+  }
 }
 
 

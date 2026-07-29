@@ -99,7 +99,7 @@ function SaveButton({ saving, saved, onClick, savedText }: { saving: boolean; sa
   )
 }
 
-// \u2500\u2500 Tab 1: \u6c42\u804c\u504f\u597d (single form \u2192 profile.yaml, incl extra_notes) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// \u2500\u2500 Tab 1: \u6c42\u804c\u504f\u597d (single form \u2192 profile.yaml, incl prompt_injection) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 interface PrefState {
   salary: string
   keywords: string
@@ -109,12 +109,15 @@ interface PrefState {
   job_types: string[]
   financing: string[]
   scale: string[]
-  extra_notes: string
+  injGlobal: string
+  injScoreJob: string
+  injAnalyzeIntent: string
+  injGenerateReply: string
 }
 
 function PreferencesTab() {
   const [form, setForm] = useState<PrefState>({
-    salary: '', keywords: '', cities: [], experience: [], degree: [], job_types: [], financing: [], scale: [], extra_notes: '',
+    salary: '', keywords: '', cities: [], experience: [], degree: [], job_types: [], financing: [], scale: [], injGlobal: '', injScoreJob: '', injAnalyzeIntent: '', injGenerateReply: '',
   })
   const [readOnly, setReadOnly] = useState<{ districts?: string[]; position_types?: string[] }>({})
   const [loading, setLoading] = useState(false)
@@ -137,7 +140,10 @@ function PreferencesTab() {
           job_types: p.job_types ?? [],
           financing: p.financing ?? [],
           scale: p.scale ?? [],
-          extra_notes: p.extra_notes ?? '',
+          injGlobal: p.prompt_injection?.global ?? '',
+          injScoreJob: p.prompt_injection?.score_job ?? '',
+          injAnalyzeIntent: p.prompt_injection?.analyze_intent ?? '',
+          injGenerateReply: p.prompt_injection?.generate_reply ?? '',
         })
         setReadOnly({ districts: p.districts, position_types: p.position_types })
       })
@@ -161,7 +167,12 @@ function PreferencesTab() {
         job_types: form.job_types,
         financing: form.financing,
         scale: form.scale,
-        extra_notes: form.extra_notes,
+        prompt_injection: {
+          global: form.injGlobal,
+          score_job: form.injScoreJob,
+          analyze_intent: form.injAnalyzeIntent,
+          generate_reply: form.injGenerateReply,
+        },
       }
       await API.saveProfile(payload)
       setSaved(true)
@@ -215,14 +226,44 @@ function PreferencesTab() {
         <FieldRow label={'\u878d\u8d44\u9636\u6bb5'}>
           <ChipSelect options={FINANCING_OPTIONS} selected={form.financing} onChange={setChip('financing')} />
         </FieldRow>
-        <FieldRow label={'\u8bc4\u5206\u5907\u6ce8\uff08\u63d0\u4f9b\u7ed9 LLM \u7684\u989d\u5916\u8981\u6c42/\u504f\u597d\uff09'}>
+        <FieldRow label={'\u5168\u5c40\u6ce8\u5165\uff08\u5173\u4e8e\u6211\uff0c\u4f5c\u7528\u4e8e\u6240\u6709 AI \u73af\u8282\uff09'}>
           <textarea
             className={inputCls}
-            style={{ ...inputStyle, resize: 'vertical', minHeight: '80px' }}
-            value={form.extra_notes}
-            onChange={(e) => setForm((f) => ({ ...f, extra_notes: e.target.value }))}
-            placeholder={'\u5982\uff1a\u504f\u597d\u8fdc\u7a0b\u3001\u907f\u514d\u5916\u5305\u3001\u770b\u91cd\u6280\u672f\u6808\u5339\u914d\u2026'}
-            rows={3}
+            style={{ ...inputStyle, resize: 'vertical', minHeight: '72px' }}
+            value={form.injGlobal}
+            onChange={(e) => setForm((f) => ({ ...f, injGlobal: e.target.value }))}
+            placeholder={'\u5982\uff1a\u6211\u662f 2024 \u5c4a\u5e94\u5c4a\u751f\uff0c\u522b\u9ad8\u4f30\u6211\u7684\u7ecf\u9a8c\uff1b\u6211\u7279\u522b\u770b\u91cd\u8fdc\u7a0b\u529e\u516c'}
+            rows={2}
+          />
+        </FieldRow>
+        <FieldRow label={'\u8bc4\u5206\u6ce8\u5165\uff08\u53ea\u5f71\u54cd W1 \u804c\u4f4d\u6253\u5206\uff09'}>
+          <textarea
+            className={inputCls}
+            style={{ ...inputStyle, resize: 'vertical', minHeight: '72px' }}
+            value={form.injScoreJob}
+            onChange={(e) => setForm((f) => ({ ...f, injScoreJob: e.target.value }))}
+            placeholder={'\u5982\uff1a\u63d0\u4f9b\u8fdc\u7a0b\u529e\u516c\u7684\u5c97\u4f4d\u914c\u60c5\u52a0\u5206'}
+            rows={2}
+          />
+        </FieldRow>
+        <FieldRow label={'\u610f\u56fe\u6ce8\u5165\uff08\u53ea\u5f71\u54cd W2 \u5bf9 HR \u610f\u56fe\u7684\u5224\u65ad\uff09'}>
+          <textarea
+            className={inputCls}
+            style={{ ...inputStyle, resize: 'vertical', minHeight: '72px' }}
+            value={form.injAnalyzeIntent}
+            onChange={(e) => setForm((f) => ({ ...f, injAnalyzeIntent: e.target.value }))}
+            placeholder={'\u5982\uff1aHR \u8bf4\u201c\u65b9\u4fbf\u53d1\u4e2a\u5fae\u4fe1\u5417\u201d\u89c6\u4e3a\u8981\u7b80\u5386\u7684\u524d\u594f'}
+            rows={2}
+          />
+        </FieldRow>
+        <FieldRow label={'\u56de\u590d\u6ce8\u5165\uff08\u53ea\u5f71\u54cd\u7ed9 HR \u7684\u56de\u590d\u8349\u7a3f\uff09'}>
+          <textarea
+            className={inputCls}
+            style={{ ...inputStyle, resize: 'vertical', minHeight: '72px' }}
+            value={form.injGenerateReply}
+            onChange={(e) => setForm((f) => ({ ...f, injGenerateReply: e.target.value }))}
+            placeholder={'\u5982\uff1a\u8bed\u6c14\u53ef\u66f4\u4e3b\u52a8\uff0c\u53ef\u8868\u8fbe\u5e0c\u671b\u5c3d\u5feb\u6c9f\u901a'}
+            rows={2}
           />
         </FieldRow>
 
