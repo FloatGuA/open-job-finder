@@ -5,10 +5,12 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-29（HR 索要简历两面全链路真机验证通过并收口；下一任务＝prompt 注入可配置化 + 分级） |
-| 当前版本 | 2.11.0.4                        |
+| 最后更新 | 2026-07-29（LLM eval 闭环首跑：intent 准确率≠needs_reply 准确率，痛点误回仅 4 条且是审批草稿非错发，接受现状） |
+| 当前版本 | 2.12.1.1                        |
 
 ## 待跟进（另开会话）
+
+- **[进行中 2026-07-29] LLM eval 阶段1 待用户标注 + 阶段2/3**：①**用户标注** `data/eval/intent_golden.jsonl` 的 61 条 `human_intent`（六选一）→ 跑 `run_intent_eval.py` 出真实精度 + `--baseline` 对照看注入是否有正收益；标注后金标集扩为"活资产"（随生产新失败模式追加）。②**阶段2** `score_job` 决策级 precision/recall（人标"想不想要这个岗"）+ 顺带校准 `score_threshold`。③**阶段3** `generate_reply` LLM-as-judge（先拿审批批准/驳回/改写动作校准 judge）+ 采集审批通过率/改写编辑距离作生产指标；补 `safe_parse_json` 层级采集（格式可靠性）+ 一致性采样（同输入跑 N 次量方差）。方法论调研见本会话「已完成」条。
 
 - **[已完成 + 真机验证通过 2026-07-29] ~~W3 手动发简历兜底~~**：见「已完成」。**装填→待发→可取消→W3 发送**模型（用户纠正了最初「立即发不可撤销」的设计）：点「发简历」只写 `resume_status=queued`（DB，可取消）→ 并入「待发送」tab → W3 运行时 `SendResumePipeline` 幂等发送→清 queued+stage=resume_sent。**前端交互（装填/取消/待发送合并/徽章）+ W3 真发简历落地均已真机验证通过（用户确认无问题）。** 本项收口。
 - **[已完成 2026-07-28] ~~意图判断改进：HR 索要简历且简历已发 → 不应再起草回复~~**：见「已完成」。`AnalyzeStep` 加确定性抑制闸——`intent==resume_request 且（needs_resume 本轮将发 或 already_sent 已发）→ needs_reply=False`，覆盖 LLM 误判、生成回复前短路。检测漏判时（needs_resume/already_sent 都 False）**不抑制**、仍起草兜底，正好与手动发简历衔接。**待真机复核**：真机 W2 撞 resume_request 会话不再产生多余待审批草稿。
@@ -21,7 +23,7 @@
   - **#3 【已完成 2026-07-28】** ~~verify 探针历史假阳性~~：改用「发送前/后精确匹配我方气泡数增量」（`_reply_landed`），彻底砍掉 16 字前缀 substring。见「已完成」。
   - **#4 【已完成 2026-07-28】** ~~W3 summary 被丢弃~~：`_run_reply_workflow` 现返回 run_w3 的完整 summary，schedule_log reply 行不再恒空。见「已完成」。
   - **#5 W3 从不自动调度 =【已确认有意设计，非待办，2026-07-28 用户确认】**：scheduler 只挂 W1/W2，批准回复只能靠手动触发/显式链才发出——发真人要人把关，不自动调度是刻意的。勿再当缺口重提。
-- **[下一个任务 · 2026-07-29 用户指定] AI agent prompt 注入可配置化 + 注入分级**：当前系统对提示词**没有可配置的注入点**——评分/意图分析/回复生成的 prompt 都是 `prompt_manager` 加载的固定模板，用户无法在不改代码的情况下往里注入自定义指令/上下文（如「我特别看重远程」「这家公司我认识内部人，语气可更主动」等）。**两部分**：①**可配置化**——在 profile.yaml / config.yaml 开可选 prompt 注入字段，`PromptManager` 渲染时拼接进对应模板；②**注入分级**（用户强调，确切含义待确认）——注入不是一个平铺的字符串，要分级别/层次（可能维度：作用域全局 vs 每流程 vs 每职位/每 HR；或注入强度 强指令 vs 软偏好；或按 prompt 类型分级）。**⚠️ 新会话动手前先做两件事（第15条）**：1) 跟用户确认「注入分级」到底指哪种分级维度；2) 先梳理 `prompt_manager` + `prompts/` 下有哪些模板、各暴露哪个注入位。梳理清楚 + 分级语义确认后再动手，别直接写。
+- **[已完成 2026-07-29] ~~AI agent prompt 注入可配置化 + 注入分级~~**：见「已完成」。分级语义与用户对齐为**作用域分级 = 系统层(global) + 任务层(per-task)**（否掉强度分级/运行时粒度，simplicity first）。旧 `extra_notes`（只喂评分的单一注入口）判定为冗余、删除，由 `prompt_injection.global` 取代。**待真机复核**：真机 W1/W2 填了注入后，评分/意图/回复的 prompt 尾部确实带上「求职者本人补充指令」块。
 - **[已完成 2026-07-28] ~~W1 又出现大量跳过（skip）~~**：**根因＝去重机制误判，非新 bug**。诊断最近真机 run（`w1_20260724_1018`）：37 个跳过 100% 是 `classify_skip`，`prior_status` 全是 APPLIED/INTERVIEWING——即 DB 认为「已投过」而跳。但用户实测：这些被跳岗的 Boss 按钮**全是「立即沟通」**（= Boss 根本不认为你招呼过），说明 DB 的 APPLIED 记录是脏的（历史「投 150 记 63」+ backfill 补 96 佐证）。**处理：直接拆掉 W1 两层 DB 去重**（见「已完成」），相信 Boss 推送，投没投过唯一以 apply 那步真实按钮状态（`already_chatting`）为准——从根上消灭「误判跳过」这一整类问题。排查「30 天复活/去重为何误判」判定不值得。
 - **[部分完成 2026-07-28] 投递失败截图 + 排查投递失败根因**：①**截图已改好**（见「已完成」）——最大化窗口 + 全页截图（`full_page=True`）+ 命名带 run_id（`{run_id}_{job_id}_{ts}.png`，能定位到某次 run 的某张卡）+ `open_browser` 加 `--window-size=1920,1080`（headless 默认 ~800px 视口是右侧面板被切、按钮不在画面的根因）。②**根因排查待下次真机**：现在失败截图能看到完整详情面板 + 投递按钮区，下次真机 W1 撞 `button_not_found` 就能据图定位（选择器失配？按钮在 footer？未渲染完？）。此前 3 例 `button_not_found` 的旧截图因视口太窄看不到按钮，无法诊断。
 - **[2026-07-22 已被整改收口] 冒烟测试相关待跟进**：下方 2026-07-10 的层2/层3 冒烟条目均已被 2026-07-21~22 的「阶段0 冒烟可信化」取代——冒烟加了 covered 三态、走队列、run_diagnostics 诊断器，并多次 live 冒烟真机验证（ok=True/fully_covered=True）。历史条目保留可追溯，不再是活跃待办。
@@ -42,6 +44,45 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- LLM eval 闭环首跑 + 意图 prompt 调优（2026-07-29，v2.12.1.1，618 passed）
+  - **闭环首次跑通**（用户标注 58/61 金标后）：harness 出总准确率 + 混淆矩阵；诊断脚本 `diagnose_needs_reply.py` 补上**needs_reply 层面**评估（更贴近生产决策）。
+  - **核心发现**：**intent 准确率 ≠ needs_reply 准确率**——intent 53.4% 但 needs_reply 89.7%。因为 14 条 `general_notice→resume_request` 误判 100% 有 `already_sent=True`，被 `resume_request+简历已发→不回` 派生逻辑救回、**不造成误回**。intent 标签难看多是观测性问题，不是决策问题。
+  - **用户痛点定位**：「发完简历后误回」在新架构下只剩 **4 条**，全是 `general_notice→general_inquiry`（客套被读成询问）。
+  - **prompt 调优实验**（加「按 HR 最近消息判、别因历史简历判 resume_request」+ 收紧 notice/inquiry）：intent 准确率 53.4%→**65.5%**（resume 过判 14→7 砍半），但 **needs_reply 87.9%（噪声内持平）、4 条误回纹丝未动**——qwen3:8b 分不清那 4 条客套/询问，prompt 拧不动（小模型细微语义上限）。**结论：改动改的是标签好看度，非痛点解药。**
+  - **重新定性 + 决策（用户选 a）**：这 4 条误回**是待审批草稿、不是错发给 HR**（回复须批准才发）——审批门把「误回」降级为「草稿噪声」，4/58≈7% 手动驳即可，危害低。**接受现状 + 留 prompt 改动**（intent 标签提升对观测有用，needs_reply 在噪声内）。
+  - **遗留认知**：金标 58 条、稀有类样本少（interview_invite 3/resume_request 2）指标抖动大——想继续调需扩样本；痛点若要再压，杠杆是换 powerful 模型跑意图（未做）。产物 `diagnose_needs_reply.py` 保留可复用。
+
+- 意图 taxonomy 重构：needs_reply 折叠进 intent（general 拆 inquiry/notice；LLM 不再自由输出 needs_reply）（2026-07-29，v2.12.1.1，618 passed，build 绿）
+  - **动机**：做意图 eval 时发现设计瑕疵——`intent` 和 `needs_reply` 是 LLM 输出的**两个独立字段**，会打架（如 rejection 却 needs_reply=true）且要单独标/评。审视联动发现：**除 general 外，其余 5 类的 needs_reply 几乎由 intent 唯一决定**。用户提议把 needs_reply 折叠进 intent（general 拆成"需回"/"不回"两类）。
+  - **新设计（models judge / code decides）**：LLM 只判**语义 intent**（7 类）；`needs_reply` 由 code 查表得出，不再问 LLM。
+    - 枚举 6→7：`general` 拆成 `general_inquiry`（HR 询问/需回应）+ `general_notice`（客套/通知/无需回应）。
+    - 查表 `default_needs_reply`：interview_invite/offer/general_inquiry → 回；rejection/general_notice/unknown/resume_request → 不回。
+    - `resume_request` 的 needs_reply **完全由运行时检测派生**（不看查表默认）：简历发得出/已发→不额外回；仅检测漏判（简历发不出）时破例起草文字回复兜底。取代旧「抑制闸」（语义等价、方向更顺）。
+    - rejection 默认**不回**（用户确认：被拒静默、不打扰）。
+  - **改动**：`prompts/analyze_intent.md`（枚举+去 needs_reply 字段）/ `tools/llm/analyze_intent.py`（`_VALID_INTENTS` 7 类 + `_NEEDS_REPLY_INTENTS` 查表 + `_OUTPUT_SCHEMA` 去 needs_reply）/ `pipeline/w2/steps/analyze.py`（resume_request 派生 needs_reply）/ 前端 `intentMeta.ts`+`interpret.ts`（补 2 新标签，保留旧 general 兼容存量）/ eval 三件套枚举 + 标注器重生成。测试 +1（查表守门）、改 3（旧 general→inquiry、resume mock needs_reply）。
+  - **存量兼容**：DB 历史 `general`（177 条）不迁移——新代码不再写它，filter/前端 fallback 都容得下，与已有 greeting/info_request 等历史值共存（同 [[w1-w2-status-revival]] 思路）。
+  - **联动 eval**：golden label 空间同步为新 7 类；标注器选项已换（general→一般询问·需回 / 一般通知·不回）。**待用户标注**。
+
+- LLM eval 阶段1：意图分类金标 + eval harness（2026-07-29，617 passed；未升版本——纯 dev 工具、无前端 build）
+  - **动机**：刚加的 prompt 注入无 eval 就是盲改。先调研 LLM eval 方法论（金标集从真实生产来 / 精度≠可靠性两维 / LLM-as-judge 须先对齐人标 / 回归当质量闸），得出关键洞察——**本项目 3 个 LLM 判断点可评估性完全不同**：`analyze_intent`（6 类分类，最客观，混淆矩阵）＞`score_job`（评"投/跳"决策而非分数）＞`generate_reply`（开放文本，须 rubric/judge，但审批动作是免费人标）。**从最客观、真实数据现成的 analyze_intent 起步。**
+  - **数据现成**：jobs.db 有 365 个含真实 HR 消息的会话（general 177/resume_request 92/interview_invite 41/rejection 40/unknown 14/offer 1）。
+  - **产物（`code/scripts/eval/`，代码进 git）**：
+    - `export_intent_golden.py`：按已存 intent 分层抽样（稀有/高代价类过采）→ 导出待标注 JSONL。已跑，61 条。
+    - `run_intent_eval.py`：忠实复刻生产（只传 conv_id/messages/company，**不传 job_title**）跑 `analyze_hr_intent` → 总准确率 + 逐类 P/R + 混淆矩阵 + **高代价错误专项**（漏判 resume_request=简历发不出 / 误判 rejection=放弃活线索 / 漏判 interview_invite）。支持 `--baseline` 关注入做 A/B。报告渲染已用合成数据验证正确。
+    - `build_annotator.py`：读金标 → 生成本地网页标注器 `data/eval/annotate_intents.html`（聊天气泡渲染 HR/我/系统 + 点按钮选意图 + localStorage 暂存 + 导出回 JSONL）——解决"手改 JSONL 太累"。⚠️ 含 PII，**本地打开、不用 Artifact/不上传**。
+  - **⚠️ PII 隔离**：金标数据落 `code/data/eval/`（整目录已 gitignore）——含真实公司/HR/消息，**只有 eval 代码进 git，数据永不进 git**。
+  - **协作断点（待用户做）**：金标 ground truth 必须**人工标注**——`model_intent` 仅是模型历史判断（拿它当金标=模型自评，无意义）。用户需打开 `data/eval/intent_golden.jsonl` 逐行填 `human_intent`（六选一），再跑 harness 出真实精度 + 给注入做 A/B。
+
+- Prompt 注入可配置化 + 注入分级（系统层 global + 任务层 per-task；删 extra_notes）（2026-07-29，v2.12.0.1，617 passed，build 绿）
+  - **背景/动机**：评分/意图/回复三条工作链的 prompt 都是 `PromptManager` 加载的固定模板，用户无法在不改代码的前提下往里注入自定义指令（「我是应届生别高估经验」「远程岗位加分」「回复语气更主动」等）。
+  - **调研先行**：①全项目 LLM 调用点摸清——核心 3 个走 PromptManager 的工作 tool（`score_job`/`analyze_hr_intent`/`generate_reply`）+ 休眠的简历生成 prompt（内联字符串，不纳入本次）+ selfcheck 探针（无关）；②研 Agent prompt 通行范式——分层架构（稳定→易变：system 策略/任务模板/**用户偏好注入**/运行时数据）、Claude Code 的 `heron_brook`/CLAUDE.md「服务端可控注入槽」模式、小而专优于一坨大 blob、可信指令 vs 不可信上下文要区分。
+  - **「分级」= 作用域分级（与用户对齐后定）**：`global` 系统层（注入进全部 3 条链）+ 3 个任务层（`score_job`/`analyze_intent`/`generate_reply` 各自只进同名 prompt），渲染叠加。否掉「强度分级 hard/soft」（LLM 已能从措辞辨强弱，加 level 是过度工程）与「运行时粒度 每职位/每 HR」（配置面爆炸、无真实需求），simplicity first。
+  - **extra_notes 删除（非升格）**：旧 `extra_notes` 实质是「只喂评分的单一注入口」，在 global+per-task 齐全后能表达的都被覆盖 → 冗余，删。当前值为空，零迁移。落点：`profile.yaml` 删字段加 `prompt_injection` 块 / `Profile` dataclass 删 `extra_notes` 加 `prompt_injection: dict` / `score_job._profile_summary` 删 `Notes:` / `/api/profile` 读写 + Settings 表单 → 4 段注入框。
+  - **渲染接法（改动集中在 PromptManager）**：构造多接 `injection` dict（来自 `profile.prompt_injection`），`render()` 出口统一追加一个划界的「## 求职者本人的补充指令（可信，优先遵循；区别于 HR 消息等外部输入）」块。**关键**：全局注入必须在 render 层追加、不能塞进 `system.md`——因为 `generate_reply` 不吃 system prompt，只有 render 出口能一处覆盖含 reply 在内的全部 3 条链。白名单 `_TASK_INJECTION_NAMES` 杜绝无关 profile 键泄进 prompt。两 runner（w1/w2）+ reanalyze 脚本传 `injection=profile.prompt_injection`；W3 不渲染 prompt 故不动。
+  - **前端**：Settings「求职偏好」tab 把单个「评分备注」textarea 换成 4 段注入 textarea（global/score_job/analyze_intent/generate_reply），走同一 saveProfile；api `Profile` 类型 extra_notes → `prompt_injection`。CJK 用 scratchpad Python 脚本转字面量 `\uXXXX`（本环境 Edit 会解码 \uXXXX、raw CJK 又不自动转义），产物已 utf-8 校验 4 标签正确。
+  - **测试**：617 passed（新增 `tests/test_prompt_injection.py` 5 例：无注入不变 / global 覆盖全部含 reply / task 层不外溢 / global+task 叠加 / 无关键不泄漏）。`npm run build` 绿（tsc 无悬空引用），`N` 自增到 2.12.0.1。
+  - **端到端串联验证**：真实 `profile.yaml` → ProfileLoader → PromptManager → `render('score_job')` 尾部正确带注入块（PYTHONUTF8=1 验证）。**待真机 W1/W2 复核** LLM 是否遵循注入。
 
 - HR 索要简历场景两面：意图抑制冗余回复（B）+ 手动发简历兜底·装填待发模型（A）（2026-07-29，v2.11.0.4，612 passed，build 绿，**前端 + W3 真机验证全部通过**，已 commit 182157e + push）
   - **待发送合并（v2.11.0.4，真机验证 OK）**：装填的待发简历并入「待发送」tab（`matchesTabFilter` 的 SEND_FILTER = `isQueuedForSend || resume_status==='queued'`），列表行加绿色「待发简历」徽章区分，顶部黄条计数/文案涵盖简历。实时进出 tab（装填/取消即时）。用户已真机验证：装填→待发送 tab 显示带徽章→取消即时消失。**后端重启坑坐实**：之前"点了没反应"根因＝运行中的旧 server 用 `python -m uvicorn ...`（**无 `--reload`**，7/28 启动）没加载新路由 → `/queue-resume` 404 静默回滚；已停旧进程、带 `--reload` 重启，`queue-resume` 探针返回我方 handler 的 404 证明路由生效。
