@@ -97,6 +97,24 @@ class CardPipeline:
                 },
             )
 
+            # Eval-collection: record EVERY real scoring (applied AND skipped) so a
+            # re-scorable golden accrues for score-quality eval. Placed before the
+            # threshold branch so both sides are captured. Non-fatal -- instrumentation
+            # must never fail an apply (registry.call returns a ToolResult, never raises).
+            self._reg.call(
+                "record_scored_job",
+                job_id=card.job_id,
+                title=card.title,
+                company=card.company,
+                jd_text=jd_text,
+                score=score,
+                dimensions=score_res.data.get("dimensions", {}),
+                reason=score_res.data.get("reason", ""),
+                provider_used=score_res.data.get("provider_used", ""),
+                threshold=self._config.score_threshold,
+                above_threshold=score >= self._config.score_threshold,
+            )
+
             if score < self._config.score_threshold:
                 # Not applied (score below threshold): terminal skipped apply step.
                 self._logger.log_step(

@@ -1,3 +1,4 @@
+from tools.db.w1.record_scored_job import RecordScoredJob
 from tools.db.w1.upsert_application import UpsertApplication
 from tools.db.w2.upsert_hr_conversation import UpsertHRConversation
 
@@ -15,6 +16,9 @@ def register_w1_tools(registry, db, model_router, prompt_manager, tool_providers
     ))
     registry.register(DecodeJobSalary())
     registry.register(UpsertApplication(db=db))
+    # Eval-collection: every real W1 scoring (applied + skipped) is recorded so a
+    # re-scorable golden accrues for score-quality eval (stage 2).
+    registry.register(RecordScoredJob(db=db))
     # Hard-association: W1 pre-creates a conversation stub (conv_id = job_id) at
     # apply time so a W1 application and its future W2 conversation share one
     # identity from the start. Reuses the W2 upsert tool — same canonical write.

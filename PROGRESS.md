@@ -10,7 +10,7 @@
 
 ## 待跟进（另开会话）
 
-- **[进行中 2026-07-29] LLM eval 阶段1 待用户标注 + 阶段2/3**：①**用户标注** `data/eval/intent_golden.jsonl` 的 61 条 `human_intent`（六选一）→ 跑 `run_intent_eval.py` 出真实精度 + `--baseline` 对照看注入是否有正收益；标注后金标集扩为"活资产"（随生产新失败模式追加）。②**阶段2** `score_job` 决策级 precision/recall（人标"想不想要这个岗"）+ 顺带校准 `score_threshold`。③**阶段3** `generate_reply` LLM-as-judge（先拿审批批准/驳回/改写动作校准 judge）+ 采集审批通过率/改写编辑距离作生产指标；补 `safe_parse_json` 层级采集（格式可靠性）+ 一致性采样（同输入跑 N 次量方差）。方法论调研见本会话「已完成」条。
+- **[进行中 2026-07-29] LLM eval 阶段2 攒数据 + 阶段3**：①**阶段1 已收口**——意图金标标了 58 条、痛点定为接受（4 条审批草稿噪声，审批门兜住不错发）。②**阶段2 地基已建**（scored_jobs 采集表，见「已完成」）→ 需**跑真实 W1（`score_threshold>0`）攒够样本** → 再写 score eval harness（决策级 precision/recall + 校准 `score_threshold`）+ 网页标注器（人标"这岗想不想要"）。③**阶段3** `generate_reply` LLM-as-judge（先拿审批批准/驳回/改写动作校准 judge）+ 采集审批通过率/改写编辑距离作生产指标；补 `safe_parse_json` 层级采集 + 一致性采样。④**DeepSeek 实验**（换强模型压意图痛点）暂停——缺 `DEEPSEEK_API_KEY`；金标稀有类样本少想继续调需扩样本。
 
 - **[已完成 + 真机验证通过 2026-07-29] ~~W3 手动发简历兜底~~**：见「已完成」。**装填→待发→可取消→W3 发送**模型（用户纠正了最初「立即发不可撤销」的设计）：点「发简历」只写 `resume_status=queued`（DB，可取消）→ 并入「待发送」tab → W3 运行时 `SendResumePipeline` 幂等发送→清 queued+stage=resume_sent。**前端交互（装填/取消/待发送合并/徽章）+ W3 真发简历落地均已真机验证通过（用户确认无问题）。** 本项收口。
 - **[已完成 2026-07-28] ~~意图判断改进：HR 索要简历且简历已发 → 不应再起草回复~~**：见「已完成」。`AnalyzeStep` 加确定性抑制闸——`intent==resume_request 且（needs_resume 本轮将发 或 already_sent 已发）→ needs_reply=False`，覆盖 LLM 误判、生成回复前短路。检测漏判时（needs_resume/already_sent 都 False）**不抑制**、仍起草兜底，正好与手动发简历衔接。**待真机复核**：真机 W2 撞 resume_request 会话不再产生多余待审批草稿。
@@ -44,6 +44,12 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- eval 阶段2 地基：W1 评分数据采集（scored_jobs 表，投+跳两侧）（2026-07-29，622 passed；后端无 build，版本未升）
+  - **背景**：阶段2（score_job eval）在现有数据上跑不了——applications 无 JD、跳过样本被删、score 多为 0。要评当前评分得能重打分（需 JD）+ 两侧样本（校准阈值）。
+  - **方案（用户拍板：两侧都采、独立表）**：`card_pipeline` 评分成功后、阈值判断前采集一条 → **投递的和被跳过的都记**。独立 `scored_jobs` 表（不塞 applications：语义是"投过的"、很多查询依赖；不塞 run 日志：JD 是 PII 会扩大泄露面）。字段 job_id/title/company/jd_text/score/dimensions/reason/provider_used/threshold/above_threshold/created_at，滚动上限 2000 防涨。
+  - **改动**：`tracker` 加表+迁移+`record_scored_job`(唯一 SQL，滚动修剪)+`get_scored_jobs`(dimensions 解析回 dict) / `tools/db/w1/record_scored_job.py`(薄壳调 tracker，**按正确分层，不自持 SQL**) + 注册 / `card_pipeline` 接一行(非致命，registry.call 不抛) / 测试 +4（tracker 往返/滚动上限/两侧都采）。真实库迁移已验证安全（表建起、为空）。
+  - **今天没数据可评**：地基。得跑真实 W1（`score_threshold>0`）攒一阵，再写阶段2 的 score eval harness + 网页标注器（标"这岗想不想要"）。
 
 - LLM eval 闭环首跑 + 意图 prompt 调优（2026-07-29，v2.12.1.1，618 passed）
   - **闭环首次跑通**（用户标注 58/61 金标后）：harness 出总准确率 + 混淆矩阵；诊断脚本 `diagnose_needs_reply.py` 补上**needs_reply 层面**评估（更贴近生产决策）。

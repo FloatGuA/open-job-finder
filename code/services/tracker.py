@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import os
 import threading
@@ -115,6 +116,31 @@ class ApplicationTracker:
             # Idempotent (no-ops once no such rows remain).
             self.conn.execute("UPDATE applications SET status = 'APPLIED' WHERE status = 'CHATTING'")
             self.conn.execute("DELETE FROM applications WHERE status IN ('SCORED', 'FOUND')")
+
+            # scored_jobs: eval-collection table. Every real W1 scoring (applied AND
+            # skipped) is appended here so a re-scorable golden accrues for score-quality
+            # eval (stage 2). Deliberately NOT part of applications -- that table means
+            # "jobs we applied to" and many queries depend on it; the skipped side would
+            # break it. JD text (PII) stays in the already-gitignored jobs.db rather than
+            # bloating run logs. Rolling-capped by record_scored_job.
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scored_jobs (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id          TEXT,
+                    title           TEXT,
+                    company         TEXT,
+                    jd_text         TEXT,
+                    score           INTEGER,
+                    dimensions      TEXT,
+                    reason          TEXT,
+                    provider_used   TEXT,
+                    threshold       INTEGER,
+                    above_threshold INTEGER,
+                    created_at      TEXT NOT NULL
+                )
+                """
+            )
 
             self.conn.execute(
                 """
@@ -590,6 +616,62 @@ class ApplicationTracker:
         with self.conn:
             cur = self.conn.execute("DELETE FROM applications WHERE status = ?", (status,))
             return cur.rowcount
+
+    # ── Scored-jobs eval collection ───────────────────────────────────────────
+
+    def record_scored_job(
+        self,
+        *,
+        job_id: str,
+        title: str,
+        company: str,
+        jd_text: str,
+        score: int,
+        dimensions: Optional[dict] = None,
+        reason: str = "",
+        provider_used: str = "",
+        threshold: int = 0,
+        above_threshold: bool = False,
+        cap: int = 2000,
+    ) -> None:
+        """Append one W1 scoring event (applied or skipped), then trim to the newest
+        `cap` rows. Single SQL for this write (tools/db is a thin shell over it)."""
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO scored_jobs
+                    (job_id, title, company, jd_text, score, dimensions,
+                     reason, provider_used, threshold, above_threshold, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id, title, company, jd_text, score,
+                    json.dumps(dimensions or {}, ensure_ascii=False),
+                    reason, provider_used, threshold,
+                    1 if above_threshold else 0, self._utcnow_iso(),
+                ),
+            )
+            self.conn.execute(
+                "DELETE FROM scored_jobs WHERE id NOT IN "
+                "(SELECT id FROM scored_jobs ORDER BY id DESC LIMIT ?)",
+                (cap,),
+            )
+
+    def get_scored_jobs(self, limit: Optional[int] = None) -> List[dict]:
+        """All recorded scoring events, newest first, for the score-eval exporter.
+        `dimensions` is parsed back to a dict."""
+        sql = "SELECT * FROM scored_jobs ORDER BY id DESC"
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        out = []
+        for row in self.conn.execute(sql).fetchall():
+            d = dict(row)
+            try:
+                d["dimensions"] = json.loads(d.get("dimensions") or "{}")
+            except Exception:
+                d["dimensions"] = {}
+            out.append(d)
+        return out
 
     # ── HR Conversations ──────────────────────────────────────────────────────
 
