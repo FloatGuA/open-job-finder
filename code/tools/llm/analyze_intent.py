@@ -6,20 +6,30 @@ from tools.base import BaseTool, ToolResult
 
 _VALID_INTENTS = frozenset({
     "interview_invite", "offer", "rejection",
-    "resume_request", "general", "unknown",
+    "resume_request", "general_inquiry", "general_notice", "unknown",
 })
+
+# needs_reply 是 intent 的确定性函数，不再由 LLM 自由输出（那会与 intent 打架且不可评估）。
+# LLM 只判语义 intent；code 查这张表决定要不要回复（models judge / code decides）。
+# resume_request 在这里给 False（简历即回应），AnalyzeStep 会按运行时检测覆盖它（漏判则兜底起草）。
+_NEEDS_REPLY_INTENTS = frozenset({"interview_invite", "offer", "general_inquiry"})
+
+
+def default_needs_reply(intent: str) -> bool:
+    """intent → 默认是否需要文字回复（纯函数，供工具与测试共用）。"""
+    return intent in _NEEDS_REPLY_INTENTS
+
 
 # JSON Schema for the model's answer. Passed to the LLM chain so providers that
 # support structured output constrain their JSON: ollama via `format`. Others
 # ignore it; safe_parse_json remains the safety net. Intent classification only —
-# the reply draft is a separate think=True call (GenerateReply), so no
-# suggested_reply here.
+# needs_reply is derived from intent (see default_needs_reply), not asked of the
+# LLM; the reply draft is a separate think=True call (GenerateReply).
 _OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "intent": {"type": "string", "enum": sorted(_VALID_INTENTS)},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-        "needs_reply": {"type": "boolean"},
     },
     "required": ["intent"],
 }
@@ -90,7 +100,8 @@ class AnalyzeHRIntent(BaseTool):
             intent = "unknown"
 
         confidence = parsed.get("confidence") or "low"
-        needs_reply = bool(parsed.get("needs_reply", False))
+        # needs_reply 由 intent 查表得出（code decides），不取 LLM 输出。
+        needs_reply = default_needs_reply(intent)
 
         return ToolResult(
             ok=True,

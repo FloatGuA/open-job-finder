@@ -5,6 +5,8 @@ export const INTENT_LABELS: Record<string, string> = {
   info_request:      '\u8bf7\u6c42\u4fe1\u606f',
   salary_discussion: '\u85aa\u8d44\u6d3d\u8c08',
   offer:             'Offer',
+  general_inquiry:   '\u4e00\u822c\u8be2\u95ee',
+  general_notice:    '\u4e00\u822c\u901a\u77e5',
   other:             '\u5176\u4ed6',
 }
 
@@ -16,5 +18,7 @@ export const INTENT_COLORS: Record<string, string> = {
   info_request:      '#0a84ff',
   salary_discussion: '#bf5af2',
   greeting:          '#84848c',
+  general_inquiry:   '#0a84ff',
+  general_notice:    '#84848c',
   other:             '#84848c',
 }

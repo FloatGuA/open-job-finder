@@ -11,6 +11,19 @@ returns needs_reply=False with no suggested_reply.
 from pipeline.base import StepStatus
 from pipeline.w2.steps.analyze import AnalyzeStep
 from tools.base import ToolResult
+from tools.llm.analyze_intent import default_needs_reply
+
+
+def test_needs_reply_lookup_table():
+    """needs_reply 是 intent 的确定性函数：回复类 vs 不回复类锁死，防 taxonomy 漂移。"""
+    assert default_needs_reply("interview_invite") is True
+    assert default_needs_reply("offer") is True
+    assert default_needs_reply("general_inquiry") is True
+    assert default_needs_reply("rejection") is False
+    assert default_needs_reply("general_notice") is False
+    assert default_needs_reply("unknown") is False
+    # resume_request 默认 False（简历即回应）——AnalyzeStep 再按检测状态兜底覆盖
+    assert default_needs_reply("resume_request") is False
 
 
 class _Conv:
@@ -81,9 +94,10 @@ def test_hr_message_present_runs_llm():
         if name == "detect_resume_request":
             return ToolResult(ok=True, data={"needs_resume": False, "request_type": None, "already_sent": False})
         if name == "analyze_hr_intent":
-            # Intent classification (think=False) — no suggested_reply here anymore.
+            # Intent classification (think=False) — needs_reply is the lookup value
+            # (general_inquiry → True); no suggested_reply here anymore.
             return ToolResult(ok=True, data={
-                "intent": "general", "needs_reply": True, "provider_used": "test",
+                "intent": "general_inquiry", "needs_reply": True, "provider_used": "test",
             })
         if name == "generate_reply":
             # Reply drafting (think=True) — the separate step that produces the draft.
@@ -130,11 +144,11 @@ def _reg_for(detect_data, intent_data):
 
 def test_resume_request_with_resume_sent_suppresses_reply():
     """A resume IS the response to a resume request: when intent=resume_request and
-    a resume was/will be delivered, code overrides the LLM's needs_reply=True so no
-    redundant text draft lands in the approval queue."""
+    a resume was/will be delivered, code derives needs_reply=False so no redundant
+    text draft lands in the approval queue (resume_request's lookup default is False)."""
     reg = _reg_for(
         detect_data={"needs_resume": True, "request_type": "hr_card", "already_sent": False},
-        intent_data={"intent": "resume_request", "needs_reply": True, "provider_used": "test"},
+        intent_data={"intent": "resume_request", "needs_reply": False, "provider_used": "test"},
     )
     messages = [{"sender": "hr", "text": "[卡片] 发个简历"}]
     out = AnalyzeStep(reg).run(conv=_Conv(), messages=messages)
@@ -153,7 +167,7 @@ def test_resume_request_but_detector_missed_still_drafts():
     suppress, so the HR still gets a text reply instead of silence."""
     reg = _reg_for(
         detect_data={"needs_resume": False, "request_type": None, "already_sent": False},
-        intent_data={"intent": "resume_request", "needs_reply": True, "provider_used": "test"},
+        intent_data={"intent": "resume_request", "needs_reply": False, "provider_used": "test"},
     )
     messages = [{"sender": "hr", "text": "can you send your resume"}]
     out = AnalyzeStep(reg).run(conv=_Conv(), messages=messages)

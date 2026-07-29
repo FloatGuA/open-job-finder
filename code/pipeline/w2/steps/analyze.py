@@ -89,25 +89,18 @@ class AnalyzeStep:
             return out
 
         intent = intent_res.data.get("intent", "unknown")
+        # needs_reply 是 intent 的确定性函数（analyze_hr_intent 已按 default_needs_reply 查表）。
         needs_reply = intent_res.data.get("needs_reply", False)
         provider_used = intent_res.data.get("provider_used", "")
 
-        # A resume IS the complete response to a resume request. When the current
-        # intent is a resume request AND a resume has already been delivered
-        # (already_sent) or is about to be sent THIS round by ResumeStep
-        # (needs_resume -- ResumeStep runs right after this step in the pipeline),
-        # a separate drafted text reply is redundant noise in the approval queue.
-        # Whether the resume answers the ask is a deterministic fact, so code
-        # decides it and overrides the LLM's needs_reply=True. Guarded on
-        # (needs_resume OR already_sent): if the deterministic detector found no
-        # resume to send/sent, we KEEP drafting a text reply as the fallback --
-        # that is exactly the case where detect_resume_request missed the request
-        # (manual/W3 resume send covers actual delivery), so the HR still gets a
-        # response instead of silence.
-        suppressed_resume_reply = False
-        if needs_reply and intent == "resume_request" and (needs_resume or already_sent):
-            needs_reply = False
-            suppressed_resume_reply = True
+        # resume_request 的 needs_reply 不看查表默认值，完全由运行时检测派生：一份简历 IS
+        # 对「索要简历」的完整回应，所以只要本轮发得出/已发过简历（needs_resume or already_sent）
+        # 就不额外起草文字回复（避免审批队列冗余噪声）；只有检测不到可发的简历（漏判）时才
+        # 破例起草文字回复兜底，让 HR 不至于收到沉默。是不是漏判是确定性事实，code decides。
+        resume_reply_fallback = False
+        if intent == "resume_request":
+            needs_reply = not (needs_resume or already_sent)
+            resume_reply_fallback = needs_reply
 
         # Reply drafting is a separate step: intent classification ran think=False
         # (fast + direct); the reply is drafted think=True (deliberates over wording)
@@ -149,7 +142,7 @@ class AnalyzeStep:
             "intent": intent,
             "needs_resume": needs_resume,
             "provider_used": provider_used,
-            "suppressed_resume_reply": suppressed_resume_reply,
+            "resume_reply_fallback": resume_reply_fallback,
         })
         return out
 

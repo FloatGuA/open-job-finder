@@ -83,6 +83,8 @@ const INTENT_LABELS: Record<string, string> = {
   rejection: '\u5a49\u62d2',
   resume_request: '\u7d22\u8981\u7b80\u5386',
   general: '\u4e00\u822c\u6c9f\u901a',
+  general_inquiry: '\u4e00\u822c\u8be2\u95ee',
+  general_notice: '\u4e00\u822c\u901a\u77e5',
   unknown: '\u672a\u8bc6\u522b',
 }
 
