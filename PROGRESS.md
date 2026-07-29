@@ -10,7 +10,26 @@
 
 ## 待跟进（另开会话）
 
-- **[进行中 2026-07-29] LLM eval 阶段2 攒数据 + 阶段3**：①**阶段1 已收口**——意图金标标了 58 条、痛点定为接受（4 条审批草稿噪声，审批门兜住不错发）。②**阶段2 地基已建**（scored_jobs 采集表，见「已完成」）→ 需**跑真实 W1（`score_threshold>0`）攒够样本** → 再写 score eval harness（决策级 precision/recall + 校准 `score_threshold`）+ 网页标注器（人标"这岗想不想要"）。③**阶段3** `generate_reply` LLM-as-judge（先拿审批批准/驳回/改写动作校准 judge）+ 采集审批通过率/改写编辑距离作生产指标；补 `safe_parse_json` 层级采集 + 一致性采样。④**DeepSeek 实验**（换强模型压意图痛点）暂停——缺 `DEEPSEEK_API_KEY`；金标稀有类样本少想继续调需扩样本。
+### 🧭 LLM eval 路线图（2026-07-29 收口，攒数据后继续）
+
+这一部分（给 agent 的三个 LLM 判断点建可评估体系）的全貌：
+
+**✅ 已做（都已 commit，见「已完成」对应条目）**
+- **eval 方法论 + 基座**：金标从真实生产来、精度≠可靠性两维、LLM-judge 须先对齐人标、回归当质量闸；`code/scripts/eval/`（export/run_intent_eval/diagnose_needs_reply/build_annotator）。三硬约束：金标 PII 只落 gitignore `data/eval/`、eval 忠实生产调用签名、ground truth 必须人标。（#82，commit 69b292e）
+- **阶段1 意图 eval 跑通并收口**：用户标 58 条金标；核心认知 **intent 准确率(53%)≠needs_reply 准确率(90%)**（already_sent 派生兜底）；痛点「发完简历后误回」仅 4 条且是审批草稿非错发 → **接受**。prompt 调优验证「能调标签、调不动痛点」（小模型上限）。（#84）
+- **意图 taxonomy 重构**（eval 副产品）：needs_reply 折叠进 intent、general 拆 inquiry/notice。（#83，commit 331440a，v2.12.1）
+- **阶段2 地基**：`scored_jobs` 采集表，W1 每次真实打分（投+跳两侧）落库。（#85，commit c52f137）
+
+**⏳ 还要做**
+1. **阶段2 评分 eval**：写 score eval harness（决策级 precision/recall + 校准 `score_threshold`）+ 网页标注器（人标「这岗想不想要」）。
+2. **阶段3 回复质量 eval**：`generate_reply` 的 LLM-as-judge（先拿审批 批准/驳回/改写 动作校准 judge）+ 采集审批通过率/改写编辑距离作生产指标；补 `safe_parse_json` 层级采集（格式可靠性）+ 一致性采样（同输入跑 N 次量方差）。
+3. **DeepSeek 实验**（换强模型压意图那 4 条痛点）：接 `openai_compatible` provider，让 analyze_hr_intent 走 deepseek 重跑 diagnose，权衡成本。
+4. **扩金标样本**：意图金标稀有类太少（interview_invite 3/resume_request 2）指标抖动，想继续调意图需补。
+
+**⏰ 什么时候继续**
+- **阶段2（首要）** → **触发条件：跑够真实 W1（`score_threshold>0` 的真实评分，非全投）让 `scored_jobs` 攒到 ~50–100 条含 JD 的评分记录（投+跳两侧都有）**。攒够即可开工。查进度：`get_scored_jobs()` 或 `SELECT count(*) FROM scored_jobs`。
+- **阶段3** → 现有审批数据（244 dismissed + 32 sent）够起步，但 dismissed 脏（混 needs_reply 问题）；排在阶段2 之后。
+- **DeepSeek** → 用户设 `DEEPSEEK_API_KEY` 后随时。
 
 - **[已完成 + 真机验证通过 2026-07-29] ~~W3 手动发简历兜底~~**：见「已完成」。**装填→待发→可取消→W3 发送**模型（用户纠正了最初「立即发不可撤销」的设计）：点「发简历」只写 `resume_status=queued`（DB，可取消）→ 并入「待发送」tab → W3 运行时 `SendResumePipeline` 幂等发送→清 queued+stage=resume_sent。**前端交互（装填/取消/待发送合并/徽章）+ W3 真发简历落地均已真机验证通过（用户确认无问题）。** 本项收口。
 - **[已完成 2026-07-28] ~~意图判断改进：HR 索要简历且简历已发 → 不应再起草回复~~**：见「已完成」。`AnalyzeStep` 加确定性抑制闸——`intent==resume_request 且（needs_resume 本轮将发 或 already_sent 已发）→ needs_reply=False`，覆盖 LLM 误判、生成回复前短路。检测漏判时（needs_resume/already_sent 都 False）**不抑制**、仍起草兜底，正好与手动发简历衔接。**待真机复核**：真机 W2 撞 resume_request 会话不再产生多余待审批草稿。
