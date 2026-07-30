@@ -24,8 +24,19 @@ const PAGE_COMPONENTS: Record<Page, JSX.Element> = {
   settings: <Settings />,
 }
 
+const PAGE_STORAGE_KEY = 'ojf.page'
+
 export default function App() {
-  const [page, setPage] = useState<Page>('dashboard')
+  // Persist the active page so a refresh stays where you were instead of snapping
+  // back to the dashboard. Validated against known pages so a stale/garbage value
+  // can never render a blank shell.
+  const [page, setPage] = useState<Page>(() => {
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(PAGE_STORAGE_KEY) : null
+    return saved && saved in PAGE_COMPONENTS ? (saved as Page) : 'dashboard'
+  })
+  useEffect(() => {
+    try { localStorage.setItem(PAGE_STORAGE_KEY, page) } catch { /* storage unavailable — non-fatal */ }
+  }, [page])
   const [workflowRunning, setWorkflowRunning] = useState<string | null>(null)
   const [progressEvents, setProgressEvents] = useState<ProgressEvent[]>([])
   const [isPaused, setIsPaused] = useState(false)
