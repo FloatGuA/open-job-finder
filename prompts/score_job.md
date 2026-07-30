@@ -1,52 +1,52 @@
-You are evaluating a job posting against a candidate.
-Score EACH dimension from 0 to 100 independently. Return ONLY the JSON below, nothing else.
+你正在把一个职位与一位候选人做匹配评估。
+对下面每个维度独立打分（0 到 100）。只返回下面的 JSON，不要输出任何别的内容。
 
-## Job Posting
+## 职位信息
 Title: {{title}}
 Company: {{company}}
 JD:
 {{jd_text}}
 
-## Candidate Profile
+## 候选人画像
 {{profile_summary}}
 
-## Required JSON output (fill every field, integers 0-100):
+## 需要返回的 JSON（每个字段都要填，整数 0-100）：
 ```json
 {
   "dimensions": {
     "skill_match": {
       "score": <0-100>,
-      "matched": ["<skill found in both JD and resume>"],
-      "missing": ["<skill required by JD but absent from resume>"]
+      "matched": ["<JD 和简历中都出现的技能>"],
+      "missing": ["<JD 要求但简历没有的技能>"]
     },
     "experience_match": {
       "score": <0-100>,
-      "jd_requires": "<e.g. 3-5年>",
-      "candidate_has": "<from profile experience field>"
+      "jd_requires": "<如 3-5年>",
+      "candidate_has": "<来自画像的经验字段>"
     },
     "city_match": {
-      "score": <0 or 100>,
+      "score": <0 或 100>,
       "match": <true|false>
     },
     "salary_match": {
       "score": <0-100>,
-      "offered": "<salary from JD>",
-      "expected": "<from profile salary field>"
+      "offered": "<JD 中的薪资>",
+      "expected": "<来自画像的期望薪资>"
     },
     "growth_potential": {
       "score": <0-100>,
-      "reason": "<1 sentence in Chinese>"
+      "reason": "<一句话，中文>"
     }
   },
-  "overall_reason": "<2-3 sentences in Chinese explaining the overall assessment>"
+  "overall_reason": "<2-3 句话，中文，说明总体评估>"
 }
 ```
 
-Scoring rubrics:
-- skill_match 90-100: JD skills almost fully covered by resume
-- skill_match 50-89: partial overlap
-- skill_match 0-49: major skill gaps
-- experience_match 100: exact match; 70: one level off; 0: completely mismatched (e.g. 10yr role for fresh grad)
-- city_match: 100 if job city is in candidate city list, 0 otherwise
-- salary_match: 100 if offered >= expected; scale down proportionally if lower; 50 if no salary info
-- growth_potential: subjective — does this role advance the candidate's career direction?
+打分标准：
+- skill_match 90-100：JD 所需技能几乎被简历完全覆盖
+- skill_match 50-89：部分重合
+- skill_match 0-49：技能差距较大
+- experience_match 100：完全匹配；70：差一个档位；0：完全不匹配（如让应届生做要求 10 年经验的岗位）
+- city_match：职位城市在候选人城市列表内给 100，否则给 0
+- salary_match：offered（提供）>= expected（期望）给 100；更低则按比例下调；无薪资信息给 50
+- growth_potential：主观——这个职位是否能推进候选人的职业方向？
