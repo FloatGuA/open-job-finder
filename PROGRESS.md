@@ -5,10 +5,12 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-29（LLM eval 闭环首跑：intent 准确率≠needs_reply 准确率，痛点误回仅 4 条且是审批草稿非错发，接受现状） |
-| 当前版本 | 2.12.1.1                        |
+| 最后更新 | 2026-07-30（设置增强：可编辑 prompt 模板 + UI 重设计 + 页面持久化 + prompt 中文化，均已 commit + 真机截图验证） |
+| 当前版本 | 2.12.2.4                        |
 
 ## 待跟进（另开会话）
+
+- **[大部分完成 2026-07-30] Settings UI 重设计 + 相关**（已 commit + 真机截图验证）：①**IA 重组**——4tab→3tab（求职偏好 / **模型 & Prompt** / 环境&Session）；注入移出求职偏好→独立 `InjectionSection`；模型路由+注入+可编辑模板合并进「模型 & Prompt」（左 1/3 配置、右 2/3 模板）；页面 `max-w-7xl`。②`save_profile` **字段隔离**（分 tab 独立保存不互清）。③**页面持久化**：刷新保持当前 navigator（localStorage）。④**prompt 中文化**：system/score_job 译中文。⑤**仍待做——「环境 & Session」现代化**（本轮只搬了 tab，未重做观感/布局）；子 tab 刷新不持久化（只主页面持久化，用户可选是否要）；宽度还能再推满。均待用户后续决定。
 
 ### 🧭 LLM eval 路线图（2026-07-29 收口，攒数据后继续）
 
@@ -63,6 +65,14 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- 前端可编辑 system/task prompt 模板（覆盖层 + 恢复默认 + 改动提醒 + 占位符护栏）（2026-07-29，v2.12.2.1，628 passed，build 绿）
+  - **需求**：注入是"往模板尾部加"，用户还想直接**改模板本体**。加显示/编辑/恢复默认/改动提醒。
+  - **覆盖层机制（不动 git 资产、可恢复）**：编辑存 `code/data/prompts_override/{name}.md`（data/ 已 gitignore）；`PromptManager.load()` 改为**覆盖层优先、否则回落默认 `prompts/`**；恢复默认=删覆盖文件；改动提醒=覆盖文件存在即标「已修改」。
+  - **⚠️ 占位符护栏**：`save_override` 校验**占位符集必须与默认一致**（不许删不许加未知）——否则 render 时未替换的 `{{x}}` 会抛错让 W1/W2 挂。校验不过 → 400 + 前端提示，不写入。
+  - **改动**：`prompt_manager.py`（override_dir + `EDITABLE_PROMPTS` + get_default/is_modified/extract_placeholders/save_override/reset_override）/ `server.py`（GET `/api/prompts`、POST `/api/prompts/{name}`、POST `.../reset`）/ 前端 `api/index.ts`（PromptTemplate 类型 + 3 方法）+ `Settings.tsx` 新增「Prompt」tab（4 个可编辑 textarea + 恢复默认 + 已修改 badge + 占位符提示）。测试 +6（`test_prompt_override.py`）。
+  - **真机层面验证注入生效**：刻意强注入"一律判 interview_invite"→ 15 条金标 14 条被带偏，证明注入进 prompt 且被 LLM 遵循。
+  - 与注入独立叠加：render = 用户改过的模板 + 注入块，两者都保留。
 
 - eval 阶段2 地基：W1 评分数据采集（scored_jobs 表，投+跳两侧）（2026-07-29，622 passed；后端无 build，版本未升）
   - **背景**：阶段2（score_job eval）在现有数据上跑不了——applications 无 JD、跳过样本被删、score 多为 0。要评当前评分得能重打分（需 JD）+ 两侧样本（校准阈值）。
