@@ -511,6 +511,7 @@ const PROMPT_LABELS: Record<string, string> = {
 function PromptTemplatesTab() {
   const [prompts, setPrompts] = useState<PromptTemplate[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [active, setActive] = useState('system')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState<Record<string, string>>({})
@@ -550,68 +551,63 @@ function PromptTemplatesTab() {
     } finally { setBusy(null) }
   }
 
-  if (loading && !prompts.length) return <p className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</p>
+  if (loading && !prompts.length) {
+    return <Card title={'Prompt \u6a21\u677f'} dev="PromptTemplatesTab"><p className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</p></Card>
+  }
+
+  const p = prompts.find((x) => x.name === active)
+  const dirty = p ? (drafts[p.name] ?? '') !== p.content : false
 
   return (
     <Card title={'Prompt \u6a21\u677f'} dev="PromptTemplatesTab">
-      <p className="mb-5 text-xs text-text-3" style={{ letterSpacing: '-0.12px', lineHeight: '1.6' }}>
+      <p className="mb-3 text-xs text-text-3" style={{ letterSpacing: '-0.12px', lineHeight: '1.6' }}>
         {'\u76f4\u63a5\u7f16\u8f91\u5e95\u5c42\u63d0\u793a\u8bcd\u6a21\u677f\u3002\u5360\u4f4d\u7b26\uff08\u5f62\u5982 {{title}}\uff09\u5fc5\u987b\u539f\u6837\u4fdd\u7559\uff0c\u5426\u5219\u4fdd\u5b58\u4f1a\u88ab\u62d2\u7edd\u3002\u4fee\u6539\u4ec5\u5b58\u672c\u5730\u8986\u76d6\u5c42\uff0c\u53ef\u968f\u65f6\u300c\u6062\u590d\u9ed8\u8ba4\u300d\u3002'}
       </p>
-      <div className="space-y-6">
-        {prompts.map((p) => {
-          const dirty = (drafts[p.name] ?? '') !== p.content
-          return (
-            <div key={p.name} className="rounded-xl p-4" style={{ background: '#1b1b1f', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium text-text-1">{PROMPT_LABELS[p.name] ?? p.name}</span>
-                <code className="text-xs text-text-3">{p.name}</code>
-                {p.modified && (
-                  <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: 'rgba(245,166,35,0.15)', color: '#f5a623' }}>{'\u25cf \u5df2\u4fee\u6539'}</span>
-                )}
-              </div>
-              {p.placeholders.length > 0 && (
-                <p className="mb-2 text-xs text-text-3">
-                  {'\u5fc5\u987b\u4fdd\u7559\u7684\u5360\u4f4d\u7b26\uff1a'}
-                  <code className="text-signal-blue">{p.placeholders.map((ph) => '{{' + ph + '}}').join('  ')}</code>
-                </p>
-              )}
-              <textarea
-                className={inputCls}
-                style={{ ...inputStyle, resize: 'vertical', minHeight: '170px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', lineHeight: '1.55' }}
-                value={drafts[p.name] ?? ''}
-                onChange={(e) => setDrafts((d) => ({ ...d, [p.name]: e.target.value }))}
-                spellCheck={false}
-              />
-              {err[p.name] && <p className="mt-2 rounded-lg bg-signal-red/10 px-3 py-2 text-xs text-signal-red">{err[p.name]}</p>}
-              <div className="mt-3 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => void save(p.name)}
-                  disabled={busy === p.name || !dirty}
-                  className="rounded-full px-5 py-1.5 text-sm text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-                  style={{ background: '#0a84ff', letterSpacing: '-0.224px' }}
-                >
-                  {busy === p.name ? '\u4fdd\u5b58\u4e2d\u2026' : '\u4fdd\u5b58'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void reset(p.name)}
-                  disabled={busy === p.name || !p.modified}
-                  className="rounded-lg bg-bg-card2 px-4 py-1.5 text-sm text-text-2 transition hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-40"
-                  style={{ border: '1px solid rgba(255,255,255,0.08)' }}
-                >
-                  {'\u6062\u590d\u9ed8\u8ba4'}
-                </button>
-                {note[p.name] && <span className="text-sm text-signal-green" style={{ letterSpacing: '-0.224px' }}>{note[p.name]}</span>}
-              </div>
-            </div>
-          )
-        })}
+      <div className="mb-3 flex flex-wrap gap-1 rounded-xl bg-bg-card2 p-1" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+        {prompts.map((t) => (
+          <button key={t.name} type="button" onClick={() => setActive(t.name)}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition ${active === t.name ? 'text-white' : 'text-text-3 hover:text-text-1'}`}
+            style={active === t.name ? { background: '#0a84ff' } : undefined}>
+            {PROMPT_LABELS[t.name] ?? t.name}
+            {t.modified && <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: active === t.name ? '#fff' : '#f5a623' }} />}
+          </button>
+        ))}
       </div>
+      {p && (
+        <div>
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+            <code className="text-text-3">{p.name}</code>
+            {p.modified && <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(245,166,35,0.15)', color: '#f5a623' }}>{'\u25cf \u5df2\u4fee\u6539'}</span>}
+            {p.placeholders.length > 0 && (
+              <span className="text-text-3">{'\u5fc5\u987b\u4fdd\u7559\u5360\u4f4d\u7b26\uff1a'}<code className="text-signal-blue">{p.placeholders.map((ph) => '{{' + ph + '}}').join('  ')}</code></span>
+            )}
+          </div>
+          <textarea
+            className={inputCls}
+            style={{ ...inputStyle, resize: 'vertical', minHeight: '540px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', lineHeight: '1.6', fontSize: '13px' }}
+            value={drafts[p.name] ?? ''}
+            onChange={(e) => setDrafts((d) => ({ ...d, [p.name]: e.target.value }))}
+            spellCheck={false}
+          />
+          {err[p.name] && <p className="mt-2 rounded-lg bg-signal-red/10 px-3 py-2 text-xs text-signal-red">{err[p.name]}</p>}
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button type="button" onClick={() => void save(p.name)} disabled={busy === p.name || !dirty}
+              className="rounded-full px-5 py-1.5 text-sm text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ background: '#0a84ff', letterSpacing: '-0.224px' }}>
+              {busy === p.name ? '\u4fdd\u5b58\u4e2d\u2026' : '\u4fdd\u5b58'}
+            </button>
+            <button type="button" onClick={() => void reset(p.name)} disabled={busy === p.name || !p.modified}
+              className="rounded-lg bg-bg-card2 px-4 py-1.5 text-sm text-text-2 transition hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ border: '1px solid rgba(255,255,255,0.08)' }}>
+              {'\u6062\u590d\u9ed8\u8ba4'}
+            </button>
+            {note[p.name] && <span className="text-sm text-signal-green" style={{ letterSpacing: '-0.224px' }}>{note[p.name]}</span>}
+          </div>
+        </div>
+      )}
     </Card>
   )
 }
-
 
 // -- Prompt \u6ce8\u5165\uff08\u5168\u5c40 + 3 \u4efb\u52a1\u5c42\uff0c\u72ec\u7acb\u4fdd\u5b58\uff09--------------------------------------
 function InjectionSection() {
