@@ -31,6 +31,7 @@ from services.config_manager import get_config_manager
 from services.llm_client import build_model_router, load_config
 from services.onboarding import OnboardingChecker
 from services.progress_emitter import ProgressEmitter, ProgressEvent
+from services.prompt_manager import EDITABLE_PROMPTS, PromptManager
 from services.resume_manager import ResumeManager
 from services.resume_parser import parse_resume_file
 from services.tracker import ApplicationTracker
@@ -866,34 +867,70 @@ async def get_profile() -> JSONResponse:
 async def save_profile(request: Request) -> JSONResponse:
     _initialize_state()
     data = await request.json()
-    # Read-modify-write through the singleton. save_profile() merges into the cached
-    # dict and writes, so fields managed outside the dashboard (greeting_template,
-    # boss_online, ...) survive AND the cache stays in step with the file. Writing
-    # inline used to leave the singleton serving a pre-edit copy.
-    cm = get_config_manager(str(CONFIG_PATH), str(PROFILE_PATH))
-    existing = cm.get_profile()
-    updates = {
-        "name": data.get("name") or existing.get("name") or "",
-        "keywords": data.get("keywords") or [],
-        "cities": data.get("cities") or [],
-        "experience": data.get("experience") or [],
-        "degree": data.get("degree") or [],
-        "salary": data.get("salary") or "",
-        "scale": data.get("scale") or [],
-        "job_types": data.get("job_types") or [],
-        "financing": data.get("financing") or [],
-        "districts": data.get("districts") or [],
-        "position_types": data.get("position_types") or [],
-        "industries": data.get("industries") or [],
-        # prompt_injection (user-customized prompt injection: global + per-task) —
-        # preserve when not provided so a save from a form that omits it does not
-        # wipe it. Single source of truth for all profile.yaml fields now lives on
-        # /api/profile (Settings merge).
-        "prompt_injection": data.get("prompt_injection", existing.get("prompt_injection", {})),
+    # Field isolation: only overwrite the profile keys actually present in this
+    # request. Settings now saves in independent sections (search filters vs prompt
+    # injection, on different tabs) -- a partial save that omits keywords must NOT
+    # blank keywords. save_profile() merges into the cached dict through the
+    # singleton, so keys we don't touch (incl. those managed outside the dashboard:
+    # boss_online, greeting_template, ...) survive and the cache stays in step.
+    _ALLOWED = {
+        "name", "keywords", "cities", "experience", "degree", "salary", "scale",
+        "job_types", "financing", "districts", "position_types", "industries",
+        "prompt_injection",
     }
+    cm = get_config_manager(str(CONFIG_PATH), str(PROFILE_PATH))
+    updates = {k: v for k, v in data.items() if k in _ALLOWED}
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    cm.save_profile(updates)
+    if updates:
+        cm.save_profile(updates)
     return JSONResponse({"ok": True})
+
+
+# ── Prompt 模板（用户显示/编辑/恢复默认）──────────────────────────────────────
+# 覆盖层落在 code/data/prompts_override/（gitignore）；save 校验占位符集与默认一致，
+# 防止改坏 prompt 让 W1/W2 的 render 抛错。
+
+
+@app.get("/api/prompts")
+async def get_prompts() -> JSONResponse:
+    _initialize_state()
+    pm = PromptManager()
+    out = []
+    for name in EDITABLE_PROMPTS:
+        default = pm.get_default(name)
+        out.append({
+            "name": name,
+            "content": pm.load(name),   # 生效值（覆盖或默认）
+            "default": default,
+            "modified": pm.is_modified(name),
+            "placeholders": sorted(pm.extract_placeholders(default)),
+        })
+    return JSONResponse(out)
+
+
+@app.post("/api/prompts/{name}")
+async def save_prompt(name: str, request: Request) -> JSONResponse:
+    _initialize_state()
+    if name not in EDITABLE_PROMPTS:
+        return JSONResponse({"error": f"unknown prompt: {name}"}, status_code=404)
+    data = await request.json()
+    content = data.get("content", "")
+    pm = PromptManager()
+    try:
+        pm.save_override(name, content)
+    except ValueError as exc:
+        # 占位符校验失败 → 400，前端提示，不写入。
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "modified": True})
+
+
+@app.post("/api/prompts/{name}/reset")
+async def reset_prompt(name: str) -> JSONResponse:
+    _initialize_state()
+    if name not in EDITABLE_PROMPTS:
+        return JSONResponse({"error": f"unknown prompt: {name}"}, status_code=404)
+    PromptManager().reset_override(name)
+    return JSONResponse({"ok": True, "modified": False})
 
 
 @app.get("/api/config/llm")

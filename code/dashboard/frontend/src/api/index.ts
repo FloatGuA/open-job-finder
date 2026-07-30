@@ -114,6 +114,15 @@ export interface Profile {
 }
 
 
+export interface PromptTemplate {
+  name: string
+  content: string
+  default: string
+  modified: boolean
+  placeholders: string[]
+}
+
+
 export interface ScheduleWorkflowConfig {
   enabled: boolean
   times: string[]
@@ -574,6 +583,15 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     }),
+  getPrompts: (): Promise<PromptTemplate[]> => requestJson('/api/prompts'),
+  savePrompt: (name: string, content: string): Promise<{ ok: boolean; modified: boolean }> =>
+    requestJson(`/api/prompts/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }),
+  resetPrompt: (name: string): Promise<{ ok: boolean; modified: boolean }> =>
+    requestJson(`/api/prompts/${encodeURIComponent(name)}/reset`, { method: 'POST' }),
   getWorkflowStatus: (): Promise<WorkflowStatus> => requestJson('/api/workflow/status'),
   getWorkflowDefaults: (): Promise<{ w1: Record<string, unknown>; w2: Record<string, unknown> }> =>
     requestJson('/api/workflow/defaults'),

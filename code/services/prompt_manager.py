@@ -8,22 +8,82 @@ from typing import Optional
 # 显式列名，杜绝无关 profile 键意外泄进 prompt。
 _TASK_INJECTION_NAMES = frozenset({"score_job", "analyze_intent", "generate_reply"})
 
+# 用户可在前端编辑的 prompt 模板（system 全局角色 + 3 个任务模板）。
+# 白名单：save/reset 只认这些名字，杜绝路径穿越。
+EDITABLE_PROMPTS = ("system", "score_job", "analyze_intent", "generate_reply")
+
 
 class PromptManager:
-    def __init__(self, prompts_dir: Optional[Path] = None, injection: Optional[dict] = None):
+    def __init__(
+        self,
+        prompts_dir: Optional[Path] = None,
+        injection: Optional[dict] = None,
+        override_dir: Optional[Path] = None,
+    ):
         if prompts_dir is None:
             # code/services/ → code/ → project root → prompts/
             prompts_dir = Path(__file__).resolve().parent.parent.parent / "prompts"
         self.prompts_dir = Path(prompts_dir)
+        # 用户编辑覆盖层：优先于默认模板。落在 code/data/（已 gitignore = 用户数据），
+        # 与默认的 git 资产 prompts/ 分开，这样「恢复默认」= 删掉覆盖文件即可。
+        if override_dir is None:
+            override_dir = Path(__file__).resolve().parent.parent / "data" / "prompts_override"
+        self.override_dir = Path(override_dir)
         # 用户自定义 prompt 注入（来自 profile.yaml，所有键均可选）。
         # {"global": "...", "score_job": "...", "analyze_intent": "...", "generate_reply": "..."}
         self._injection = dict(injection or {})
 
     def load(self, name: str) -> str:
+        # 覆盖层优先，否则回落默认 git 模板。
+        override = self.override_dir / f"{name}.md"
+        if override.exists():
+            return override.read_text(encoding="utf-8")
         path = self.prompts_dir / f"{name}.md"
         if not path.exists():
             raise FileNotFoundError(f"Prompt template not found: {path}")
         return path.read_text(encoding="utf-8")
+
+    # ── 可编辑模板（前端显示/编辑/恢复默认）─────────────────────────────────
+    @staticmethod
+    def extract_placeholders(text: str) -> set:
+        """模板里的 {{name}} 占位符集合。"""
+        return set(re.findall(r"\{\{(\w+)\}\}", text))
+
+    def get_default(self, name: str) -> str:
+        """默认（git 资产）模板全文，不看覆盖层。"""
+        path = self.prompts_dir / f"{name}.md"
+        if not path.exists():
+            raise FileNotFoundError(f"Prompt template not found: {path}")
+        return path.read_text(encoding="utf-8")
+
+    def is_modified(self, name: str) -> bool:
+        """该模板是否已被用户覆盖。"""
+        return (self.override_dir / f"{name}.md").exists()
+
+    def save_override(self, name: str, content: str) -> None:
+        """存用户编辑的模板。校验占位符集必须与默认一致——render 时任何未替换的
+        占位符会抛错让 W1/W2 挂，任何缺失的占位符会丢上下文，所以既不许删也不许加。"""
+        if name not in EDITABLE_PROMPTS:
+            raise ValueError(f"不可编辑的 prompt: {name}")
+        want = self.extract_placeholders(self.get_default(name))
+        got = self.extract_placeholders(content)
+        if got != want:
+            missing = sorted(want - got)
+            extra = sorted(got - want)
+            raise ValueError(
+                f"占位符必须与默认模板一致。缺失 {missing}，多余 {extra}。"
+                f"（必须保留：{sorted(want)}）"
+            )
+        self.override_dir.mkdir(parents=True, exist_ok=True)
+        (self.override_dir / f"{name}.md").write_text(content, encoding="utf-8")
+
+    def reset_override(self, name: str) -> None:
+        """恢复默认 = 删掉覆盖文件（幂等）。"""
+        if name not in EDITABLE_PROMPTS:
+            raise ValueError(f"不可编辑的 prompt: {name}")
+        override = self.override_dir / f"{name}.md"
+        if override.exists():
+            override.unlink()
 
     def load_system(self) -> str:
         try:

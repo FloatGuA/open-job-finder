@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
-import { API, type Profile } from '@/api'
+import { API, type Profile, type PromptTemplate } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
 
 // \u2500\u2500 Option sets (match boss_search_url.py code maps) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -99,7 +99,7 @@ function SaveButton({ saving, saved, onClick, savedText }: { saving: boolean; sa
   )
 }
 
-// \u2500\u2500 Tab 1: \u6c42\u804c\u504f\u597d (single form \u2192 profile.yaml, incl prompt_injection) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// \u2500\u2500 Tab 1: \u6c42\u804c\u504f\u597d (search filters only \u2192 profile.yaml) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 interface PrefState {
   salary: string
   keywords: string
@@ -109,15 +109,11 @@ interface PrefState {
   job_types: string[]
   financing: string[]
   scale: string[]
-  injGlobal: string
-  injScoreJob: string
-  injAnalyzeIntent: string
-  injGenerateReply: string
 }
 
 function PreferencesTab() {
   const [form, setForm] = useState<PrefState>({
-    salary: '', keywords: '', cities: [], experience: [], degree: [], job_types: [], financing: [], scale: [], injGlobal: '', injScoreJob: '', injAnalyzeIntent: '', injGenerateReply: '',
+    salary: '', keywords: '', cities: [], experience: [], degree: [], job_types: [], financing: [], scale: [],
   })
   const [readOnly, setReadOnly] = useState<{ districts?: string[]; position_types?: string[] }>({})
   const [loading, setLoading] = useState(false)
@@ -140,10 +136,6 @@ function PreferencesTab() {
           job_types: p.job_types ?? [],
           financing: p.financing ?? [],
           scale: p.scale ?? [],
-          injGlobal: p.prompt_injection?.global ?? '',
-          injScoreJob: p.prompt_injection?.score_job ?? '',
-          injAnalyzeIntent: p.prompt_injection?.analyze_intent ?? '',
-          injGenerateReply: p.prompt_injection?.generate_reply ?? '',
         })
         setReadOnly({ districts: p.districts, position_types: p.position_types })
       })
@@ -167,12 +159,6 @@ function PreferencesTab() {
         job_types: form.job_types,
         financing: form.financing,
         scale: form.scale,
-        prompt_injection: {
-          global: form.injGlobal,
-          score_job: form.injScoreJob,
-          analyze_intent: form.injAnalyzeIntent,
-          generate_reply: form.injGenerateReply,
-        },
       }
       await API.saveProfile(payload)
       setSaved(true)
@@ -225,46 +211,6 @@ function PreferencesTab() {
         </FieldRow>
         <FieldRow label={'\u878d\u8d44\u9636\u6bb5'}>
           <ChipSelect options={FINANCING_OPTIONS} selected={form.financing} onChange={setChip('financing')} />
-        </FieldRow>
-        <FieldRow label={'\u5168\u5c40\u6ce8\u5165\uff08\u5173\u4e8e\u6211\uff0c\u4f5c\u7528\u4e8e\u6240\u6709 AI \u73af\u8282\uff09'}>
-          <textarea
-            className={inputCls}
-            style={{ ...inputStyle, resize: 'vertical', minHeight: '72px' }}
-            value={form.injGlobal}
-            onChange={(e) => setForm((f) => ({ ...f, injGlobal: e.target.value }))}
-            placeholder={'\u5982\uff1a\u6211\u662f 2024 \u5c4a\u5e94\u5c4a\u751f\uff0c\u522b\u9ad8\u4f30\u6211\u7684\u7ecf\u9a8c\uff1b\u6211\u7279\u522b\u770b\u91cd\u8fdc\u7a0b\u529e\u516c'}
-            rows={2}
-          />
-        </FieldRow>
-        <FieldRow label={'\u8bc4\u5206\u6ce8\u5165\uff08\u53ea\u5f71\u54cd W1 \u804c\u4f4d\u6253\u5206\uff09'}>
-          <textarea
-            className={inputCls}
-            style={{ ...inputStyle, resize: 'vertical', minHeight: '72px' }}
-            value={form.injScoreJob}
-            onChange={(e) => setForm((f) => ({ ...f, injScoreJob: e.target.value }))}
-            placeholder={'\u5982\uff1a\u63d0\u4f9b\u8fdc\u7a0b\u529e\u516c\u7684\u5c97\u4f4d\u914c\u60c5\u52a0\u5206'}
-            rows={2}
-          />
-        </FieldRow>
-        <FieldRow label={'\u610f\u56fe\u6ce8\u5165\uff08\u53ea\u5f71\u54cd W2 \u5bf9 HR \u610f\u56fe\u7684\u5224\u65ad\uff09'}>
-          <textarea
-            className={inputCls}
-            style={{ ...inputStyle, resize: 'vertical', minHeight: '72px' }}
-            value={form.injAnalyzeIntent}
-            onChange={(e) => setForm((f) => ({ ...f, injAnalyzeIntent: e.target.value }))}
-            placeholder={'\u5982\uff1aHR \u8bf4\u201c\u65b9\u4fbf\u53d1\u4e2a\u5fae\u4fe1\u5417\u201d\u89c6\u4e3a\u8981\u7b80\u5386\u7684\u524d\u594f'}
-            rows={2}
-          />
-        </FieldRow>
-        <FieldRow label={'\u56de\u590d\u6ce8\u5165\uff08\u53ea\u5f71\u54cd\u7ed9 HR \u7684\u56de\u590d\u8349\u7a3f\uff09'}>
-          <textarea
-            className={inputCls}
-            style={{ ...inputStyle, resize: 'vertical', minHeight: '72px' }}
-            value={form.injGenerateReply}
-            onChange={(e) => setForm((f) => ({ ...f, injGenerateReply: e.target.value }))}
-            placeholder={'\u5982\uff1a\u8bed\u6c14\u53ef\u66f4\u4e3b\u52a8\uff0c\u53ef\u8868\u8fbe\u5e0c\u671b\u5c3d\u5feb\u6c9f\u901a'}
-            rows={2}
-          />
         </FieldRow>
 
         {((readOnly.districts?.length ?? 0) > 0 || (readOnly.position_types?.length ?? 0) > 0) && (
@@ -553,17 +499,201 @@ function EnvironmentTab() {
 }
 
 // \u2500\u2500 Root \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-type Tab = 'prefs' | 'model' | 'env'
+
+// -- Tab: Prompt \u6a21\u677f\uff08\u53ef\u7f16\u8f91 system/task prompt\uff09--------------------------------
+const PROMPT_LABELS: Record<string, string> = {
+  system: '\u7cfb\u7edf\u89d2\u8272\uff08\u6240\u6709 AI \u73af\u8282\u5171\u7528\uff09',
+  score_job: '\u8bc4\u5206\uff08W1 \u804c\u4f4d\u6253\u5206\uff09',
+  analyze_intent: '\u610f\u56fe\u5206\u6790\uff08W2 HR \u610f\u56fe\u5224\u65ad\uff09',
+  generate_reply: '\u56de\u590d\u751f\u6210\uff08\u7ed9 HR \u7684\u8349\u7a3f\uff09',
+}
+
+function PromptTemplatesTab() {
+  const [prompts, setPrompts] = useState<PromptTemplate[]>([])
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [note, setNote] = useState<Record<string, string>>({})
+  const [err, setErr] = useState<Record<string, string>>({})
+
+  const load = () => {
+    setLoading(true)
+    API.getPrompts()
+      .then((ps) => {
+        setPrompts(ps)
+        setDrafts(Object.fromEntries(ps.map((p) => [p.name, p.content])))
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => { load() }, [])
+
+  const save = async (name: string) => {
+    setBusy(name); setErr((e) => ({ ...e, [name]: '' })); setNote((m) => ({ ...m, [name]: '' }))
+    try {
+      await API.savePrompt(name, drafts[name] ?? '')
+      setNote((m) => ({ ...m, [name]: '\u2713 \u5df2\u4fdd\u5b58' }))
+      load()
+    } catch (e) {
+      setErr((er) => ({ ...er, [name]: (e as Error).message }))
+    } finally { setBusy(null) }
+  }
+
+  const reset = async (name: string) => {
+    setBusy(name); setErr((e) => ({ ...e, [name]: '' })); setNote((m) => ({ ...m, [name]: '' }))
+    try {
+      await API.resetPrompt(name)
+      setNote((m) => ({ ...m, [name]: '\u2713 \u5df2\u6062\u590d\u9ed8\u8ba4' }))
+      load()
+    } catch (e) {
+      setErr((er) => ({ ...er, [name]: (e as Error).message }))
+    } finally { setBusy(null) }
+  }
+
+  if (loading && !prompts.length) return <p className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</p>
+
+  return (
+    <Card title={'Prompt \u6a21\u677f'} dev="PromptTemplatesTab">
+      <p className="mb-5 text-xs text-text-3" style={{ letterSpacing: '-0.12px', lineHeight: '1.6' }}>
+        {'\u76f4\u63a5\u7f16\u8f91\u5e95\u5c42\u63d0\u793a\u8bcd\u6a21\u677f\u3002\u5360\u4f4d\u7b26\uff08\u5f62\u5982 {{title}}\uff09\u5fc5\u987b\u539f\u6837\u4fdd\u7559\uff0c\u5426\u5219\u4fdd\u5b58\u4f1a\u88ab\u62d2\u7edd\u3002\u4fee\u6539\u4ec5\u5b58\u672c\u5730\u8986\u76d6\u5c42\uff0c\u53ef\u968f\u65f6\u300c\u6062\u590d\u9ed8\u8ba4\u300d\u3002'}
+      </p>
+      <div className="space-y-6">
+        {prompts.map((p) => {
+          const dirty = (drafts[p.name] ?? '') !== p.content
+          return (
+            <div key={p.name} className="rounded-xl p-4" style={{ background: '#1b1b1f', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-text-1">{PROMPT_LABELS[p.name] ?? p.name}</span>
+                <code className="text-xs text-text-3">{p.name}</code>
+                {p.modified && (
+                  <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: 'rgba(245,166,35,0.15)', color: '#f5a623' }}>{'\u25cf \u5df2\u4fee\u6539'}</span>
+                )}
+              </div>
+              {p.placeholders.length > 0 && (
+                <p className="mb-2 text-xs text-text-3">
+                  {'\u5fc5\u987b\u4fdd\u7559\u7684\u5360\u4f4d\u7b26\uff1a'}
+                  <code className="text-signal-blue">{p.placeholders.map((ph) => '{{' + ph + '}}').join('  ')}</code>
+                </p>
+              )}
+              <textarea
+                className={inputCls}
+                style={{ ...inputStyle, resize: 'vertical', minHeight: '170px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', lineHeight: '1.55' }}
+                value={drafts[p.name] ?? ''}
+                onChange={(e) => setDrafts((d) => ({ ...d, [p.name]: e.target.value }))}
+                spellCheck={false}
+              />
+              {err[p.name] && <p className="mt-2 rounded-lg bg-signal-red/10 px-3 py-2 text-xs text-signal-red">{err[p.name]}</p>}
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void save(p.name)}
+                  disabled={busy === p.name || !dirty}
+                  className="rounded-full px-5 py-1.5 text-sm text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{ background: '#0a84ff', letterSpacing: '-0.224px' }}
+                >
+                  {busy === p.name ? '\u4fdd\u5b58\u4e2d\u2026' : '\u4fdd\u5b58'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void reset(p.name)}
+                  disabled={busy === p.name || !p.modified}
+                  className="rounded-lg bg-bg-card2 px-4 py-1.5 text-sm text-text-2 transition hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{ border: '1px solid rgba(255,255,255,0.08)' }}
+                >
+                  {'\u6062\u590d\u9ed8\u8ba4'}
+                </button>
+                {note[p.name] && <span className="text-sm text-signal-green" style={{ letterSpacing: '-0.224px' }}>{note[p.name]}</span>}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
+
+// -- Prompt \u6ce8\u5165\uff08\u5168\u5c40 + 3 \u4efb\u52a1\u5c42\uff0c\u72ec\u7acb\u4fdd\u5b58\uff09--------------------------------------
+function InjectionSection() {
+  const [inj, setInj] = useState({ global: '', score_job: '', analyze_intent: '', generate_reply: '' })
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    API.getProfile()
+      .then((p) => setInj({
+        global: p.prompt_injection?.global ?? '',
+        score_job: p.prompt_injection?.score_job ?? '',
+        analyze_intent: p.prompt_injection?.analyze_intent ?? '',
+        generate_reply: p.prompt_injection?.generate_reply ?? '',
+      }))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const save = async () => {
+    setSaving(true); setSaved(false); setError(null)
+    try {
+      await API.saveProfile({ prompt_injection: inj })
+      setSaved(true); window.setTimeout(() => setSaved(false), 3000)
+    } catch (e) { setError((e as Error).message) } finally { setSaving(false) }
+  }
+
+  const box = (key: keyof typeof inj, label: string, ph: string) => (
+    <FieldRow label={label}>
+      <textarea className={inputCls} style={{ ...inputStyle, resize: 'vertical', minHeight: '64px' }}
+        value={inj[key]} onChange={(e) => setInj((s) => ({ ...s, [key]: e.target.value }))} placeholder={ph} rows={2} />
+    </FieldRow>
+  )
+
+  if (loading) return null
+
+  return (
+    <Card title={'Prompt \u6ce8\u5165'} dev="InjectionSection">
+      {error && <p className="mb-4 rounded-lg bg-signal-red/10 px-3 py-2 text-xs text-signal-red">{error}</p>}
+      <p className="mb-4 text-xs text-text-3" style={{ letterSpacing: '-0.12px', lineHeight: '1.6' }}>
+        {'\u5f80\u63d0\u793a\u8bcd\u6a21\u677f\u5c3e\u90e8\u8ffd\u52a0\u4f60\u7684\u6307\u4ee4\u3002\u5168\u5c40\u6ce8\u5165\u8fdb\u6240\u6709 AI \u73af\u8282\uff0c\u5176\u4f59\u5404\u81ea\u53ea\u5f71\u54cd\u5bf9\u5e94\u73af\u8282\u3002'}
+      </p>
+      <div className="space-y-5">
+        {box('global', '\u5168\u5c40\u6ce8\u5165\uff08\u4f5c\u7528\u4e8e\u6240\u6709 AI \u73af\u8282\uff09', '\u5982\uff1a\u6211\u662f 2024 \u5c4a\u5e94\u5c4a\u751f\uff0c\u522b\u9ad8\u4f30\u6211\u7684\u7ecf\u9a8c\uff1b\u6211\u7279\u522b\u770b\u91cd\u8fdc\u7a0b\u529e\u516c')}
+        {box('score_job', '\u8bc4\u5206\u6ce8\u5165\uff08\u53ea\u5f71\u54cd W1 \u6253\u5206\uff09', '\u5982\uff1a\u63d0\u4f9b\u8fdc\u7a0b\u529e\u516c\u7684\u5c97\u4f4d\u914c\u60c5\u52a0\u5206')}
+        {box('analyze_intent', '\u610f\u56fe\u6ce8\u5165\uff08\u53ea\u5f71\u54cd W2 \u610f\u56fe\u5224\u65ad\uff09', '\u5982\uff1aHR \u8bf4\u201c\u65b9\u4fbf\u53d1\u4e2a\u5fae\u4fe1\u5417\u201d\u89c6\u4e3a\u8981\u7b80\u5386\u7684\u524d\u594f')}
+        {box('generate_reply', '\u56de\u590d\u6ce8\u5165\uff08\u53ea\u5f71\u54cd\u7ed9 HR \u7684\u8349\u7a3f\uff09', '\u5982\uff1a\u8bed\u6c14\u53ef\u66f4\u4e3b\u52a8\uff0c\u53ef\u8868\u8fbe\u5e0c\u671b\u5c3d\u5feb\u6c9f\u901a')}
+      </div>
+      <SaveButton saving={saving} saved={saved} onClick={() => void save()} />
+    </Card>
+  )
+}
+
+// -- Tab: \u6a21\u578b & Prompt\uff08\u5de6\uff1d\u6a21\u578b\u8def\u7531+\u6ce8\u5165\uff0c\u53f3\uff1d\u53ef\u7f16\u8f91\u6a21\u677f\uff09--------------------------
+function ModelPromptTab() {
+  return (
+    <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+      <div className="space-y-5 xl:col-span-1">
+        <ModelTab />
+        <InjectionSection />
+      </div>
+      <div className="space-y-5 xl:col-span-2">
+        <PromptTemplatesTab />
+      </div>
+    </div>
+  )
+}
+
+type Tab = 'prefs' | 'modelprompt' | 'env'
 const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'prefs', label: '\u6c42\u804c\u504f\u597d' },
-  { key: 'model', label: '\u6a21\u578b' },
+  { key: 'modelprompt', label: '\u6a21\u578b & Prompt' },
   { key: 'env', label: '\u73af\u5883 & Session' },
 ]
 
 export default function Settings() {
   const [tab, setTab] = useState<Tab>('prefs')
   return (
-    <div className="relative max-w-3xl space-y-5">
+    <div className="relative max-w-7xl space-y-5">
       <DevLabel name="Settings" float />
       <div className="inline-flex gap-1 rounded-xl bg-bg-card2 p-1" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
         {TABS.map((t) => (
@@ -579,7 +709,7 @@ export default function Settings() {
         ))}
       </div>
       {tab === 'prefs' && <PreferencesTab />}
-      {tab === 'model' && <ModelTab />}
+      {tab === 'modelprompt' && <ModelPromptTab />}
       {tab === 'env' && <EnvironmentTab />}
     </div>
   )
