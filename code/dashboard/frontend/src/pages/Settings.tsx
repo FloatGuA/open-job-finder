@@ -502,10 +502,16 @@ function EnvironmentTab() {
 
 // -- Tab: Prompt \u6a21\u677f\uff08\u53ef\u7f16\u8f91 system/task prompt\uff09--------------------------------
 const PROMPT_LABELS: Record<string, string> = {
-  system: '\u7cfb\u7edf\u89d2\u8272\uff08\u6240\u6709 AI \u73af\u8282\u5171\u7528\uff09',
-  score_job: '\u8bc4\u5206\uff08W1 \u804c\u4f4d\u6253\u5206\uff09',
-  analyze_intent: '\u610f\u56fe\u5206\u6790\uff08W2 HR \u610f\u56fe\u5224\u65ad\uff09',
-  generate_reply: '\u56de\u590d\u751f\u6210\uff08\u7ed9 HR \u7684\u8349\u7a3f\uff09',
+  system: '\u7cfb\u7edf\u89d2\u8272',
+  score_job: '\u8bc4\u5206',
+  analyze_intent: '\u610f\u56fe\u5206\u6790',
+  generate_reply: '\u56de\u590d\u751f\u6210',
+}
+const PROMPT_DESC: Record<string, string> = {
+  system: '\u7cfb\u7edf\u89d2\u8272 \u00b7 \u6240\u6709 AI \u73af\u8282\u5171\u7528',
+  score_job: '\u8bc4\u5206 \u00b7 W1 \u804c\u4f4d\u6253\u5206',
+  analyze_intent: '\u610f\u56fe\u5206\u6790 \u00b7 W2 HR \u610f\u56fe\u5224\u65ad',
+  generate_reply: '\u56de\u590d\u751f\u6210 \u00b7 \u7ed9 HR \u7684\u8349\u7a3f',
 }
 
 function PromptTemplatesTab() {
@@ -560,13 +566,11 @@ function PromptTemplatesTab() {
 
   return (
     <Card title={'Prompt \u6a21\u677f'} dev="PromptTemplatesTab">
-      <p className="mb-3 text-xs text-text-3" style={{ letterSpacing: '-0.12px', lineHeight: '1.6' }}>
-        {'\u76f4\u63a5\u7f16\u8f91\u5e95\u5c42\u63d0\u793a\u8bcd\u6a21\u677f\u3002\u5360\u4f4d\u7b26\uff08\u5f62\u5982 {{title}}\uff09\u5fc5\u987b\u539f\u6837\u4fdd\u7559\uff0c\u5426\u5219\u4fdd\u5b58\u4f1a\u88ab\u62d2\u7edd\u3002\u4fee\u6539\u4ec5\u5b58\u672c\u5730\u8986\u76d6\u5c42\uff0c\u53ef\u968f\u65f6\u300c\u6062\u590d\u9ed8\u8ba4\u300d\u3002'}
-      </p>
-      <div className="mb-3 flex flex-wrap gap-1 rounded-xl bg-bg-card2 p-1" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+      {/* \u9009\u9879\u5361\uff1a\u77ed\u6807\u7b7e\u4e00\u884c */}
+      <div className="mb-4 inline-flex flex-wrap gap-1 rounded-xl bg-bg-card2 p-1" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
         {prompts.map((t) => (
           <button key={t.name} type="button" onClick={() => setActive(t.name)}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition ${active === t.name ? 'text-white' : 'text-text-3 hover:text-text-1'}`}
+            className={`flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-sm font-medium transition ${active === t.name ? 'text-white' : 'text-text-3 hover:text-text-1'}`}
             style={active === t.name ? { background: '#0a84ff' } : undefined}>
             {PROMPT_LABELS[t.name] ?? t.name}
             {t.modified && <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: active === t.name ? '#fff' : '#f5a623' }} />}
@@ -575,16 +579,19 @@ function PromptTemplatesTab() {
       </div>
       {p && (
         <div>
-          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-            <code className="text-text-3">{p.name}</code>
-            {p.modified && <span className="rounded-full px-2 py-0.5" style={{ background: 'rgba(245,166,35,0.15)', color: '#f5a623' }}>{'\u25cf \u5df2\u4fee\u6539'}</span>}
-            {p.placeholders.length > 0 && (
-              <span className="text-text-3">{'\u5fc5\u987b\u4fdd\u7559\u5360\u4f4d\u7b26\uff1a'}<code className="text-signal-blue">{p.placeholders.map((ph) => '{{' + ph + '}}').join('  ')}</code></span>
-            )}
+          <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="text-sm font-semibold text-text-1">{PROMPT_DESC[p.name] ?? p.name}</span>
+            <code className="text-xs text-text-3">{p.name}</code>
+            {p.modified && <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: 'rgba(245,166,35,0.15)', color: '#f5a623' }}>{'\u25cf \u5df2\u4fee\u6539'}</span>}
           </div>
+          {p.placeholders.length > 0 && (
+            <p className="mb-2 text-xs text-text-3">
+              {'\u5fc5\u987b\u4fdd\u7559\u5360\u4f4d\u7b26\uff1a'}<code className="text-signal-blue">{p.placeholders.map((ph) => '{{' + ph + '}}').join('  ')}</code>
+            </p>
+          )}
           <textarea
             className={inputCls}
-            style={{ ...inputStyle, resize: 'vertical', minHeight: '540px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', lineHeight: '1.6', fontSize: '13px' }}
+            style={{ ...inputStyle, resize: 'vertical', minHeight: '560px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', lineHeight: '1.6', fontSize: '13px' }}
             value={drafts[p.name] ?? ''}
             onChange={(e) => setDrafts((d) => ({ ...d, [p.name]: e.target.value }))}
             spellCheck={false}
@@ -667,12 +674,12 @@ function InjectionSection() {
 // -- Tab: \u6a21\u578b & Prompt\uff08\u5de6\uff1d\u6a21\u578b\u8def\u7531+\u6ce8\u5165\uff0c\u53f3\uff1d\u53ef\u7f16\u8f91\u6a21\u677f\uff09--------------------------
 function ModelPromptTab() {
   return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-      <div className="space-y-5 xl:col-span-1">
+    <div className="grid grid-cols-1 gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="space-y-5">
         <ModelTab />
         <InjectionSection />
       </div>
-      <div className="space-y-5 xl:col-span-2">
+      <div className="space-y-5">
         <PromptTemplatesTab />
       </div>
     </div>
@@ -689,7 +696,7 @@ const TABS: Array<{ key: Tab; label: string }> = [
 export default function Settings() {
   const [tab, setTab] = useState<Tab>('prefs')
   return (
-    <div className="relative max-w-7xl space-y-5">
+    <div className="relative max-w-[1600px] space-y-5">
       <DevLabel name="Settings" float />
       <div className="inline-flex gap-1 rounded-xl bg-bg-card2 p-1" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
         {TABS.map((t) => (
