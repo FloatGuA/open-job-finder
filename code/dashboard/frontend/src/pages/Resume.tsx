@@ -198,20 +198,20 @@ function buildResumeHtml(blocks: ResumeBlocks): string {
 @page { size:A4; margin:0; }
 * { box-sizing:border-box; }
 html,body { margin:0; padding:0; }
-body { width:794px; min-height:1123px; padding:48px 56px; background:#fff; color:#1a1a1a;
-  font-family: Georgia, "Times New Roman", "Microsoft YaHei", "PingFang SC", serif; font-size:14px; line-height:1.5; }
-.name { text-align:center; font-size:32px; font-weight:700; letter-spacing:1px; margin:0 0 9px; }
+body { width:794px; min-height:1123px; padding:46px 56px; background:#fff; color:#1a1a1a;
+  font-family: Georgia, "Times New Roman", "Microsoft YaHei", "PingFang SC", serif; font-size:14px; line-height:1.52; }
+.name { text-align:center; font-size:31px; font-weight:700; letter-spacing:2px; margin:0 0 10px; }
 .contact { text-align:center; font-size:12.5px; color:#333; margin-bottom:4px; }
-.contact .sep { margin:0 9px; color:#bbb; }
+.contact .sep { margin:0 10px; color:#c2c2c2; }
 .subtitle { text-align:center; font-size:12.5px; color:#555; margin-bottom:4px; }
-.section { margin-top:18px; }
-.s-title { font-size:16px; font-weight:700; letter-spacing:.5px; padding-bottom:3px; margin-bottom:8px; border-bottom:1.5px solid #111; }
-.entry { margin-bottom:11px; }
+.section { margin-top:17px; }
+.s-title { font-size:15px; font-weight:700; letter-spacing:1px; padding-bottom:4px; margin-bottom:8px; border-bottom:1px solid #1a1a1a; }
+.entry { margin-bottom:10px; }
 .e-head { display:flex; justify-content:space-between; align-items:baseline; gap:12px; }
 .e-title { font-weight:700; font-size:14px; }
-.e-date { color:#666; font-size:12px; white-space:nowrap; }
-ul { margin:5px 0 0; padding-left:18px; }
-li { margin-bottom:3px; }
+.e-date { color:#777; font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+ul { margin:4px 0 0; padding-left:17px; }
+li { margin-bottom:2px; }
 </style></head><body>
 <div class="name">${escHtml(bi.name)}</div>
 ${contact ? `<div class="contact">${contact}</div>` : ''}
@@ -248,8 +248,6 @@ function A4Preview({ html }: { html: string }) {
   )
 }
 
-const sideBtn = 'rounded-lg px-2 py-1 text-[11px] transition'
-
 // \u5de6\u4fa7\u72ec\u7acb\u680f\uff1a\u591a\u4efd\u7b80\u5386\uff08\u6bcf\u4efd\u72ec\u7acb\u5b8c\u6574\uff0c\u6309\u5c97\u4f4d\u547d\u540d\uff09+ \u6700\u8fd1\u751f\u6210\uff08\u5bfc\u51fa PDF \u5b58\u6863\uff09
 function SidePanel({ resumes, exports, busy, onSwitch, onCreate, onDelete, onMeta, onDeleteExport }: {
   resumes: ResumeIndex | null
@@ -263,7 +261,6 @@ function SidePanel({ resumes, exports, busy, onSwitch, onCreate, onDelete, onMet
 }) {
   const [newName, setNewName] = useState('')
   const [newTarget, setNewTarget] = useState('')
-  const active = resumes?.items.find((it) => it.slug === resumes.active)
   return (
     <div className="w-full shrink-0 space-y-4 lg:w-60">
       <Card title={'\u6211\u7684\u7b80\u5386'} dev="ResumeList">
@@ -345,10 +342,17 @@ export default function Resume() {
   const [err, setErr] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  // \u62d6\u62fd\u72b6\u6001\uff1a\u5757\uff08\u540c\u5206\u533a\u5185\u91cd\u6392\uff09/ \u5206\u533a\uff08\u8c03\u6574\u7b80\u5386\u91cc\u7684\u5148\u540e\uff09
-  const dragBlk = useRef<{ cat: Cat; i: number } | null>(null)
-  const dragSec = useRef<Cat | null>(null)
   const metaTimer = useRef<number | null>(null)
+  // \u5c55\u5f00\u72b6\u6001\uff1a\u4e00\u6b21\u5c55\u5f00\u4e00\u6761\uff08FlowCV \u5f0f\uff09\uff1b\u62d6\u52a8\u5f00\u59cb\u5373\u5168\u90e8\u6536\u8d77
+  const [open, setOpen] = useState<string | null>(null)
+  // \u5757\u62d6\u62fd\uff1adragKey \u6807\u6e90\u6761\u6837\u5f0f\uff1bblkSlot=\u63d2\u5165\u69fd\u4f4d\uff08\u6307\u793a\u7ebf\u4f4d\u7f6e\uff09
+  const dragBlk = useRef<{ cat: Cat; i: number } | null>(null)
+  const [dragKey, setDragKey] = useState<string | null>(null)
+  const [blkSlot, setBlkSlot] = useState<{ cat: Cat; slot: number } | null>(null)
+  // \u5206\u533a\u62d6\u62fd
+  const dragSec = useRef<Cat | null>(null)
+  const [secDragKey, setSecDragKey] = useState<Cat | null>(null)
+  const [secSlot, setSecSlot] = useState<number | null>(null)
 
   const refreshMeta = () => {
     void API.getResumes().then(setResumes).catch(() => {})
@@ -368,35 +372,84 @@ export default function Resume() {
 
   const setBasic = (k: keyof ResumeBasicInfo, v: string) =>
     setBlocks((b) => (b ? { ...b, basic_info: { ...b.basic_info, [k]: v } } : b))
-  const setCat = (cat: Cat, list: ResumeBlock[]) => setBlocks((b) => (b ? { ...b, [cat]: list } : b))
-  const addBlock = (cat: Cat) => setCat(cat, [...blocks[cat], emptyBlock()])
+  const setCatList = (cat: Cat, list: ResumeBlock[]) => setBlocks((b) => (b ? { ...b, [cat]: list } : b))
+  const addBlock = (cat: Cat) => { setCatList(cat, [...blocks[cat], emptyBlock()]); setOpen(`${cat}:${blocks[cat].length}`) }
   const updateBlock = (cat: Cat, i: number, patch: Partial<ResumeBlock>) =>
-    setCat(cat, blocks[cat].map((b, j) => (j === i ? { ...b, ...patch } : b)))
-  const removeBlock = (cat: Cat, i: number) => setCat(cat, blocks[cat].filter((_, j) => j !== i))
+    setCatList(cat, blocks[cat].map((b, j) => (j === i ? { ...b, ...patch } : b)))
+  const removeBlock = (cat: Cat, i: number) => { setCatList(cat, blocks[cat].filter((_, j) => j !== i)); setOpen(null) }
   const moveBlock = (cat: Cat, i: number, dir: -1 | 1) => {
     const list = [...blocks[cat]]
     const j = i + dir
     if (j < 0 || j >= list.length) return
     const tmp = list[i]; list[i] = list[j]; list[j] = tmp
-    setCat(cat, list)
+    setCatList(cat, list)
+    setOpen(`${cat}:${j}`)
   }
-  const dropBlock = (cat: Cat, to: number) => {
+
+  // \u2500\u2500 \u5757\u62d6\u62fd\uff08\u6761\u72b6\uff1a\u6574\u6761\u53ef\u62d6\uff0c\u63d2\u5165\u7ebf\u6307\u793a\u843d\u70b9\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  const blockDragStart = (cat: Cat, i: number) => (e: React.DragEvent) => {
+    dragBlk.current = { cat, i }
+    setDragKey(`${cat}:${i}`)
+    setOpen(null)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', 'blk')
+  }
+  const blockDragOver = (cat: Cat, i: number) => (e: React.DragEvent) => {
+    if (dragBlk.current?.cat !== cat) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const r = e.currentTarget.getBoundingClientRect()
+    const before = e.clientY < r.top + r.height / 2
+    setBlkSlot({ cat, slot: before ? i : i + 1 })
+  }
+  const blockDrop = (cat: Cat) => (e: React.DragEvent) => {
+    e.preventDefault()
     const from = dragBlk.current
-    dragBlk.current = null
-    if (!from || from.cat !== cat || from.i === to) return
+    const s = blkSlot
+    blockDragEnd()
+    if (!from || !s || from.cat !== cat || s.cat !== cat) return
+    let to = s.slot
+    if (from.i < to) to -= 1
+    if (to === from.i) return
     const list = [...blocks[cat]]
     const [moved] = list.splice(from.i, 1)
     list.splice(to, 0, moved)
-    setCat(cat, list)
+    setCatList(cat, list)
   }
-  const dropSection = (target: Cat) => {
+  const blockDragEnd = () => { dragBlk.current = null; setDragKey(null); setBlkSlot(null) }
+
+  // \u2500\u2500 \u5206\u533a\u62d6\u62fd \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  const secDragStart = (cat: Cat) => (e: React.DragEvent) => {
+    dragSec.current = cat
+    setSecDragKey(cat)
+    setOpen(null)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', 'sec')
+  }
+  const secDragOver = (si: number) => (e: React.DragEvent) => {
+    if (!dragSec.current) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const r = e.currentTarget.getBoundingClientRect()
+    const before = e.clientY < r.top + r.height / 2
+    setSecSlot(before ? si : si + 1)
+  }
+  const secDrop = () => (e: React.DragEvent) => {
+    e.preventDefault()
     const from = dragSec.current
-    dragSec.current = null
-    if (!from || from === target) return
-    const order = sectionOrder.filter((c) => c !== from)
-    order.splice(order.indexOf(target), 0, from)
+    const slot = secSlot
+    secDragEnd()
+    if (!from || slot === null) return
+    const fi = sectionOrder.indexOf(from)
+    let to = slot
+    if (fi < to) to -= 1
+    if (to === fi) return
+    const order = [...sectionOrder]
+    order.splice(fi, 1)
+    order.splice(to, 0, from)
     setBlocks((b) => (b ? { ...b, section_order: order } : b))
   }
+  const secDragEnd = () => { dragSec.current = null; setSecDragKey(null); setSecSlot(null) }
 
   const save = async () => {
     setSaving(true); setErr(null); setSaved(false)
@@ -436,23 +489,24 @@ export default function Resume() {
       refreshMeta()
     } catch (e) { setErr((e as Error).message) } finally { setExporting(false) }
   }
-  // \u5207\u6362\u7b80\u5386\uff1a\u5148\u4fdd\u5b58\u5f53\u524d\u4efd\uff0c\u518d\u6fc0\u6d3b\u76ee\u6807\u4efd\u5e76\u8f7d\u5165
   const switchResume = async (slug: string) => {
     setSwitching(true); setErr(null)
     try {
       await API.saveResumeBlocks(blocks)
       await API.activateResume(slug)
       setBlocks(await API.getResumeBlocks())
+      setOpen(null)
       refreshMeta()
     } catch (e) { setErr((e as Error).message) } finally { setSwitching(false) }
   }
   const createResume = async (name: string, target: string) => {
     setSwitching(true); setErr(null)
     try {
-      await API.saveResumeBlocks(blocks)          // \u65b0\u4efd\u590d\u5236\u81ea\u5f53\u524d\uff0c\u5148\u843d\u6700\u65b0\u5185\u5bb9
+      await API.saveResumeBlocks(blocks)
       const item = await API.createResume(name, target, true)
       await API.activateResume(item.slug)
       setBlocks(await API.getResumeBlocks())
+      setOpen(null)
       refreshMeta()
     } catch (e) { setErr((e as Error).message) } finally { setSwitching(false) }
   }
@@ -462,7 +516,6 @@ export default function Resume() {
     catch (e) { setErr((e as Error).message) }
   }
   const updateMeta = (slug: string, patch: { name?: string; target?: string }) => {
-    // \u4e50\u89c2\u66f4\u65b0 + \u9632\u6296\u843d\u5e93
     setResumes((r) => (r ? { ...r, items: r.items.map((it) => (it.slug === slug ? { ...it, ...patch } : it)) } : r))
     if (metaTimer.current) window.clearTimeout(metaTimer.current)
     metaTimer.current = window.setTimeout(() => { void API.updateResumeMeta(slug, patch).catch(() => {}) }, 600)
@@ -471,6 +524,8 @@ export default function Resume() {
     try { await API.deleteResumeExport(fname); setExportsList((l) => l.filter((x) => x.file !== fname)) }
     catch (e) { setErr((e as Error).message) }
   }
+
+  const detailInput = 'w-full rounded-lg bg-bg-card px-3 py-2 text-sm text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue'
 
   return (
     <div className="relative">
@@ -492,7 +547,7 @@ export default function Resume() {
           {exporting ? '\u5bfc\u51fa\u4e2d\u2026' : '\u5bfc\u51fa PDF'}</button>
         {saved && <span className="text-sm text-signal-green">{'\u2713 \u5df2\u4fdd\u5b58'}</span>}
         {switching && <span className="text-sm text-text-3">{'\u5207\u6362\u4e2d\u2026'}</span>}
-        <span className="ml-auto text-xs text-text-3">{'\u5757\u548c\u5206\u533a\u90fd\u53ef\u62d6\u62fd\u6392\u5e8f\uff1b\u5bfc\u51fa\u524d\u8bb0\u5f97\u4fdd\u5b58'}</span>
+        <span className="ml-auto text-xs text-text-3">{'\u70b9\u6761\u76ee\u5c55\u5f00\u7f16\u8f91\uff0c\u6309\u4f4f\u53ef\u62d6\u52a8\u6392\u5e8f'}</span>
       </div>
 
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
@@ -519,58 +574,109 @@ export default function Resume() {
               {building ? '\u6574\u7406\u4e2d\u2026' : '\u878d\u5165\u5757\u5e93'}</button>
           }>
             <p className="mb-2 text-xs text-text-3">{'\u8865\u5145\u6ca1\u5199\u5168\u7684\u7ecf\u5386/\u7279\u957f\uff1b\u70b9\u53f3\u4e0a\u7528 LLM \u628a\u8fd9\u6bb5\u63cf\u8ff0\u878d\u8fdb\u4e0b\u65b9\u5757\u5e93\uff08\u8986\u76d6\uff09\u3002'}</p>
-            <textarea className={inputCls} style={{ ...inputStyle, minHeight: 120 }} value={blocks.self_description}
+            <textarea className={inputCls} style={{ ...inputStyle, minHeight: 110 }} value={blocks.self_description}
               onChange={(e) => setBlocks((b) => (b ? { ...b, self_description: e.target.value } : b))} />
           </Card>
 
-          {sectionOrder.map((key) => {
-            const label = catLabel(key)
-            const list = blocks[key]
-            return (
-              <div key={key}
-                onDragOver={(e) => { if (dragSec.current && dragSec.current !== key) e.preventDefault() }}
-                onDrop={() => dropSection(key)}>
-                <Card title={label} dev="ResumeCategory" action={
-                  <div className="flex items-center gap-1">
-                    <span draggable title={'\u62d6\u52a8\u8c03\u6574\u5206\u533a\u987a\u5e8f'}
-                      onDragStart={() => { dragSec.current = key }}
-                      onDragEnd={() => { dragSec.current = null }}
-                      className="cursor-grab px-1.5 text-sm text-text-3 transition hover:text-text-1 active:cursor-grabbing">{'\u283f'}</span>
-                    <button type="button" onClick={() => addBlock(key)} className="rounded-lg px-3 py-1.5 text-xs text-signal-bright transition hover:bg-signal-blue/10">{'+ \u6dfb\u52a0'}</button>
-                  </div>
-                }>
-                  {list.length === 0 ? (
-                    <p className="text-xs text-text-3">{'\u6682\u65e0\uff0c\u70b9\u300c+ \u6dfb\u52a0\u300d'}</p>
-                  ) : (
-                    <div className="space-y-4">
-                      {list.map((blk, i) => (
-                        <div key={i} className="rounded-xl bg-bg-card2 p-4" style={{ border: '1px solid rgba(255,255,255,0.06)' }}
-                          onDragOver={(e) => { if (dragBlk.current?.cat === key) e.preventDefault() }}
-                          onDrop={() => dropBlock(key, i)}>
-                          <div className="mb-2.5 flex items-center gap-2">
-                            <span draggable title={'\u62d6\u52a8\u8c03\u6574\u987a\u5e8f'}
-                              onDragStart={() => { dragBlk.current = { cat: key, i } }}
-                              onDragEnd={() => { dragBlk.current = null }}
-                              className="shrink-0 cursor-grab px-0.5 text-sm text-text-3 transition hover:text-text-1 active:cursor-grabbing">{'\u283f'}</span>
-                            <input className="w-full rounded-lg bg-bg-card2 px-3 py-2.5 text-sm font-medium text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue" style={inputStyle} placeholder={'\u6807\u9898\uff08\u5355\u4f4d/\u9879\u76ee/\u6280\u80fd\u540d\uff09'} value={blk.title} onChange={(e) => updateBlock(key, i, { title: e.target.value })} />
-                            <input className="w-28 shrink-0 rounded-lg bg-bg-card px-3 py-2.5 text-sm text-text-1 focus:outline-none" style={inputStyle} placeholder={'\u65f6\u95f4'} value={blk.time} onChange={(e) => updateBlock(key, i, { time: e.target.value })} />
-                            <button type="button" title={'\u4e0a\u79fb'} onClick={() => moveBlock(key, i, -1)} className="shrink-0 px-1 text-text-3 transition hover:text-text-1">{'\u2191'}</button>
-                            <button type="button" title={'\u4e0b\u79fb'} onClick={() => moveBlock(key, i, 1)} className="shrink-0 px-1 text-text-3 transition hover:text-text-1">{'\u2193'}</button>
-                            <button type="button" title={'\u5220\u9664'} onClick={() => removeBlock(key, i)} className="shrink-0 px-1 text-signal-red transition hover:brightness-125">{'\u2715'}</button>
-                          </div>
-                          <textarea className="w-full rounded-lg bg-bg-card2 px-3 py-2.5 text-sm leading-relaxed text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue" style={{ ...inputStyle, minHeight: 132 }} placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')} onChange={(e) => updateBlock(key, i, { bullets: e.target.value.split('\n') })} />
-                          <div className="mt-2.5 flex items-center gap-2">
-                            <span className="shrink-0 text-[11px] text-text-3" title={'\u4e0d\u4f1a\u51fa\u73b0\u5728\u7b80\u5386\u4e0a\uff1b\u662f\u300c\u6309\u5c97\u4f4d JD \u81ea\u52a8\u6311\u5757\u300d\u7684\u7d22\u5f15'}>{'\u6982\u62ec'}</span>
-                            <input className="flex-1 rounded bg-bg-card px-2.5 py-2 text-xs text-text-2 focus:outline-none" style={inputStyle} placeholder={'\u4e00\u53e5\u8bdd\u6982\u62ec\u8fd9\u4e2a\u5757\uff08\u4e0d\u4e0a\u7b80\u5386\uff1b\u6309 JD \u5b9a\u5236\u65f6 AI \u9760\u5b83\u6311\u5757\u2014\u2014\u5199\u5f97\u51c6\uff0c\u6311\u5757\u624d\u51c6\uff09'} value={blk.summary} onChange={(e) => updateBlock(key, i, { summary: e.target.value })} />
-                          </div>
-                        </div>
-                      ))}
+          <Card title={'\u7b80\u5386\u5185\u5bb9'} dev="ResumeSections">
+            <p className="mb-4 text-[11px] text-text-3">{'\u70b9\u6761\u76ee\u5c55\u5f00\u7f16\u8f91\uff1b\u6761\u76ee\u548c\u5206\u533a\u90fd\u53ef\u6309\u4f4f\u62d6\u52a8\u6392\u5e8f\uff0c\u84dd\u7ebf\u662f\u843d\u70b9\u3002'}</p>
+            <div className="space-y-5" onDrop={secDrop()}>
+              {sectionOrder.map((key, si) => {
+                const label = catLabel(key)
+                const list = blocks[key]
+                const isLastSec = si === sectionOrder.length - 1
+                return (
+                  <div key={key}
+                    onDragOver={secDragOver(si)}
+                    style={{
+                      opacity: secDragKey === key ? 0.35 : 1,
+                      borderTop: secSlot === si ? '2px solid #0a84ff' : '2px solid transparent',
+                      borderBottom: isLastSec && secSlot === sectionOrder.length ? '2px solid #0a84ff' : '2px solid transparent',
+                      transition: 'opacity .15s',
+                    }}>
+                    <div className="mb-2 flex items-center gap-2">
+                      <span draggable title={'\u62d6\u52a8\u8c03\u6574\u5206\u533a\u987a\u5e8f'}
+                        onDragStart={secDragStart(key)} onDragEnd={secDragEnd}
+                        className="cursor-grab text-[13px] leading-none text-text-3 transition hover:text-text-1 active:cursor-grabbing">{'\u2af6'}</span>
+                      <span className="text-[13px] font-semibold tracking-wide text-text-1">{label}</span>
+                      <span className="rounded-full px-1.5 text-[10px] text-text-3" style={{ background: 'rgba(255,255,255,0.06)' }}>{list.length}</span>
+                      <button type="button" onClick={() => addBlock(key)}
+                        className="ml-auto rounded-lg px-2.5 py-1 text-[11px] text-signal-bright transition hover:bg-signal-blue/10">{'+ \u6dfb\u52a0'}</button>
                     </div>
-                  )}
-                </Card>
-              </div>
-            )
-          })}
+
+                    {list.length === 0 ? (
+                      <button type="button" onClick={() => addBlock(key)}
+                        className="w-full rounded-[10px] py-2.5 text-[11px] text-text-3 transition hover:text-text-1"
+                        style={{ border: '1px dashed rgba(255,255,255,0.14)' }}>{'\u7a7a\u5206\u533a \u00b7 \u70b9\u51fb\u6dfb\u52a0\u4e00\u6761'}</button>
+                    ) : (
+                      <div className="space-y-1.5" onDrop={blockDrop(key)}>
+                        {list.map((blk, i) => {
+                          const k = `${key}:${i}`
+                          const isOpen = open === k
+                          const isLast = i === list.length - 1
+                          const slotHere = blkSlot?.cat === key
+                          return (
+                            <div key={k}
+                              onDragOver={blockDragOver(key, i)}
+                              style={{
+                                borderTop: slotHere && blkSlot?.slot === i ? '2px solid #0a84ff' : '2px solid transparent',
+                                borderBottom: isLast && slotHere && blkSlot?.slot === list.length ? '2px solid #0a84ff' : '2px solid transparent',
+                              }}>
+                              <div className="overflow-hidden rounded-[10px] transition"
+                                style={{
+                                  background: isOpen ? 'rgba(255,255,255,0.055)' : 'rgba(255,255,255,0.035)',
+                                  border: isOpen ? '1px solid rgba(10,132,255,0.4)' : '1px solid rgba(255,255,255,0.07)',
+                                  opacity: dragKey === k ? 0.35 : 1,
+                                }}>
+                                {/* \u6761\uff1a\u6536\u8d77\u6001\u6574\u6761\u53ef\u62d6\uff1b\u70b9\u51fb\u5c55\u5f00 */}
+                                <div draggable={!isOpen}
+                                  onDragStart={blockDragStart(key, i)} onDragEnd={blockDragEnd}
+                                  onClick={() => setOpen(isOpen ? null : k)}
+                                  className={`group flex select-none items-center gap-2.5 px-3 py-2.5 ${isOpen ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'}`}>
+                                  <span className="text-[13px] leading-none text-text-3 opacity-50 transition group-hover:opacity-100">{'\u2af6'}</span>
+                                  <span className={`min-w-0 flex-1 truncate text-sm ${blk.title ? 'font-medium text-text-1' : 'text-text-3'}`}>
+                                    {blk.title || '\u672a\u547d\u540d\u6761\u76ee'}</span>
+                                  {blk.time && <span className="shrink-0 text-[11px] text-text-3" style={{ fontVariantNumeric: 'tabular-nums' }}>{blk.time}</span>}
+                                  <span className="shrink-0 text-[10px] text-text-3 transition" style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }}>{'\u25be'}</span>
+                                </div>
+                                {/* \u5c55\u5f00\u8be6\u60c5\uff08grid-rows \u8fc7\u6e21\uff09 */}
+                                <div style={{ display: 'grid', gridTemplateRows: isOpen ? '1fr' : '0fr', transition: 'grid-template-rows .28s ease' }}>
+                                  <div className="min-h-0 overflow-hidden">
+                                    <div className="space-y-2.5 px-3 pb-3 pt-1">
+                                      <div className="flex gap-2">
+                                        <input className={detailInput} style={inputStyle} placeholder={'\u6807\u9898\uff08\u5355\u4f4d/\u9879\u76ee/\u6280\u80fd\u540d\uff09'}
+                                          value={blk.title} onChange={(e) => updateBlock(key, i, { title: e.target.value })} />
+                                        <input className="w-32 shrink-0 rounded-lg bg-bg-card px-3 py-2 text-sm text-text-1 focus:outline-none" style={inputStyle}
+                                          placeholder={'\u65f6\u95f4'} value={blk.time} onChange={(e) => updateBlock(key, i, { time: e.target.value })} />
+                                      </div>
+                                      <textarea className={`${detailInput} leading-relaxed`} style={{ ...inputStyle, minHeight: 120 }}
+                                        placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')}
+                                        onChange={(e) => updateBlock(key, i, { bullets: e.target.value.split('\n') })} />
+                                      <input className="w-full rounded bg-bg-card px-2.5 py-1.5 text-xs text-text-2 focus:outline-none" style={inputStyle}
+                                        placeholder={'\u6982\u62ec\uff1a\u4e00\u53e5\u8bdd\u8bf4\u8fd9\u4e2a\u5757\u662f\u4ec0\u4e48\uff08\u4e0d\u4e0a\u7b80\u5386\uff1bAI \u6309 JD \u6311\u5757\u9760\u5b83\u2014\u2014\u5199\u5f97\u51c6\uff0c\u6311\u5757\u624d\u51c6\uff09'}
+                                        value={blk.summary} onChange={(e) => updateBlock(key, i, { summary: e.target.value })} />
+                                      <div className="flex items-center gap-1 pt-0.5">
+                                        <button type="button" onClick={() => moveBlock(key, i, -1)} disabled={i === 0}
+                                          className="rounded px-2 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2191 \u4e0a\u79fb'}</button>
+                                        <button type="button" onClick={() => moveBlock(key, i, 1)} disabled={i === list.length - 1}
+                                          className="rounded px-2 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2193 \u4e0b\u79fb'}</button>
+                                        <button type="button" onClick={() => removeBlock(key, i)}
+                                          className="ml-auto rounded px-2 py-1 text-[11px] text-signal-red transition hover:brightness-125">{'\u5220\u9664\u6761\u76ee'}</button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </Card>
         </div>
 
         <div className="min-w-0 flex-1">
