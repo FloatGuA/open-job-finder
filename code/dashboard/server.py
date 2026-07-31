@@ -844,6 +844,23 @@ async def get_resume_plan_pdf(job_id: str):
     return FileResponse(str(out), media_type="application/pdf", filename=f"resume_{job_id}.pdf")
 
 
+@app.post("/api/resume/print-pdf")
+async def print_resume_pdf(body: dict[str, Any] = Body(...)):
+    """把前端块库预览的自包含 HTML 用 Chromium 打印成 PDF 返回。
+
+    与右侧实时预览**同源**（同一份 HTML）——预览所见即导出所得，避免前端预览与后端
+    渲染两套排版漂移。HTML 是用户本人简历内容、本地单用户工具，直接打印可接受。
+    """
+    _initialize_state()
+    from services import resume_tailor
+    html = str(body.get("html") or "")
+    if not html.strip():
+        raise HTTPException(status_code=400, detail="html is required")
+    out = DATA_DIR / "resume_pdfs" / "resume.pdf"
+    resume_tailor.render_html_to_pdf(html, str(out))
+    return FileResponse(str(out), media_type="application/pdf", filename="resume.pdf")
+
+
 @app.get("/api/onboarding/status")
 async def onboarding_status() -> JSONResponse:
     _initialize_state()

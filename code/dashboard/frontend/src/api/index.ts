@@ -521,6 +521,16 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ self_description }),
     }),
+  // 把预览用的简历 HTML 交后端 Chromium 打印成 PDF（与预览同源），返回 blob 供下载
+  printResumePdf: async (html: string): Promise<Blob> => {
+    const r = await fetch('/api/resume/print-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html }),
+    })
+    if (!r.ok) throw new Error(`PDF export failed (${r.status})`)
+    return r.blob()
+  },
   getResumeTemplates: (): Promise<ResumeTemplate[]> =>
     requestJson<{ templates: ResumeTemplate[] }>('/api/resume/templates').then((r) => r.templates),
   saveResumeTemplates: (templates: ResumeTemplate[]): Promise<{ ok: boolean }> =>
