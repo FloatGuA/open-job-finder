@@ -60,25 +60,7 @@ def is_available(path: str = "data/resume_blocks.yaml") -> bool:
     return bool(d["basic_info"].get("name")) or any(d.get(c) for c in BLOCK_CATEGORIES)
 
 
-_BUILD_PROMPT = """你是简历结构化助手。把下面的「简历解析结果」和「用户自我描述」整理成 JSON。
-
-要求：
-- 严格输出 JSON，不要多余文字。
-- basic_info：{name, phone, email, city, degree, target_title}，缺失留空字符串。
-- education / internship / project / skills / awards：每项是数组，元素 = {title, time, bullets, summary}。
-  - 一段经历 = 一个块（title 是单位/项目/技能名，time 是时间段，bullets 是要点数组）。
-  - summary：用一句话概括这个块讲了什么（中文，20 字以内）。
-- 只整理与重组已有信息，不要杜撰内容。自我描述里提到但简历没有的经历，也归入对应类别。
-
-简历解析结果：
-{resume_json}
-
-用户自我描述：
-{self_desc}
-"""
-
-
-def build_blocks(resume_base: dict, self_description: str, model_router) -> dict:
+def build_blocks(resume_base: dict, self_description: str, model_router, prompt_manager) -> dict:
     """用 LLM 把解析后的简历 + 自我描述整理成结构化块库（含每块 summary）。
 
     models judge：分类/概括是判断活儿，交给 LLM；结构与存储由 code 决定。
@@ -87,13 +69,20 @@ def build_blocks(resume_base: dict, self_description: str, model_router) -> dict
 
     from services.llm_parser import safe_parse_json
 
-    prompt = _BUILD_PROMPT.format(
-        resume_json=json.dumps(resume_base or {}, ensure_ascii=False),
-        self_desc=(self_description or "").strip() or "（无）",
-    )
+    prompt = prompt_manager.render("resume_build", {
+        "resume_json": json.dumps(resume_base or {}, ensure_ascii=False),
+        "self_desc": (self_description or "").strip() or "（无）",
+    })
     text, _provider = model_router.complete(prompt=prompt, capability="balanced")
-    parsed = safe_parse_json(text, required_fields=["basic_info"])
+    parsed = safe_parse_json(text, required_fields={"basic_info": dict})
+    return _normalize_parsed_blocks(parsed, self_description)
 
+
+def _normalize_parsed_blocks(parsed: dict, self_description: str = "") -> dict:
+    """把 LLM 解析出的 JSON 归一化成稳定的块库结构（basic_info + 5 类块，逐字段兜底）。
+
+    build_blocks（简历+自述整理）与 parse_resume_to_blocks（PDF 文本一步解析）共用。
+    """
     out = empty_blocks()
     out["self_description"] = self_description or ""
     bi = parsed.get("basic_info") or {}
@@ -117,3 +106,34 @@ def build_blocks(resume_base: dict, self_description: str, model_router) -> dict
             })
         out[cat] = clean
     return out
+
+
+def parse_resume_to_blocks(raw_text: str, model_router, prompt_manager) -> dict:
+    """LLM 一步解析：PDF/DOCX 提取的纯文本 → 结构化块库（跳过脆弱正则，更接近 flowcv）。
+
+    models judge：解析/归类/概括交给 LLM；结构与存储由 code 决定。
+    """
+    from services.llm_parser import safe_parse_json
+
+    prompt = prompt_manager.render("resume_parse", {"raw_text": (raw_text or "").strip()})
+    text, _provider = model_router.complete(prompt=prompt, capability="balanced")
+    parsed = safe_parse_json(text, required_fields={"basic_info": dict})
+    return _normalize_parsed_blocks(parsed, "")
+
+
+def parse_resume_vision(pdf_path: str, model_router, prompt_manager) -> dict:
+    """视觉解析：PDF 渲染成页面图片 → 视觉模型（vision 链）直接读版式 → 结构化块库。
+
+    排版型简历（多栏/图形/表格）的纯文本提取会丢结构，视觉模型看真实版面能更准地
+    归类。走 vision capability 链（本地 qwen2.5vl 主 + 云端 claude 兜底）。
+    """
+    from services.llm_parser import safe_parse_json
+    from services.resume_parser import render_pdf_to_images
+
+    images = render_pdf_to_images(pdf_path)
+    if not images:
+        raise ValueError("PDF 渲染图片为空，无法视觉解析")
+    prompt = prompt_manager.render("resume_parse_vision", {})
+    text, _provider = model_router.complete(prompt=prompt, images=images, capability="vision")
+    parsed = safe_parse_json(text, required_fields={"basic_info": dict})
+    return _normalize_parsed_blocks(parsed, "")

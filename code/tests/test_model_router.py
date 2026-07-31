@@ -1,13 +1,18 @@
 """Unit tests for ModelRouter and CodexCLIProvider (Task: llm-model-router)."""
+import os
+import re
 import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from services.llm_client import (
+    ClaudeCLIProvider,
     CodexCLIProvider,
     FallbackChain,
     ModelRouter,
+    OllamaProvider,
+    OpenAICompatibleProvider,
     build_model_router,
 )
 
@@ -38,11 +43,21 @@ def test_model_router_routes_to_correct_chain():
 
     text, provider = router.complete("hello", capability="fast")
     assert text == "fast-response"
-    fast_chain.complete.assert_called_once_with("hello", "", None, False)
+    fast_chain.complete.assert_called_once_with("hello", "", None, False, None)
 
     text, provider = router.complete("hello", capability="powerful")
     assert text == "powerful-response"
-    powerful_chain.complete.assert_called_once_with("hello", "", None, False)
+    powerful_chain.complete.assert_called_once_with("hello", "", None, False, None)
+
+
+def test_model_router_threads_images_to_chain():
+    """视觉解析：images 参数必须一路透传到目标链（parse_resume_vision 依赖它）。"""
+    vision_chain = _make_chain("vision-response", "ollama_qwen2.5vl:7b")
+    router = ModelRouter(chains={"vision": vision_chain})
+
+    text, _ = router.complete("read this", capability="vision", images=["B64IMG"])
+    assert text == "vision-response"
+    vision_chain.complete.assert_called_once_with("read this", "", None, False, ["B64IMG"])
 
 
 def test_model_router_fallback_to_balanced_when_capability_missing():
@@ -118,6 +133,73 @@ def test_build_model_router_raises_when_llm_missing():
     config = {}
     with pytest.raises(ValueError, match="llm.capabilities must define at least one level"):
         build_model_router(config)
+
+
+# ── 视觉 images 透传 ──────────────────────────────────────────────────────────
+
+def test_ollama_provider_passes_images_in_payload():
+    provider = OllamaProvider(model="qwen2.5vl:7b")
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"response": "  ok  "}
+    with patch("services.llm_client.requests.post", return_value=resp) as mp:
+        out = provider.complete("read this resume", images=["IMG64"])
+    assert out == "ok"
+    payload = mp.call_args.kwargs["json"]
+    assert payload["images"] == ["IMG64"]
+
+
+def test_openai_compatible_rejects_images():
+    # openai_compatible 未接视觉 → 收到 images 必须 raise，让 FallbackChain 跳过。
+    with pytest.raises(RuntimeError, match="does not support image"):
+        OpenAICompatibleProvider(model="deepseek", base_url="http://x").complete("p", images=["x"])
+
+
+def test_claude_cli_vision_saves_images_and_injects_paths():
+    # claude_cli 视觉：把 base64 图落临时 PNG、路径注入 prompt 让 claude 用 Read 读；用后清理。
+    provider = ClaudeCLIProvider()
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        prompt = args[-1]  # ["claude", "-p", full_prompt]
+        paths = re.findall(r"\S*claude_vision_\S+\.png", prompt)
+        captured["paths"] = paths
+        captured["exist_during"] = [os.path.exists(p) for p in paths]
+        m = MagicMock(); m.returncode = 0; m.stdout = b'{"ok":1}'
+        return m
+
+    with patch("subprocess.run", side_effect=fake_run):
+        out = provider.complete("PROMPT", images=["aGVsbG8="])  # base64("hello")
+    assert out == '{"ok":1}'
+    assert len(captured["paths"]) == 1
+    assert all(captured["exist_during"])          # 调用时临时文件在
+    assert not any(os.path.exists(p) for p in captured["paths"])  # 调用后已清理
+
+
+def test_codex_cli_vision_uses_i_flag_and_stdin():
+    # codex_cli 视觉：`-i <FILE>` 附图 + prompt 走 stdin（-i 贪婪多值会吞位置参数）。
+    provider = CodexCLIProvider()
+    provider._exe = "codex.CMD"
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["stdin"] = kwargs.get("input")
+        idxs = [i for i, a in enumerate(args) if a == "-i"]
+        captured["paths"] = [args[i + 1] for i in idxs]
+        captured["exist_during"] = [os.path.exists(p) for p in captured["paths"]]
+        m = MagicMock(); m.returncode = 0; m.stdout = '{"ok":1}'
+        return m
+
+    with patch("subprocess.run", side_effect=fake_run):
+        out = provider.complete("PROMPT", images=["aGVsbG8="])
+    assert out == '{"ok":1}'
+    assert "-i" in captured["args"]
+    assert captured["stdin"] == "PROMPT"          # prompt 走 stdin
+    assert "PROMPT" not in captured["args"]        # 不作位置参数（否则被 -i 吞）
+    assert len(captured["paths"]) == 1
+    assert all(captured["exist_during"])
+    assert not any(os.path.exists(p) for p in captured["paths"])
 
 
 # ── CodexCLIProvider ──────────────────────────────────────────────────────────

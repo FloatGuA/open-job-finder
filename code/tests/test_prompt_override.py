@@ -66,3 +66,33 @@ def test_non_editable_name_rejected(tmp_path):
         pm.save_override("../evil", "x")
     with pytest.raises(ValueError):
         pm.reset_override("nope")
+
+
+def test_resume_prompts_editable_and_render(tmp_path):
+    """简历三 prompt 纳入可编辑体系：在白名单、能 render（裸花括号不崩）、护栏生效。
+
+    旧实现用 str.format 渲染，会被 prompt 里 JSON schema 的裸花括号
+    （如 {name, phone} / {"sections": ...}）当成占位符而 KeyError 崩溃；
+    改走 PromptManager.render 的 str.replace 后裸花括号原样保留。
+    """
+    from services.prompt_manager import EDITABLE_PROMPTS
+
+    for name in ("resume_parse", "resume_build", "resume_tailor", "resume_greeting"):
+        assert name in EDITABLE_PROMPTS
+
+    pm = _pm(tmp_path)
+    out = pm.render("resume_build", {"resume_json": '{"x":1}', "self_desc": "y"})
+    assert "{{" not in out and "}}" not in out
+    assert "{name, phone" in out  # 裸花括号原样保留传给 LLM，不被当占位符
+
+    r = pm.render("resume_tailor", {"template_hint": "", "job": "j", "digest": "d"})
+    assert '{"sections"' in r  # JSON schema 裸花括号保留
+
+    rp = pm.render("resume_parse", {"raw_text": "申小明 上海 复旦"})
+    assert "{{" not in rp and "申小明" in rp   # raw_text 占位符替换
+    assert "{name, phone" in rp               # 裸花括号保留
+
+    # 占位符护栏：删掉一个占位符被拒
+    default = pm.get_default("resume_build")
+    with pytest.raises(ValueError):
+        pm.save_override("resume_build", default.replace("{{self_desc}}", "（略）"))

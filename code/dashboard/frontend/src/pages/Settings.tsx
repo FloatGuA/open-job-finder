@@ -337,16 +337,15 @@ function ModelTab() {
 }
 
 // \u2500\u2500 Tab 3: \u73af\u5883 & Session \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-interface AttachmentResume { ready: boolean; path: string; note: string | null }
 interface OnboardingStatus {
   profile: boolean; resume: boolean; session: boolean; llm_provider: boolean
-  attachment_resume: AttachmentResume; all_ok: boolean
+  all_ok: boolean
 }
 interface SessionResult { valid: boolean | null; name?: string; reason?: string; browser_open?: boolean }
 
-const STATUS_ITEMS: Array<{ key: keyof Omit<OnboardingStatus, 'all_ok' | 'attachment_resume'>; label: string; desc: string }> = [
+const STATUS_ITEMS: Array<{ key: keyof Omit<OnboardingStatus, 'all_ok'>; label: string; desc: string }> = [
   { key: 'profile', label: 'Profile \u914d\u7f6e', desc: 'data/profile.yaml' },
-  { key: 'resume', label: '\u7b80\u5386 YAML', desc: 'data/resume_base.yaml' },
+  { key: 'resume', label: '\u7b80\u5386 YAML', desc: 'data/resume_blocks.yaml' },
   { key: 'session', label: '\u6d4f\u89c8\u5668 Session', desc: 'data/browser_profile' },
   { key: 'llm_provider', label: 'LLM \u63d0\u4f9b\u5546', desc: 'Claude CLI / API' },
 ]
@@ -436,14 +435,6 @@ function EnvironmentTab() {
         {loading ? <p className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</p> : status ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {STATUS_ITEMS.map((item) => <StatusCard key={item.key} label={item.label} desc={item.desc} ready={Boolean(status[item.key])} />)}
-            <div className="flex items-start gap-3 rounded-xl bg-bg-card2 p-4">
-              <span className={`mt-0.5 text-base ${status.attachment_resume.ready ? 'text-signal-green' : 'text-signal-red'}`}>{status.attachment_resume.ready ? '\u2713' : '\u2717'}</span>
-              <div>
-                <p className="text-sm font-medium text-text-1" style={{ letterSpacing: '-0.224px' }}>{'\u9644\u4ef6\u7b80\u5386 PDF'}</p>
-                <p className="font-mono text-xs text-text-3" style={{ letterSpacing: '-0.12px' }}>{status.attachment_resume.path}</p>
-                {status.attachment_resume.note && <p className="mt-1 text-xs text-signal-amber" style={{ letterSpacing: '-0.12px' }}>{status.attachment_resume.note}</p>}
-              </div>
-            </div>
           </div>
         ) : <p className="text-sm text-text-3">{'\u65e0\u6cd5\u83b7\u53d6\u72b6\u6001'}</p>}
       </Card>
@@ -506,12 +497,22 @@ const PROMPT_LABELS: Record<string, string> = {
   score_job: '\u8bc4\u5206',
   analyze_intent: '\u610f\u56fe\u5206\u6790',
   generate_reply: '\u56de\u590d\u751f\u6210',
+  resume_parse: '\u7b80\u5386\u89e3\u6790(\u6587\u672c)',
+  resume_parse_vision: '\u7b80\u5386\u89e3\u6790(\u89c6\u89c9)',
+  resume_build: '\u7b80\u5386\u5757\u5e93',
+  resume_tailor: '\u7b80\u5386\u5b9a\u5236',
+  resume_greeting: '\u62db\u547c\u8bed',
 }
 const PROMPT_DESC: Record<string, string> = {
   system: '\u7cfb\u7edf\u89d2\u8272 \u00b7 \u6240\u6709 AI \u73af\u8282\u5171\u7528',
   score_job: '\u8bc4\u5206 \u00b7 W1 \u804c\u4f4d\u6253\u5206',
   analyze_intent: '\u610f\u56fe\u5206\u6790 \u00b7 W2 HR \u610f\u56fe\u5224\u65ad',
   generate_reply: '\u56de\u590d\u751f\u6210 \u00b7 \u7ed9 HR \u7684\u8349\u7a3f',
+  resume_parse: '\u7b80\u5386\u89e3\u6790(\u6587\u672c) \u00b7 pdfminer \u6587\u672c\u515c\u5e95\u8def\u5f84',
+  resume_parse_vision: '\u7b80\u5386\u89e3\u6790(\u89c6\u89c9) \u00b7 \u8bfb\u7b80\u5386\u56fe\u7247\uff0c\u6392\u7248\u578b\u7b80\u5386\u4e3b\u8def\u5f84',
+  resume_build: '\u7b80\u5386\u5757\u5e93 \u00b7 \u89e3\u6790\u7b80\u5386\u6574\u7406\u6210\u7ed3\u6784\u5316\u79ef\u6728',
+  resume_tailor: '\u7b80\u5386\u5b9a\u5236 \u00b7 \u6309\u5c97\u4f4d\u4ece\u79ef\u6728\u5e93\u6311\u5757\u5fae\u8c03',
+  resume_greeting: '\u62db\u547c\u8bed \u00b7 \u6309\u5c97\u4f4d\u751f\u6210\u6253\u62db\u547c\u8bed',
 }
 
 function PromptTemplatesTab() {
@@ -673,15 +674,12 @@ function InjectionSection() {
 
 // -- Tab: \u6a21\u578b & Prompt\uff08\u5de6\uff1d\u6a21\u578b\u8def\u7531+\u6ce8\u5165\uff0c\u53f3\uff1d\u53ef\u7f16\u8f91\u6a21\u677f\uff09--------------------------
 function ModelPromptTab() {
+  // Stacked: model routing (top) / prompt templates full-width (primary) / injection (appended to tail).
   return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
-      <div className="space-y-5">
-        <ModelTab />
-        <InjectionSection />
-      </div>
-      <div className="space-y-5">
-        <PromptTemplatesTab />
-      </div>
+    <div className="space-y-5">
+      <ModelTab />
+      <PromptTemplatesTab />
+      <InjectionSection />
     </div>
   )
 }

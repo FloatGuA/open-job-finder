@@ -5,8 +5,8 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-07-30（设置增强全套：可编辑 prompt 模板(master-detail 大框) + UI 重设计加宽 + 页面持久化 + prompt 中文化；已 commit + push origin master + 真机截图逐版验证） |
-| 当前版本 | 2.12.2.6                        |
+| 最后更新 | 2026-08-01（视觉模型解析简历 v2.14.0：PDF→图片→视觉 LLM→块库，vision 链 codex_cli 主→claude_cli 兜底，本地 VL 已移除，视觉失败直接报错；真实简历端到端验证通过） |
+| 当前版本 | 2.14.0.4                        |
 
 ## 待跟进（另开会话）
 
@@ -65,6 +65,20 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- 视觉模型解析简历：PDF 页面图片 → 视觉 LLM → 结构化块库（2026-08-01，v2.14.0.4，633 passed，build 绿，真实简历端到端验证）
+  - **视觉 provider 最终选型（用户 2026-08-01 定）**：vision 链 = **codex_cli 主 → claude_cli 兜底**，**本地 VL 已从链移除并 `ollama rm qwen2.5vl:7b`**；两个 CLI 都失败 → **上传直接报错**（PDF 不再回落弱 pdfminer 文本路径，fail fast，宁可报错让用户知道；DOCX 无页面图仍走文本）。
+  - **为什么弃本地**（真机对比同份 2 页 FlowCV 中文简历，测试文件不入库）：两个 CLI 都走**用户订阅额度、不需 API key、不额外付费**，精度**吊打**本地小 VL——codex_cli/claude_cli 均把 姓名/2 个学位/5 个项目 全抽对；本地 qwen2.5vl:7b 连名字都识别错、缺电话、区块串味；minicpm-v:8b 更差（臆造学历/丢光项目）；qwen2.5vl:32b(20GB+) 装不下 12GB 显存(RTX 5070)。
+  - **两个 CLI 的视觉接法（各自坑）**：`claude_cli` 是 agent 壳不吃 base64 → 把图落临时 PNG、prompt 里让 claude 用 Read 工具读（~50s，直出干净 JSON）；`codex_cli` 原生 `-i <FILE>` 附图，但 `-i` 是**贪婪多值会吞掉位置参数 prompt** → prompt 必须走 **stdin**（否则报 no prompt）（~71s，23.6k token）。两者都存临时文件、用后清理、超时放宽 300s。
+  - **ollama 视觉 num_ctx 坑**：一张简历页图就数千 image token，ollama 默认 `num_ctx=4096` 装不下多页 → DPI 220 直接 400 exceed_context、DPI 150 两页贴上限疑截断。视觉请求显式 `options.num_ctx=16384`。
+- ~~视觉模型解析简历（v2.14.0.2 初版，qwen2.5vl:7b）~~ 见上（provider 选型收口到 CLI 主）。
+  - **背景/痛点**：排版型简历（多栏/图形/表格）走 pdfminer 纯文本提取 + 正则会丢结构，解析质量差。改用视觉模型直接读页面版面。
+  - **动手前核对推翻方案假设**：记忆里方案写 `qwen2.5vl + fitz 现成`，实测**两条都不成立**——ollama 无任何视觉模型、PyMuPDF 未装。先 `ollama pull qwen2.5vl:7b`（~6GB）+ `pip install PyMuPDF`。
+  - **用户拍板两个决策**：①视觉模型来源＝**本地 VL 主 + 云端 Claude 兜底**（vision 链 `[ollama qwen2.5vl:7b, anthropic claude-opus-4-8]`）②视觉为主 + 文本兜底（回落 `parse_resume_to_blocks(pdfminer 文本)`）。
+  - **架构（images 贯穿 FallbackChain）**：`complete()` 加 `images` 参数穿 `LLMProviderProtocol`/各 Provider/`FallbackChain`/`ModelRouter`；ollama 走 `payload["images"]`（timeout 有图放宽 240s）、anthropic 走 image content blocks、纯文本 provider（claude_cli/codex_cli/openai_compatible）收到图 raise → 链自动跳过（所以 vision 链只放视觉模型）；`ModelRouter.LEVELS` 加 `vision`。
+  - **改动**：`protocols.py`/`llm_client.py`（images 贯穿 + vision level）/ `config.yaml`（vision 链）/ `resume_parser.py`（`render_pdf_to_images` fitz 渲染 base64 PNG）/ `resume_blocks.py`（`parse_resume_vision`）/ `prompts/resume_parse_vision.md`（新模板，纳入 `EDITABLE_PROMPTS` 前端可编辑）/ `server.py`（`upload_resume` 重写：PDF 视觉→blocks 失败回落文本；`build` 端点改读当前块库避免覆盖视觉结果；onboarding 简历就绪判断兼容块库）/ 前端 `Settings.tsx`（PROMPT_LABELS/DESC + 状态卡指向 resume_blocks.yaml）。测试 +4（images 透传/纯文本 provider 拒图/parse_resume_vision）。
+  - **真机验证**：合成简历 PDF → 真实 qwen2.5vl:7b 正确抽出 basic_info + 实习/项目（带 bullets）+ 技能/奖项 + 中文 summary，JSON 解析归一化全通。小瑕疵：education 被塞进 basic_info.degree（prompt 可调，数据不丢）；真机应以用户真实中文简历为准。
+  - **顺带清理**：Settings.tsx 删了上个会话遗留的坏死引用 `<InjectionBox promptName>`（组件从未定义、编译不过；注入已由 InjectionSection 承担）。**其余上个会话未提交 WIP（attachment_resume 状态卡删除 + ModelPromptTab 布局改堆叠）一并带入本次提交**。
 
 - 前端可编辑 system/task prompt 模板（覆盖层 + 恢复默认 + 改动提醒 + 占位符护栏）（2026-07-29，v2.12.2.1，628 passed，build 绿）
   - **需求**：注入是"往模板尾部加"，用户还想直接**改模板本体**。加显示/编辑/恢复默认/改动提醒。

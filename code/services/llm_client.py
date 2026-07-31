@@ -30,19 +30,45 @@ class ClaudeCLIProvider:
         except Exception:
             return False
 
-    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False) -> str:
+    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False, images: Optional[list] = None) -> str:
         # think: ignored — claude_cli is an agent shell with no thinking toggle.
         full_prompt = prompt if not system else f"{system}\n\n{prompt}"
+
+        # 视觉输入：claude_cli 是 agent 壳，不吃 base64 image API；改把图片落成临时 PNG
+        # 文件、在 prompt 里让 claude 用 Read 工具读它们。走用户的 Claude 订阅额度（不需
+        # API key、不额外付费），对密集中文简历版面精度远超本地小 VL（真机实测）。仅简历
+        # 视觉解析(vision 链)会走到这里——W1/W2 频繁调用不该用 CLI（抢主对话配额+慢）。
+        tmp_files: list[str] = []
+        if images:
+            import base64
+            for img_b64 in images:
+                fd, path = tempfile.mkstemp(suffix=".png", prefix="claude_vision_")
+                with os.fdopen(fd, "wb") as f:
+                    f.write(base64.b64decode(img_b64))
+                tmp_files.append(path)
+            full_prompt += (
+                "\n\n请先用 Read 工具读取以下图片文件，再按上面要求作答：\n"
+                + "\n".join(tmp_files)
+            )
 
         # Use list form (never shell=True) to prevent shell injection from prompt content.
         # Set PYTHONUTF8=1 so the subprocess stdout is always UTF-8 on Windows.
         env = {**os.environ, "PYTHONUTF8": "1"}
-        result = subprocess.run(
-            ["claude", "-p", full_prompt],
-            capture_output=True,
-            timeout=120,
-            env=env,
-        )
+        # 视觉 + agent 读图较慢（真机 ~50s），给到 300s；纯文本仍 120s。
+        timeout = 300 if images else 120
+        try:
+            result = subprocess.run(
+                ["claude", "-p", full_prompt],
+                capture_output=True,
+                timeout=timeout,
+                env=env,
+            )
+        finally:
+            for path in tmp_files:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         if result.returncode != 0:
             stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
             raise RuntimeError(
@@ -77,7 +103,7 @@ class CodexCLIProvider:
         except Exception:
             return False
 
-    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False) -> str:
+    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False, images: Optional[list] = None) -> str:
         # think: ignored — codex_cli is an agent shell (reasoning is its own -c knob).
         if not self._exe:
             raise RuntimeError("codex CLI not found on PATH")
@@ -104,25 +130,46 @@ class CodexCLIProvider:
         args = [self._exe, "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
                 "-c", 'model_reasoning_effort="low"']
         schema_file = None
+        tmp_files: list[str] = []
+        stdin_input = None
         try:
-            if output_schema:
-                fd, schema_file = tempfile.mkstemp(suffix=".json", prefix="codex_schema_")
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(output_schema, f)
-                args += ["--output-schema", schema_file]
-            args.append(full_prompt)
+            if images:
+                # 视觉输入：codex 原生支持 `-i <FILE>` 附图（走用户 codex 订阅、不需 API key）。
+                # 简历密集中文版面精度远超本地小 VL（真机实测）。⚠️ `-i` 的 <FILE>... 是贪婪多值、
+                # 会把位置参数 prompt 当成图片路径吞掉 → prompt 必须走 stdin（否则报 no prompt）。
+                import base64
+                for img_b64 in images:
+                    fd, path = tempfile.mkstemp(suffix=".png", prefix="codex_vision_")
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(base64.b64decode(img_b64))
+                    tmp_files.append(path)
+                    args += ["-i", path]
+                stdin_input = full_prompt
+            else:
+                if output_schema:
+                    fd, schema_file = tempfile.mkstemp(suffix=".json", prefix="codex_schema_")
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(output_schema, f)
+                    args += ["--output-schema", schema_file]
+                args.append(full_prompt)
             result = subprocess.run(
                 args,
+                input=stdin_input,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=180,
+                timeout=300 if images else 180,
             )
         finally:
             if schema_file:
                 try:
                     os.unlink(schema_file)
+                except OSError:
+                    pass
+            for path in tmp_files:
+                try:
+                    os.remove(path)
                 except OSError:
                     pass
         if result.returncode != 0:
@@ -152,7 +199,7 @@ class OllamaProvider:
         except Exception:
             return False
 
-    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False) -> str:
+    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False, images: Optional[list] = None) -> str:
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -172,10 +219,22 @@ class OllamaProvider:
             # is constrained to emit conforming JSON (no markdown fences / prose to
             # parse around) — a reliability win for the local qwen3 primary.
             payload["format"] = output_schema
+        if images:
+            # Ollama vision: `images` is a list of raw base64-encoded image strings
+            # (no data-URI prefix). Only vision models (qwen2.5vl) act on them; a
+            # text-only model would ignore the field. Used by the resume vision parse.
+            payload["images"] = images
+            # 一张简历页图片就有数千 image token，ollama 默认 num_ctx=4096 装不下
+            # 「多页图片 + prompt」→ 400 exceed_context 或**静默截断第二页**（表现为区块串味/
+            # 漏读）。视觉请求显式放大上下文，让整份简历都进模型。
+            payload.setdefault("options", {})["num_ctx"] = 16384
         # 90s (was 180s): a reachable-but-slow ollama still gets ample time, but a
         # stuck generate no longer hangs the whole chain for 3 minutes before falling
         # through to codex. With qwen3 think=false (fast, no reasoning trace) this is generous.
-        resp = requests.post(f"{self.base_url}/api/generate", json=payload, timeout=90)
+        # Vision inference over a resume page image on a local 7b VL is far slower than
+        # text (30-60s typical); give it more room. Text stays at the tight 90s.
+        timeout = 240 if images else 90
+        resp = requests.post(f"{self.base_url}/api/generate", json=payload, timeout=timeout)
         if resp.status_code != 200:
             raise RuntimeError(f"Ollama returned status {resp.status_code}: {resp.text[:300]}")
         data = resp.json()
@@ -195,17 +254,27 @@ class AnthropicAPIProvider:
     def is_available(self) -> bool:
         return bool(self.api_key)
 
-    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False) -> str:
+    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False, images: Optional[list] = None) -> str:
         # think: ignored — extended thinking is a separate Anthropic API param, not wired here.
         headers = {
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
+        if images:
+            # Vision: content is a list of image blocks (base64 PNG) followed by the
+            # text prompt. Used as the cloud fallback for the resume vision parse.
+            content = [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img}}
+                for img in images
+            ]
+            content.append({"type": "text", "text": prompt})
+        else:
+            content = prompt
         body = {
             "model": self.model,
             "max_tokens": 2048,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": content}],
         }
         if system:
             body["system"] = system
@@ -243,8 +312,10 @@ class OpenAICompatibleProvider:
     def is_available(self) -> bool:
         return bool(self.api_key)
 
-    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False) -> str:
+    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False, images: Optional[list] = None) -> str:
         # think: ignored — no reasoning toggle wired for the OpenAI-compatible path.
+        if images:
+            raise RuntimeError("openai_compatible provider does not support image input")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "content-type": "application/json",
@@ -281,7 +352,7 @@ class FallbackChain:
         self.providers = providers
         self.chain_name = chain_name
 
-    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False) -> tuple[str, str]:
+    def complete(self, prompt: str, system: str = "", output_schema: Optional[dict] = None, think: bool = False, images: Optional[list] = None) -> tuple[str, str]:
         errors = []
         unavailable = []
         for provider in self.providers:
@@ -290,7 +361,7 @@ class FallbackChain:
                     logger.debug("[%s] Provider %s not available, skipping.", self.chain_name, provider.name)
                     unavailable.append(provider.name)
                     continue
-                response = provider.complete(prompt, system, output_schema, think)
+                response = provider.complete(prompt, system, output_schema, think, images)
                 return response, provider.name
             except Exception as exc:
                 logger.warning("[%s] Provider %s failed: %s", self.chain_name, provider.name, exc)
@@ -355,7 +426,7 @@ class ModelRouter:
     provider_name to bypass the FallbackChain and call a specific provider directly.
     """
 
-    LEVELS = ("fast", "balanced", "powerful")
+    LEVELS = ("fast", "balanced", "powerful", "vision")
 
     def __init__(self, chains: dict, default: str = "balanced"):
         self._chains = chains
@@ -369,6 +440,7 @@ class ModelRouter:
         provider_name: str = None,
         output_schema: Optional[dict] = None,
         think: bool = False,
+        images: Optional[list] = None,
     ) -> tuple[str, str]:
         if provider_name:
             provider = self._find_provider(provider_name)
@@ -377,7 +449,7 @@ class ModelRouter:
             try:
                 if not provider.is_available():
                     raise RuntimeError(f"Provider '{provider_name}' not available")
-                return provider.complete(prompt, system, output_schema, think), provider.name
+                return provider.complete(prompt, system, output_schema, think, images), provider.name
             except Exception as exc:
                 # Log and fall through to capability chain (codex → claude → local order)
                 logger.warning(
@@ -390,7 +462,7 @@ class ModelRouter:
             or self._chains.get(self._default)
             or next(iter(self._chains.values()))
         )
-        return chain.complete(prompt, system, output_schema, think)
+        return chain.complete(prompt, system, output_schema, think, images)
 
     def _find_provider(self, name: str):
         for chain in self._chains.values():

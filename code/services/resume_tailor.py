@@ -89,27 +89,8 @@ def _blocks_digest(blocks: dict) -> str:
     return "\n".join(lines) or "（块库为空）"
 
 
-_RESUME_PROMPT = """你是简历定制助手。下面是候选人的「简历积木库」（每行 = 块id: 标题 | 概括）和一个目标岗位。
-请挑选并排序最相关的块，组成一份针对该岗位的简历。可在不杜撰的前提下微调每块的要点措辞使其更贴合岗位。
-
-严格输出 JSON：{"sections": [{"category": "<块所属类别>", "title": "", "time": "", "bullets": ["",...]}], "used_block_ids": ["education#0",...]}
-- 只使用积木库里已有的信息，不要编造经历。
-- sections 按你认为对该岗位最优的顺序排列。
-{template_hint}
-岗位：{job}
-
-积木库：
-{digest}
-"""
-
-_GREETING_PROMPT = """你是求职打招呼语助手。根据候选人积木库与目标岗位，写一段简短、真诚、突出匹配点的打招呼语（中文，60-120 字，第一人称，不浮夸、不杜撰）。
-只输出招呼语正文，不要多余文字。
-{template_hint}
-岗位：{job}
-
-候选人要点：
-{digest}
-"""
+# 简历 / 招呼语生成 prompt 已迁入 prompts/resume_tailor.md、resume_greeting.md
+# （走 PromptManager，可在前端编辑；替代原内联字符串——原 .format 会被 JSON schema 的裸花括号打断）。
 
 
 def _job_str(job: dict) -> str:
@@ -121,7 +102,7 @@ def _job_str(job: dict) -> str:
     return s or "（未知岗位）"
 
 
-def generate_resume_sections(blocks: dict, job: dict, template: Optional[dict], model_router) -> dict:
+def generate_resume_sections(blocks: dict, job: dict, template: Optional[dict], model_router, prompt_manager) -> dict:
     """生成简历组合方案（sections）。template 命中则作为起点提示，LLM 再按 JD 微调。"""
     from services.llm_parser import safe_parse_json
 
@@ -131,9 +112,11 @@ def generate_resume_sections(blocks: dict, job: dict, template: Optional[dict], 
             f"已匹配预制模板「{template.get('name','')}」，其建议块组合为 "
             f"{template.get('blocks')}；请以此为起点，再按岗位微调。\n"
         )
-    prompt = _RESUME_PROMPT.format(template_hint=hint, job=_job_str(job), digest=_blocks_digest(blocks))
+    prompt = prompt_manager.render("resume_tailor", {
+        "template_hint": hint, "job": _job_str(job), "digest": _blocks_digest(blocks),
+    })
     text, _p = model_router.complete(prompt=prompt, capability="balanced")
-    parsed = safe_parse_json(text, required_fields=["sections"])
+    parsed = safe_parse_json(text, required_fields={"sections": list})
     sections = []
     for s in parsed.get("sections") or []:
         if not isinstance(s, dict):
@@ -151,11 +134,13 @@ def generate_resume_sections(blocks: dict, job: dict, template: Optional[dict], 
     }
 
 
-def generate_greeting(blocks: dict, job: dict, template: Optional[dict], model_router) -> dict:
+def generate_greeting(blocks: dict, job: dict, template: Optional[dict], model_router, prompt_manager) -> dict:
     hint = ""
     if template and template.get("greeting_style"):
         hint = f"招呼语风格参考：{template['greeting_style']}\n"
-    prompt = _GREETING_PROMPT.format(template_hint=hint, job=_job_str(job), digest=_blocks_digest(blocks))
+    prompt = prompt_manager.render("resume_greeting", {
+        "template_hint": hint, "job": _job_str(job), "digest": _blocks_digest(blocks),
+    })
     text, _p = model_router.complete(prompt=prompt, capability="balanced")
     return {"text": (text or "").strip(), "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
 

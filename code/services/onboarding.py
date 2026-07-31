@@ -25,9 +25,11 @@ class OnboardingChecker:
         session_path: str = "data/session.json",
         config: dict = None,
         config_path: str = "config.yaml",
+        resume_blocks_path: str = "data/resume_blocks.yaml",
     ):
         self.profile_path = profile_path
         self.resume_yaml_path = resume_yaml_path
+        self.resume_blocks_path = resume_blocks_path
         self.session_path = session_path
         self.config = config or {}
         self.config_path = config_path
@@ -52,28 +54,26 @@ class OnboardingChecker:
                 return True
         return False
 
+    def _blocks_available(self) -> bool:
+        from services import resume_blocks
+        try:
+            return resume_blocks.is_available(self.resume_blocks_path)
+        except Exception:
+            return False
+
     def check_all(self) -> dict:
         profile_ok = self._file_non_empty(self.profile_path)
-        resume_ok = self._file_non_empty(self.resume_yaml_path)
+        # 简历就绪 = 旧 resume_base.yaml（onboarding CLI 写）或块库 resume_blocks.yaml
+        # （dashboard 上传的单一真相）任一存在。dashboard 视觉/文本解析都写块库。
+        resume_ok = self._file_non_empty(self.resume_yaml_path) or self._blocks_available()
         session_ok = os.path.exists(self.session_path)
         llm_ok = self._check_llm_provider()
-        attachment_resume = self.check_attachment_resume()
         return {
             "profile": profile_ok,
             "resume": resume_ok,
             "session": session_ok,
             "llm_provider": llm_ok,
-            "attachment_resume": attachment_resume,
             "all_ok": resume_ok and session_ok and llm_ok,
-        }
-
-    def check_attachment_resume(self) -> dict:
-        path = _DATA_DIR / "resume_attachment.pdf"
-        exists = path.exists()
-        return {
-            "ready": exists,
-            "path": str(path),
-            "note": None if exists else "请通过 Dashboard 上传附件简历 PDF，当 HR 请求时将自动发送。",
         }
 
     def run_interactive_setup(self) -> None:
@@ -123,12 +123,10 @@ class OnboardingChecker:
             "DrissionPage": "DrissionPage",
             "yaml": "PyYAML",
             "requests": "requests",
-            "jinja2": "jinja2",
         }
         optional_modules = {
             "fastapi": "fastapi",
             "uvicorn": "uvicorn",
-            "weasyprint": "weasyprint",
         }
 
         missing_required = [

@@ -120,7 +120,6 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "CONTROL_PATH", data_dir / "control.json")
     monkeypatch.setattr(srv, "PROFILE_PATH", data_dir / "profile.yaml")
     monkeypatch.setattr(srv, "CONFIG_PATH", tmp_path / "config.yaml")
-    monkeypatch.setattr(srv, "ATTACHMENT_RESUME_PATH", data_dir / "resume_attachment.pdf")
     monkeypatch.setattr(srv, "BOSS_DISTRICTS_PATH", data_dir / "boss_districts.json")
     monkeypatch.setattr(srv, "BOSS_POSITIONS_PATH", data_dir / "boss_positions.json")
     monkeypatch.setattr(srv, "BOSS_INDUSTRIES_PATH", data_dir / "boss_industries.json")
@@ -483,28 +482,6 @@ class TestFilterEndpoints:
         assert client.get("/api/filters/industries").json()["items"] == items
 
 
-# ── Attachment resume status ───────────────────────────────────────────────────
-
-class TestAttachmentResume:
-    def test_no_local_file(self, client):
-        r = client.get("/api/check/attachment-resume")
-        assert r.status_code == 200
-        data = r.json()
-        assert data["local_file"]["exists"] is False
-        assert data["local_file"]["size_kb"] == 0
-
-    def test_local_file_exists(self, client, tmp_path):
-        attachment = tmp_path / "data" / "resume_attachment.pdf"
-        attachment.write_bytes(b"%PDF-1.4 " + b"x" * 2048)  # >1 KB so size_kb rounds to > 0
-        r = client.get("/api/check/attachment-resume")
-        data = r.json()
-        assert data["local_file"]["exists"] is True
-        assert data["local_file"]["size_kb"] > 0
-
-    def test_response_contains_boss_profile_url(self, client):
-        assert "boss_profile_url" in client.get("/api/check/attachment-resume").json()
-
-
 # ── Resume upload ─────────────────────────────────────────────────────────────
 
 class TestResumeUpload:
@@ -526,7 +503,9 @@ class TestResumeUpload:
         assert "10 MB" in r.json()["detail"]
 
     def test_upload_pdf_ok(self, client):
-        with patch("dashboard.server.parse_resume_file", return_value={"name": "张三", "skills": ["Python"]}):
+        blocks = {"basic_info": {"name": "张三"},
+                  "skills": [{"title": "Python", "time": "", "bullets": [], "summary": ""}]}
+        with patch("dashboard.server._parse_resume_upload_to_blocks", return_value=(blocks, "vision")):
             r = client.post(
                 "/api/resume/upload",
                 files=_upload_file(b"%PDF-1.4 minimal content", "my_resume.pdf"),
@@ -534,24 +513,17 @@ class TestResumeUpload:
         assert r.status_code == 200
         data = r.json()
         assert data["success"] is True
-        assert data["attachment_saved"] is True
+        assert data["method"] == "vision"
+        assert "skills" in data["sections_found"]
 
     def test_upload_docx_ok(self, client):
-        with patch("dashboard.server.parse_resume_file", return_value={"name": "李四"}):
+        blocks = {"basic_info": {"name": "李四"}}
+        with patch("dashboard.server._parse_resume_upload_to_blocks", return_value=(blocks, "text")):
             r = client.post(
                 "/api/resume/upload",
                 files=_upload_file(b"PK fake docx bytes", "cv.docx"),
             )
         assert r.status_code == 200
-        assert r.json()["attachment_saved"] is False  # only PDF saves attachment
-
-    def test_upload_pdf_saves_attachment_copy(self, client, tmp_path):
-        with patch("dashboard.server.parse_resume_file", return_value={}):
-            client.post(
-                "/api/resume/upload",
-                files=_upload_file(b"%PDF-1.4 content", "resume.pdf"),
-            )
-        assert (tmp_path / "data" / "resume_attachment.pdf").exists()
 
 
 # ── Conversations ─────────────────────────────────────────────────────────────

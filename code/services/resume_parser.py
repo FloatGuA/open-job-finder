@@ -67,6 +67,27 @@ def _extract_text_from_pdf(file_path: str) -> str:
     return extract_text(file_path)
 
 
+def render_pdf_to_images(file_path: str, dpi: int = 150, max_pages: int = 4) -> list[str]:
+    """把 PDF 每页渲染成 PNG，返回原始 base64 字符串列表（无 data-URI 前缀）。
+
+    供视觉模型解析用（qwen2.5vl / claude vision）——排版型简历的正则文本提取会丢结构，
+    直接喂页面图片让视觉模型读。简历一般 1-2 页，max_pages 兜底防超长文档。
+    """
+    import base64
+
+    import fitz  # PyMuPDF
+
+    images: list[str] = []
+    doc = fitz.open(file_path)
+    try:
+        for page in doc[:max_pages]:
+            pix = page.get_pixmap(dpi=dpi)
+            images.append(base64.b64encode(pix.tobytes("png")).decode("ascii"))
+    finally:
+        doc.close()
+    return images
+
+
 def _extract_text_from_docx(file_path: str) -> str:
     import docx
 

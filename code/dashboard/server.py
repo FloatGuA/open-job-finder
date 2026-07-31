@@ -32,8 +32,6 @@ from services.llm_client import build_model_router, load_config
 from services.onboarding import OnboardingChecker
 from services.progress_emitter import ProgressEmitter, ProgressEvent
 from services.prompt_manager import EDITABLE_PROMPTS, PromptManager
-from services.resume_manager import ResumeManager
-from services.resume_parser import parse_resume_file
 from services.tracker import ApplicationTracker
 from tools.biz_logic.wechat_id import wechat_id_from
 from services import run_log_reader
@@ -46,7 +44,6 @@ RUNS_DIR = BASE_DIR.parent / "logs" / "runs"
 DASHBOARD_DIR = BASE_DIR / "dashboard"
 STATIC_DIR = DASHBOARD_DIR / "static"
 DATA_DIR = BASE_DIR / "data"
-ATTACHMENT_RESUME_PATH = DATA_DIR / "resume_attachment.pdf"
 CONFIG_PATH = BASE_DIR / "config.yaml"
 CONTROL_PATH = DATA_DIR / "control.json"
 PROFILE_PATH = DATA_DIR / "profile.yaml"
@@ -132,13 +129,9 @@ def _initialize_state() -> None:
     app.state.onboarding = OnboardingChecker(
         profile_path=str(DATA_DIR / "profile.yaml"),
         resume_yaml_path=str(DATA_DIR / "resume_base.yaml"),
+        resume_blocks_path=str(DATA_DIR / "resume_blocks.yaml"),
         session_path=str(DATA_DIR / "session.json"),
         config=config,
-    )
-    app.state.resume_manager = ResumeManager(
-        base_yaml_path=str(DATA_DIR / "resume_base.yaml"),
-        template_path=str(BASE_DIR / "templates" / "resume.html"),
-        output_dir=str(BASE_DIR / "output" / "resumes"),
     )
     app.state.model_router = build_model_router(config)
     app.state.emitter = getattr(app.state, "emitter", None) or ProgressEmitter()
@@ -636,6 +629,24 @@ async def resume_scheduler() -> JSONResponse:
     return JSONResponse({"paused": False, "message": "Scheduler resumed."})
 
 
+def _parse_resume_upload_to_blocks(path: str, suffix: str) -> tuple[dict, str]:
+    """上传简历 → 结构化块库（单一可编辑真相 resume_blocks.yaml）。
+
+    PDF 走视觉解析（vision 链 codex_cli→claude_cli）；两个 CLI 都失败**直接抛错**——不回落
+    弱的 pdfminer 文本路径，宁可报错让用户知道（用户 2026-08-01 定，fail fast）。
+    DOCX 无页面图可渲染，走文本解析（docx 文本 → LLM 结构化）。
+    返回 (blocks, method)，method ∈ {vision, text}。
+    """
+    from services import resume_blocks as rb
+    from services.resume_parser import _extract_text_from_docx
+
+    mr = app.state.model_router
+    pm = _resume_prompt_manager()
+    if suffix == ".pdf":
+        return rb.parse_resume_vision(path, mr, pm), "vision"
+    return rb.parse_resume_to_blocks(_extract_text_from_docx(path), mr, pm), "text"
+
+
 @app.post("/api/resume/upload")
 async def upload_resume(file: UploadFile = File(...)) -> JSONResponse:
     _initialize_state()
@@ -652,21 +663,24 @@ async def upload_resume(file: UploadFile = File(...)) -> JSONResponse:
         if len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=400, detail="File too large. Maximum size is 10 MB.")
         saved_path.write_bytes(content)
-        if suffix == ".pdf":
-            ATTACHMENT_RESUME_PATH.write_bytes(content)
-        parsed = parse_resume_file(str(saved_path))
+        blocks, method = _parse_resume_upload_to_blocks(str(saved_path), suffix)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    sections_found = [key for key, value in parsed.items() if value]
+    from services import resume_blocks as rb
+    if not (blocks["basic_info"].get("name") or any(blocks.get(c) for c in rb.BLOCK_CATEGORIES)):
+        raise HTTPException(status_code=400, detail="Resume parsing failed: no meaningful content detected.")
+    rb.save_blocks(blocks, str(DATA_DIR / "resume_blocks.yaml"))
+
+    sections_found = [c for c in rb.BLOCK_CATEGORIES if blocks.get(c)]
     return JSONResponse(
         {
             "success": True,
             "message": "Resume parsed and saved.",
+            "method": method,
             "sections_found": sections_found,
-            "attachment_saved": suffix == ".pdf",
         }
     )
 
@@ -706,23 +720,29 @@ async def put_resume_blocks(body: dict[str, Any] = Body(...)) -> JSONResponse:
 
 @app.post("/api/resume/blocks/build")
 async def build_resume_blocks_endpoint(body: dict[str, Any] | None = None) -> JSONResponse:
-    """用 LLM 把已解析简历(resume_base.yaml) + 自我描述整理成结构化块库，存盘并返回（解析预填）。"""
+    """用 LLM 把当前块库 + 自我描述重新整理成结构化块库，存盘并返回（重建/融合自述）。
+
+    上传解析已经直接产出块库（视觉/文本），此处的「重建」是把用户填的自我描述融进
+    当前块库——所以读的是当前 resume_blocks.yaml，不是已被解析路径取代的 resume_base.yaml。
+    """
     _initialize_state()
     body = body or {}
-    import yaml as _yaml
     from services import resume_blocks
-    base_path = DATA_DIR / "resume_base.yaml"
-    resume_base: dict = {}
-    if base_path.exists():
-        with base_path.open("r", encoding="utf-8") as f:
-            resume_base = _yaml.safe_load(f) or {}
+    current = resume_blocks.load_blocks(str(DATA_DIR / "resume_blocks.yaml"))
     self_desc = str(body.get("self_description") or "")
-    blocks = resume_blocks.build_blocks(resume_base, self_desc, app.state.model_router)
+    blocks = resume_blocks.build_blocks(current, self_desc, app.state.model_router, _resume_prompt_manager())
     resume_blocks.save_blocks(blocks, str(DATA_DIR / "resume_blocks.yaml"))
     return JSONResponse(blocks)
 
 
 # ── 功能二：岗位特化生成（预制模板 / 简历方案 / 招呼语 / 渲染 PDF）────────────
+def _resume_prompt_manager() -> PromptManager:
+    """简历端点用的 PromptManager：带上用户 prompt 注入（各 resume_* 的 task 注入 + global）。"""
+    from services.profile_loader import ProfileLoader
+    injection = ProfileLoader(str(PROFILE_PATH)).load().prompt_injection
+    return PromptManager(injection=injection)
+
+
 def _tailor_job_from_body(body: dict) -> dict:
     """从 body 取岗位信息；有 job_id 且 tracker 有记录则补全 title/company。"""
     job = {
@@ -775,7 +795,7 @@ async def tailor_resume(body: dict[str, Any] = Body(...)) -> JSONResponse:
     blocks = resume_blocks.load_blocks(str(DATA_DIR / "resume_blocks.yaml"))
     templates = resume_tailor.load_templates(str(DATA_DIR / "resume_templates.yaml"))
     tmpl = resume_tailor.match_template(templates, job["title"], job["jd_text"])
-    sections = resume_tailor.generate_resume_sections(blocks, job, tmpl, app.state.model_router)
+    sections = resume_tailor.generate_resume_sections(blocks, job, tmpl, app.state.model_router, _resume_prompt_manager())
     plan = resume_tailor._set_plan_part(
         job_id, "resume", sections, job_title=job["title"], company=job["company"],
         path=str(DATA_DIR / "resume_plans.yaml"),
@@ -794,7 +814,7 @@ async def tailor_greeting(body: dict[str, Any] = Body(...)) -> JSONResponse:
     blocks = resume_blocks.load_blocks(str(DATA_DIR / "resume_blocks.yaml"))
     templates = resume_tailor.load_templates(str(DATA_DIR / "resume_templates.yaml"))
     tmpl = resume_tailor.match_template(templates, job["title"], job["jd_text"])
-    greeting = resume_tailor.generate_greeting(blocks, job, tmpl, app.state.model_router)
+    greeting = resume_tailor.generate_greeting(blocks, job, tmpl, app.state.model_router, _resume_prompt_manager())
     plan = resume_tailor._set_plan_part(
         job_id, "greeting", greeting, job_title=job["title"], company=job["company"],
         path=str(DATA_DIR / "resume_plans.yaml"),
@@ -1131,26 +1151,6 @@ async def session_confirm_login() -> JSONResponse:
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, _verify_and_persist)
     return JSONResponse({"status": "saved", "session": result})
-
-
-@app.get("/api/check/attachment-resume")
-async def check_attachment_resume_status() -> JSONResponse:
-    """Check local attachment resume file existence.
-    Boss直聘 online status requires browser automation — not checked here."""
-    local_exists = ATTACHMENT_RESUME_PATH.exists()
-    local_size = ATTACHMENT_RESUME_PATH.stat().st_size if local_exists else 0
-    return JSONResponse({
-        "local_file": {
-            "exists": local_exists,
-            "path": str(ATTACHMENT_RESUME_PATH),
-            "size_kb": round(local_size / 1024, 1) if local_exists else 0,
-        },
-        "boss_online": {
-            "checked": False,
-            "note": "需要浏览器 session 才能检测在线状态，当前未自动检测",
-        },
-        "boss_profile_url": "https://www.zhipin.com/web/geek/resume",
-    })
 
 
 @app.get("/api/conversations")
