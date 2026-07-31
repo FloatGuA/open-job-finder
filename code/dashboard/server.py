@@ -670,9 +670,11 @@ async def upload_resume(file: UploadFile = File(...)) -> JSONResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     from services import resume_blocks as rb
+    from services.resume_store import ResumeStore
     if not (blocks["basic_info"].get("name") or any(blocks.get(c) for c in rb.BLOCK_CATEGORIES)):
         raise HTTPException(status_code=400, detail="Resume parsing failed: no meaningful content detected.")
-    rb.save_blocks(blocks, str(DATA_DIR / "resume_blocks.yaml"))
+    # 解析结果写入当前激活简历（双写兼容位 + {slug}.yaml）
+    ResumeStore(str(DATA_DIR)).save_active_blocks(blocks)
 
     sections_found = [c for c in rb.BLOCK_CATEGORIES if blocks.get(c)]
     return JSONResponse(
@@ -694,8 +696,12 @@ async def get_resume_blocks() -> JSONResponse:
 
 @app.put("/api/resume/blocks")
 async def put_resume_blocks(body: dict[str, Any] = Body(...)) -> JSONResponse:
-    """整存编辑后的块库；只接受已知结构的键，避免存入垃圾字段。"""
+    """整存编辑后的块库；只接受已知结构的键，避免存入垃圾字段。
+
+    经 ResumeStore 双写：兼容位 resume_blocks.yaml + 当前激活简历 {slug}.yaml。
+    """
     from services import resume_blocks
+    from services.resume_store import ResumeStore
     clean = resume_blocks.empty_blocks()
     bi = body.get("basic_info") or {}
     for k in clean["basic_info"]:
@@ -714,7 +720,87 @@ async def put_resume_blocks(body: dict[str, Any] = Body(...)) -> JSONResponse:
                 }
                 for it in items if isinstance(it, dict)
             ]
-    resume_blocks.save_blocks(clean, str(DATA_DIR / "resume_blocks.yaml"))
+    clean["section_order"] = resume_blocks.normalize_section_order(body.get("section_order"))
+    ResumeStore(str(DATA_DIR)).save_active_blocks(clean)
+    return JSONResponse({"ok": True})
+
+
+# ── 多份简历管理（v2.15 简历制作台：每份独立完整，激活份镜像到 resume_blocks.yaml）──
+@app.get("/api/resumes")
+async def list_resumes() -> JSONResponse:
+    from services.resume_store import ResumeStore
+    return JSONResponse(ResumeStore(str(DATA_DIR)).list())
+
+
+@app.post("/api/resumes")
+async def create_resume(body: dict[str, Any] = Body(...)) -> JSONResponse:
+    from services.resume_store import ResumeStore
+    item = ResumeStore(str(DATA_DIR)).create(
+        name=str(body.get("name") or ""),
+        target=str(body.get("target") or ""),
+        copy_from_active=bool(body.get("copy_from_active", True)),
+    )
+    return JSONResponse(item)
+
+
+@app.put("/api/resumes/{slug}")
+async def update_resume_meta(slug: str, body: dict[str, Any] = Body(...)) -> JSONResponse:
+    from services.resume_store import ResumeStore
+    try:
+        item = ResumeStore(str(DATA_DIR)).update_meta(
+            slug,
+            name=str(body["name"]) if "name" in body else None,
+            target=str(body["target"]) if "target" in body else None,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"resume not found: {slug}")
+    return JSONResponse(item)
+
+
+@app.post("/api/resumes/{slug}/activate")
+async def activate_resume(slug: str) -> JSONResponse:
+    from services.resume_store import ResumeStore
+    try:
+        idx = ResumeStore(str(DATA_DIR)).activate(slug)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"resume not found: {slug}")
+    return JSONResponse(idx)
+
+
+@app.delete("/api/resumes/{slug}")
+async def delete_resume(slug: str) -> JSONResponse:
+    from services.resume_store import ResumeStore
+    try:
+        ResumeStore(str(DATA_DIR)).delete(slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse({"ok": True})
+
+
+# ── 导出存档（最近生成）─────────────────────────────────────────────────────
+@app.get("/api/resume/exports")
+async def list_resume_exports() -> JSONResponse:
+    from services.resume_store import ResumeStore
+    return JSONResponse({"exports": ResumeStore(str(DATA_DIR)).list_exports()})
+
+
+@app.get("/api/resume/exports/{fname}")
+async def download_resume_export(fname: str):
+    from services.resume_store import ResumeStore
+    try:
+        path = ResumeStore(str(DATA_DIR)).export_file(fname)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail=fname)
+    return FileResponse(path, media_type="application/pdf", filename=fname)
+
+
+@app.delete("/api/resume/exports/{fname}")
+async def delete_resume_export(fname: str) -> JSONResponse:
+    from services.resume_store import ResumeStore
+    try:
+        ResumeStore(str(DATA_DIR)).delete_export(fname)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail=fname)
     return JSONResponse({"ok": True})
 
 
@@ -853,12 +939,14 @@ async def print_resume_pdf(body: dict[str, Any] = Body(...)):
     """
     _initialize_state()
     from services import resume_tailor
+    from services.resume_store import ResumeStore
     html = str(body.get("html") or "")
     if not html.strip():
         raise HTTPException(status_code=400, detail="html is required")
-    out = DATA_DIR / "resume_pdfs" / "resume.pdf"
-    resume_tailor.render_html_to_pdf(html, str(out))
-    return FileResponse(str(out), media_type="application/pdf", filename="resume.pdf")
+    # 每次导出按时间戳存档（「最近生成」列表的数据源），不互相覆盖，滚动上限修剪。
+    out = ResumeStore(str(DATA_DIR)).export_path(str(body.get("name") or "resume"))
+    resume_tailor.render_html_to_pdf(html, out)
+    return FileResponse(out, media_type="application/pdf", filename=os.path.basename(out))
 
 
 @app.get("/api/onboarding/status")

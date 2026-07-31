@@ -396,6 +396,23 @@ export interface ResumeBlocks {
   project: ResumeBlock[]
   skills: ResumeBlock[]
   awards: ResumeBlock[]
+  section_order: string[]
+}
+
+export interface ResumeMeta {
+  slug: string
+  name: string
+  target: string
+  updated_at: string
+}
+export interface ResumeIndex {
+  active: string
+  items: ResumeMeta[]
+}
+export interface ResumeExport {
+  file: string
+  size: number
+  mtime: string
 }
 
 export interface ResumeTemplate {
@@ -521,16 +538,39 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ self_description }),
     }),
-  // 把预览用的简历 HTML 交后端 Chromium 打印成 PDF（与预览同源），返回 blob 供下载
-  printResumePdf: async (html: string): Promise<Blob> => {
+  // 把预览用的简历 HTML 交后端 Chromium 打印成 PDF（与预览同源），返回 blob 供下载；
+  // name 用于服务端「最近生成」存档命名
+  printResumePdf: async (html: string, name?: string): Promise<Blob> => {
     const r = await fetch('/api/resume/print-pdf', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ html }),
+      body: JSON.stringify({ html, name }),
     })
     if (!r.ok) throw new Error(`PDF export failed (${r.status})`)
     return r.blob()
   },
+  // 多份简历管理
+  getResumes: (): Promise<ResumeIndex> => requestJson('/api/resumes'),
+  createResume: (name: string, target: string, copyFromActive = true): Promise<ResumeMeta> =>
+    requestJson('/api/resumes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, target, copy_from_active: copyFromActive }),
+    }),
+  updateResumeMeta: (slug: string, patch: { name?: string; target?: string }): Promise<ResumeMeta> =>
+    requestJson(`/api/resumes/${slug}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+  activateResume: (slug: string): Promise<ResumeIndex> =>
+    requestJson(`/api/resumes/${slug}/activate`, { method: 'POST' }),
+  deleteResume: (slug: string): Promise<{ ok: boolean }> =>
+    requestJson(`/api/resumes/${slug}`, { method: 'DELETE' }),
+  // 最近生成（导出存档）
+  getResumeExports: (): Promise<{ exports: ResumeExport[] }> => requestJson('/api/resume/exports'),
+  deleteResumeExport: (fname: string): Promise<{ ok: boolean }> =>
+    requestJson(`/api/resume/exports/${encodeURIComponent(fname)}`, { method: 'DELETE' }),
   getResumeTemplates: (): Promise<ResumeTemplate[]> =>
     requestJson<{ templates: ResumeTemplate[] }>('/api/resume/templates').then((r) => r.templates),
   saveResumeTemplates: (templates: ResumeTemplate[]): Promise<{ ok: boolean }> =>

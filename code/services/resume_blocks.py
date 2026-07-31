@@ -24,7 +24,18 @@ def empty_blocks() -> dict:
     data: dict = {"basic_info": {k: "" for k in _BASIC_FIELDS}, "self_description": ""}
     for cat in BLOCK_CATEGORIES:
         data[cat] = []
+    # 分区在简历里的先后顺序（编辑器可拖拽调整，预览/导出按此渲染）
+    data["section_order"] = list(BLOCK_CATEGORIES)
     return data
+
+
+def normalize_section_order(order) -> list:
+    """归一化分区顺序：只认已知类别、去重，缺的按默认顺序补到尾部（结构稳定）。"""
+    seen = []
+    for c in order if isinstance(order, list) else []:
+        if c in BLOCK_CATEGORIES and c not in seen:
+            seen.append(c)
+    return seen + [c for c in BLOCK_CATEGORIES if c not in seen]
 
 
 def load_blocks(path: str = "data/resume_blocks.yaml") -> dict:
@@ -43,6 +54,7 @@ def load_blocks(path: str = "data/resume_blocks.yaml") -> dict:
     for cat in BLOCK_CATEGORIES:
         if isinstance(data.get(cat), list):
             base[cat] = data[cat]
+    base["section_order"] = normalize_section_order(data.get("section_order"))
     return base
 
 

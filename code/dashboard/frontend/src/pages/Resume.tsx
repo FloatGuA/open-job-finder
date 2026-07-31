@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
-import { API, type ResumeBlocks, type ResumeBlock, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type Job } from '@/api'
+import { API, type ResumeBlocks, type ResumeBlock, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type Job } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
 
 type Cat = 'education' | 'internship' | 'project' | 'skills' | 'awards'
@@ -174,12 +174,15 @@ function TailorCard() {
 const escHtml = (s: string) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+const catLabel = (k: string) => CATS.find((c) => c.key === k)?.label ?? k
+
 // FlowCV\u300cclassic\u300d\u98ce\u683c\uff1a\u5c45\u4e2d\u5927\u6807\u9898 + \u8054\u7cfb\u884c + \u5206\u533a\u6574\u884c\u4e0b\u5212\u7ebf + \u6761\u76ee\u7c97\u6807\u9898/\u53f3\u7070\u65e5\u671f\u3002
-// px \u753b\u5e03(794=A4@96dpi\u5bbd)\uff0c\u9884\u89c8 iframe \u4e0e\u5bfc\u51fa PDF \u540c\u6e90\uff1bLatin \u886c\u7ebf + \u4e2d\u6587\u9ed1\u4f53\u3002
+// px \u753b\u5e03(794=A4@96dpi\u5bbd)\uff0c\u9884\u89c8 iframe \u4e0e\u5bfc\u51fa PDF \u540c\u6e90\uff1b\u5206\u533a\u987a\u5e8f\u8ddf\u968f section_order\u3002
 function buildResumeHtml(blocks: ResumeBlocks): string {
   const bi = blocks.basic_info
   const contact = [bi.email, bi.phone, bi.city].filter(Boolean).map(escHtml).join('<span class="sep">\u00b7</span>')
-  const secs = CATS.map(({ key, label }) => {
+  const order = (blocks.section_order?.length ? blocks.section_order : CATS.map((c) => c.key)) as Cat[]
+  const secs = order.map((key) => {
     const list = (blocks[key] || []).filter((b) => b.title || b.bullets.some((x) => x.trim()))
     if (!list.length) return ''
     const entries = list
@@ -189,7 +192,7 @@ function buildResumeHtml(blocks: ResumeBlocks): string {
         return `<div class="entry">${head}${bullets ? `<ul>${bullets}</ul>` : ''}</div>`
       })
       .join('')
-    return `<div class="section"><div class="s-title">${escHtml(label)}</div>${entries}</div>`
+    return `<div class="section"><div class="s-title">${escHtml(catLabel(key))}</div>${entries}</div>`
   }).join('')
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 @page { size:A4; margin:0; }
@@ -245,23 +248,123 @@ function A4Preview({ html }: { html: string }) {
   )
 }
 
+const sideBtn = 'rounded-lg px-2 py-1 text-[11px] transition'
+
+// \u5de6\u4fa7\u72ec\u7acb\u680f\uff1a\u591a\u4efd\u7b80\u5386\uff08\u6bcf\u4efd\u72ec\u7acb\u5b8c\u6574\uff0c\u6309\u5c97\u4f4d\u547d\u540d\uff09+ \u6700\u8fd1\u751f\u6210\uff08\u5bfc\u51fa PDF \u5b58\u6863\uff09
+function SidePanel({ resumes, exports, busy, onSwitch, onCreate, onDelete, onMeta, onDeleteExport }: {
+  resumes: ResumeIndex | null
+  exports: ResumeExport[]
+  busy: boolean
+  onSwitch: (slug: string) => void
+  onCreate: (name: string, target: string) => void
+  onDelete: (slug: string) => void
+  onMeta: (slug: string, patch: { name?: string; target?: string }) => void
+  onDeleteExport: (fname: string) => void
+}) {
+  const [newName, setNewName] = useState('')
+  const [newTarget, setNewTarget] = useState('')
+  const active = resumes?.items.find((it) => it.slug === resumes.active)
+  return (
+    <div className="w-full shrink-0 space-y-4 lg:w-60">
+      <Card title={'\u6211\u7684\u7b80\u5386'} dev="ResumeList">
+        <p className="mb-3 text-[11px] leading-relaxed text-text-3">{'\u6bcf\u4efd\u72ec\u7acb\u7f16\u8f91\uff1b\u7ed9\u4e0d\u540c\u5c97\u4f4d\u5404\u5efa\u4e00\u4efd\uff0c\u6295\u5bf9\u5e94\u5c97\u4f4d\u65f6\u7528\u5bf9\u5e94\u7248\u672c\u3002'}</p>
+        <div className="space-y-2">
+          {(resumes?.items ?? []).map((it) => {
+            const isActive = it.slug === resumes?.active
+            return (
+              <div key={it.slug}
+                className={`rounded-xl p-3 transition ${isActive ? '' : 'cursor-pointer hover:brightness-110'}`}
+                style={{ background: isActive ? 'rgba(10,132,255,0.12)' : 'rgba(255,255,255,0.04)', border: isActive ? '1px solid rgba(10,132,255,0.45)' : '1px solid rgba(255,255,255,0.07)' }}
+                onClick={() => { if (!isActive && !busy) onSwitch(it.slug) }}>
+                {isActive ? (
+                  <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                    <input className="w-full rounded bg-bg-card px-2 py-1 text-xs font-medium text-text-1 focus:outline-none" style={inputStyle}
+                      value={it.name} onChange={(e) => onMeta(it.slug, { name: e.target.value })} />
+                    <input className="w-full rounded bg-bg-card px-2 py-1 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
+                      placeholder={'\u76ee\u6807\u5c97\u4f4d\uff08\u5982 AI Agent \u5f00\u53d1\uff09'} value={it.target} onChange={(e) => onMeta(it.slug, { target: e.target.value })} />
+                    <p className="text-[10px] text-signal-bright">{'\u25cf \u5f53\u524d\u7f16\u8f91'}</p>
+                  </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-1">
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-medium text-text-1">{it.name}</p>
+                      {it.target && <p className="truncate text-[11px] text-text-3">{it.target}</p>}
+                    </div>
+                    <button type="button" title={'\u5220\u9664'} onClick={(e) => { e.stopPropagation(); onDelete(it.slug) }}
+                      className="shrink-0 px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+        <div className="mt-3 space-y-1.5 border-t pt-3" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          <input className="w-full rounded bg-bg-card px-2 py-1.5 text-xs text-text-1 focus:outline-none" style={inputStyle}
+            placeholder={'\u65b0\u7b80\u5386\u540d\u79f0'} value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <input className="w-full rounded bg-bg-card px-2 py-1.5 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
+            placeholder={'\u76ee\u6807\u5c97\u4f4d\uff08\u53ef\u9009\uff09'} value={newTarget} onChange={(e) => setNewTarget(e.target.value)} />
+          <button type="button" disabled={busy || !newName.trim()}
+            onClick={() => { onCreate(newName.trim(), newTarget.trim()); setNewName(''); setNewTarget('') }}
+            className="w-full rounded-lg px-2 py-1.5 text-xs text-signal-bright transition hover:bg-signal-blue/10 disabled:opacity-40">
+            {'+ \u590d\u5236\u5f53\u524d\u4e3a\u65b0\u7b80\u5386'}</button>
+        </div>
+      </Card>
+
+      <Card title={'\u6700\u8fd1\u751f\u6210'} dev="ResumeExports">
+        {exports.length === 0 ? (
+          <p className="text-[11px] text-text-3">{'\u8fd8\u6ca1\u6709\u5bfc\u51fa\u8bb0\u5f55\uff1b\u70b9\u300c\u5bfc\u51fa PDF\u300d\u540e\u4f1a\u5b58\u6863\u5728\u8fd9\u91cc\u3002'}</p>
+        ) : (
+          <div className="space-y-1.5">
+            {exports.map((ex) => (
+              <div key={ex.file} className="flex items-center justify-between gap-1 rounded-lg px-2 py-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <a href={`/api/resume/exports/${encodeURIComponent(ex.file)}`} target="_blank" rel="noreferrer"
+                  className="min-w-0 flex-1 truncate text-[11px] text-signal-bright transition hover:brightness-125" title={ex.file}>
+                  {ex.file.replace(/\.pdf$/, '')}
+                </a>
+                <span className="shrink-0 text-[10px] text-text-3">{Math.max(1, Math.round(ex.size / 1024))}{' KB'}</span>
+                <button type="button" title={'\u5220\u9664'} onClick={() => onDeleteExport(ex.file)}
+                  className="shrink-0 px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
 export default function Resume() {
   const [blocks, setBlocks] = useState<ResumeBlocks | null>(null)
+  const [resumes, setResumes] = useState<ResumeIndex | null>(null)
+  const [exportsList, setExportsList] = useState<ResumeExport[]>([])
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [building, setBuilding] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [switching, setSwitching] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  // \u62d6\u62fd\u72b6\u6001\uff1a\u5757\uff08\u540c\u5206\u533a\u5185\u91cd\u6392\uff09/ \u5206\u533a\uff08\u8c03\u6574\u7b80\u5386\u91cc\u7684\u5148\u540e\uff09
+  const dragBlk = useRef<{ cat: Cat; i: number } | null>(null)
+  const dragSec = useRef<Cat | null>(null)
+  const metaTimer = useRef<number | null>(null)
 
+  const refreshMeta = () => {
+    void API.getResumes().then(setResumes).catch(() => {})
+    void API.getResumeExports().then((r) => setExportsList(r.exports)).catch(() => {})
+  }
   useEffect(() => {
     void API.getResumeBlocks().then(setBlocks).catch((e) => setErr((e as Error).message))
+    refreshMeta()
   }, [])
 
   const resumeHtml = useMemo(() => (blocks ? buildResumeHtml(blocks) : ''), [blocks])
 
   if (!blocks) return <div className="text-sm text-text-3">{err ?? '\u52a0\u8f7d\u4e2d\u2026'}</div>
+
+  const sectionOrder = (blocks.section_order?.length ? blocks.section_order : CATS.map((c) => c.key)) as Cat[]
+  const activeMeta = resumes?.items.find((it) => it.slug === resumes.active)
 
   const setBasic = (k: keyof ResumeBasicInfo, v: string) =>
     setBlocks((b) => (b ? { ...b, basic_info: { ...b.basic_info, [k]: v } } : b))
@@ -277,12 +380,30 @@ export default function Resume() {
     const tmp = list[i]; list[i] = list[j]; list[j] = tmp
     setCat(cat, list)
   }
+  const dropBlock = (cat: Cat, to: number) => {
+    const from = dragBlk.current
+    dragBlk.current = null
+    if (!from || from.cat !== cat || from.i === to) return
+    const list = [...blocks[cat]]
+    const [moved] = list.splice(from.i, 1)
+    list.splice(to, 0, moved)
+    setCat(cat, list)
+  }
+  const dropSection = (target: Cat) => {
+    const from = dragSec.current
+    dragSec.current = null
+    if (!from || from === target) return
+    const order = sectionOrder.filter((c) => c !== from)
+    order.splice(order.indexOf(target), 0, from)
+    setBlocks((b) => (b ? { ...b, section_order: order } : b))
+  }
 
   const save = async () => {
     setSaving(true); setErr(null); setSaved(false)
     try {
       await API.saveResumeBlocks(blocks)
       setSaved(true); window.setTimeout(() => setSaved(false), 3000)
+      refreshMeta()
     } catch (e) { setErr((e as Error).message) } finally { setSaving(false) }
   }
   const build = async () => {
@@ -298,19 +419,57 @@ export default function Resume() {
     try {
       await API.uploadResume(file)
       setBlocks(await API.getResumeBlocks())
+      refreshMeta()
     } catch (e2) { setErr((e2 as Error).message) }
     finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
   }
   const exportPdf = async () => {
     setExporting(true); setErr(null)
     try {
-      const blob = await API.printResumePdf(buildResumeHtml(blocks))
+      const label = [blocks.basic_info.name, activeMeta?.name].filter(Boolean).join('_') || 'resume'
+      const blob = await API.printResumePdf(buildResumeHtml(blocks), label)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url; a.download = `${blocks.basic_info.name || 'resume'}.pdf`
+      a.href = url; a.download = `${label}.pdf`
       document.body.appendChild(a); a.click(); a.remove()
       URL.revokeObjectURL(url)
+      refreshMeta()
     } catch (e) { setErr((e as Error).message) } finally { setExporting(false) }
+  }
+  // \u5207\u6362\u7b80\u5386\uff1a\u5148\u4fdd\u5b58\u5f53\u524d\u4efd\uff0c\u518d\u6fc0\u6d3b\u76ee\u6807\u4efd\u5e76\u8f7d\u5165
+  const switchResume = async (slug: string) => {
+    setSwitching(true); setErr(null)
+    try {
+      await API.saveResumeBlocks(blocks)
+      await API.activateResume(slug)
+      setBlocks(await API.getResumeBlocks())
+      refreshMeta()
+    } catch (e) { setErr((e as Error).message) } finally { setSwitching(false) }
+  }
+  const createResume = async (name: string, target: string) => {
+    setSwitching(true); setErr(null)
+    try {
+      await API.saveResumeBlocks(blocks)          // \u65b0\u4efd\u590d\u5236\u81ea\u5f53\u524d\uff0c\u5148\u843d\u6700\u65b0\u5185\u5bb9
+      const item = await API.createResume(name, target, true)
+      await API.activateResume(item.slug)
+      setBlocks(await API.getResumeBlocks())
+      refreshMeta()
+    } catch (e) { setErr((e as Error).message) } finally { setSwitching(false) }
+  }
+  const deleteResume = async (slug: string) => {
+    if (!window.confirm('\u5220\u9664\u8fd9\u4efd\u7b80\u5386\uff1f\u4e0d\u53ef\u6062\u590d\u3002')) return
+    try { await API.deleteResume(slug); setBlocks(await API.getResumeBlocks()); refreshMeta() }
+    catch (e) { setErr((e as Error).message) }
+  }
+  const updateMeta = (slug: string, patch: { name?: string; target?: string }) => {
+    // \u4e50\u89c2\u66f4\u65b0 + \u9632\u6296\u843d\u5e93
+    setResumes((r) => (r ? { ...r, items: r.items.map((it) => (it.slug === slug ? { ...it, ...patch } : it)) } : r))
+    if (metaTimer.current) window.clearTimeout(metaTimer.current)
+    metaTimer.current = window.setTimeout(() => { void API.updateResumeMeta(slug, patch).catch(() => {}) }, 600)
+  }
+  const deleteExport = async (fname: string) => {
+    try { await API.deleteResumeExport(fname); setExportsList((l) => l.filter((x) => x.file !== fname)) }
+    catch (e) { setErr((e as Error).message) }
   }
 
   return (
@@ -332,11 +491,16 @@ export default function Resume() {
           style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)' }}>
           {exporting ? '\u5bfc\u51fa\u4e2d\u2026' : '\u5bfc\u51fa PDF'}</button>
         {saved && <span className="text-sm text-signal-green">{'\u2713 \u5df2\u4fdd\u5b58'}</span>}
-        <span className="ml-auto text-xs text-text-3">{'\u7f16\u8f91\u5de6\u4fa7\uff0c\u53f3\u4fa7\u5b9e\u65f6\u9884\u89c8\uff1b\u5bfc\u51fa\u524d\u8bb0\u5f97\u4fdd\u5b58'}</span>
+        {switching && <span className="text-sm text-text-3">{'\u5207\u6362\u4e2d\u2026'}</span>}
+        <span className="ml-auto text-xs text-text-3">{'\u5757\u548c\u5206\u533a\u90fd\u53ef\u62d6\u62fd\u6392\u5e8f\uff1b\u5bfc\u51fa\u524d\u8bb0\u5f97\u4fdd\u5b58'}</span>
       </div>
 
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
-        <div className="min-w-0 flex-1 space-y-4 lg:max-w-[540px]">
+        <SidePanel resumes={resumes} exports={exportsList} busy={switching}
+          onSwitch={(s) => void switchResume(s)} onCreate={(n, t) => void createResume(n, t)}
+          onDelete={(s) => void deleteResume(s)} onMeta={updateMeta} onDeleteExport={(f) => void deleteExport(f)} />
+
+        <div className="min-w-0 flex-1 space-y-4 lg:max-w-[520px]">
           <Card title={'\u57fa\u672c\u4fe1\u606f'} dev="ResumeBasic">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {BASIC_FIELDS.map(({ key, label }) => (
@@ -359,35 +523,52 @@ export default function Resume() {
               onChange={(e) => setBlocks((b) => (b ? { ...b, self_description: e.target.value } : b))} />
           </Card>
 
-          {CATS.map(({ key, label }) => {
+          {sectionOrder.map((key) => {
+            const label = catLabel(key)
             const list = blocks[key]
             return (
-              <Card key={key} title={label} dev="ResumeCategory" action={
-                <button type="button" onClick={() => addBlock(key)} className="rounded-lg px-3 py-1.5 text-xs text-signal-bright transition hover:bg-signal-blue/10">{'+ \u6dfb\u52a0'}</button>
-              }>
-                {list.length === 0 ? (
-                  <p className="text-xs text-text-3">{'\u6682\u65e0\uff0c\u70b9\u300c+ \u6dfb\u52a0\u300d'}</p>
-                ) : (
-                  <div className="space-y-4">
-                    {list.map((blk, i) => (
-                      <div key={i} className="rounded-xl bg-bg-card2 p-4" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
-                        <div className="mb-2.5 flex items-center gap-2">
-                          <input className="w-full rounded-lg bg-bg-card2 px-3 py-2.5 text-sm font-medium text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue" style={inputStyle} placeholder={'\u6807\u9898\uff08\u5355\u4f4d/\u9879\u76ee/\u6280\u80fd\u540d\uff09'} value={blk.title} onChange={(e) => updateBlock(key, i, { title: e.target.value })} />
-                          <input className="w-32 shrink-0 rounded-lg bg-bg-card px-3 py-2.5 text-sm text-text-1 focus:outline-none" style={inputStyle} placeholder={'\u65f6\u95f4'} value={blk.time} onChange={(e) => updateBlock(key, i, { time: e.target.value })} />
-                          <button type="button" title={'\u4e0a\u79fb'} onClick={() => moveBlock(key, i, -1)} className="shrink-0 px-1 text-text-3 transition hover:text-text-1">{'\u2191'}</button>
-                          <button type="button" title={'\u4e0b\u79fb'} onClick={() => moveBlock(key, i, 1)} className="shrink-0 px-1 text-text-3 transition hover:text-text-1">{'\u2193'}</button>
-                          <button type="button" title={'\u5220\u9664'} onClick={() => removeBlock(key, i)} className="shrink-0 px-1 text-signal-red transition hover:brightness-125">{'\u2715'}</button>
-                        </div>
-                        <textarea className="w-full rounded-lg bg-bg-card2 px-3 py-2.5 text-sm leading-relaxed text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue" style={{ ...inputStyle, minHeight: 132 }} placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')} onChange={(e) => updateBlock(key, i, { bullets: e.target.value.split('\n') })} />
-                        <div className="mt-2.5 flex items-center gap-2">
-                          <span className="shrink-0 text-[11px] text-text-3">{'\u6982\u62ec'}</span>
-                          <input className="flex-1 rounded bg-bg-card px-2.5 py-2 text-xs text-text-2 focus:outline-none" style={inputStyle} placeholder={'\u4e00\u53e5\u8bdd\u6982\u62ec\uff08\u4f9b JD \u5b9a\u5236\u6311\u5757\u7528\uff09'} value={blk.summary} onChange={(e) => updateBlock(key, i, { summary: e.target.value })} />
-                        </div>
-                      </div>
-                    ))}
+              <div key={key}
+                onDragOver={(e) => { if (dragSec.current && dragSec.current !== key) e.preventDefault() }}
+                onDrop={() => dropSection(key)}>
+                <Card title={label} dev="ResumeCategory" action={
+                  <div className="flex items-center gap-1">
+                    <span draggable title={'\u62d6\u52a8\u8c03\u6574\u5206\u533a\u987a\u5e8f'}
+                      onDragStart={() => { dragSec.current = key }}
+                      onDragEnd={() => { dragSec.current = null }}
+                      className="cursor-grab px-1.5 text-sm text-text-3 transition hover:text-text-1 active:cursor-grabbing">{'\u283f'}</span>
+                    <button type="button" onClick={() => addBlock(key)} className="rounded-lg px-3 py-1.5 text-xs text-signal-bright transition hover:bg-signal-blue/10">{'+ \u6dfb\u52a0'}</button>
                   </div>
-                )}
-              </Card>
+                }>
+                  {list.length === 0 ? (
+                    <p className="text-xs text-text-3">{'\u6682\u65e0\uff0c\u70b9\u300c+ \u6dfb\u52a0\u300d'}</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {list.map((blk, i) => (
+                        <div key={i} className="rounded-xl bg-bg-card2 p-4" style={{ border: '1px solid rgba(255,255,255,0.06)' }}
+                          onDragOver={(e) => { if (dragBlk.current?.cat === key) e.preventDefault() }}
+                          onDrop={() => dropBlock(key, i)}>
+                          <div className="mb-2.5 flex items-center gap-2">
+                            <span draggable title={'\u62d6\u52a8\u8c03\u6574\u987a\u5e8f'}
+                              onDragStart={() => { dragBlk.current = { cat: key, i } }}
+                              onDragEnd={() => { dragBlk.current = null }}
+                              className="shrink-0 cursor-grab px-0.5 text-sm text-text-3 transition hover:text-text-1 active:cursor-grabbing">{'\u283f'}</span>
+                            <input className="w-full rounded-lg bg-bg-card2 px-3 py-2.5 text-sm font-medium text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue" style={inputStyle} placeholder={'\u6807\u9898\uff08\u5355\u4f4d/\u9879\u76ee/\u6280\u80fd\u540d\uff09'} value={blk.title} onChange={(e) => updateBlock(key, i, { title: e.target.value })} />
+                            <input className="w-28 shrink-0 rounded-lg bg-bg-card px-3 py-2.5 text-sm text-text-1 focus:outline-none" style={inputStyle} placeholder={'\u65f6\u95f4'} value={blk.time} onChange={(e) => updateBlock(key, i, { time: e.target.value })} />
+                            <button type="button" title={'\u4e0a\u79fb'} onClick={() => moveBlock(key, i, -1)} className="shrink-0 px-1 text-text-3 transition hover:text-text-1">{'\u2191'}</button>
+                            <button type="button" title={'\u4e0b\u79fb'} onClick={() => moveBlock(key, i, 1)} className="shrink-0 px-1 text-text-3 transition hover:text-text-1">{'\u2193'}</button>
+                            <button type="button" title={'\u5220\u9664'} onClick={() => removeBlock(key, i)} className="shrink-0 px-1 text-signal-red transition hover:brightness-125">{'\u2715'}</button>
+                          </div>
+                          <textarea className="w-full rounded-lg bg-bg-card2 px-3 py-2.5 text-sm leading-relaxed text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue" style={{ ...inputStyle, minHeight: 132 }} placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')} onChange={(e) => updateBlock(key, i, { bullets: e.target.value.split('\n') })} />
+                          <div className="mt-2.5 flex items-center gap-2">
+                            <span className="shrink-0 text-[11px] text-text-3" title={'\u4e0d\u4f1a\u51fa\u73b0\u5728\u7b80\u5386\u4e0a\uff1b\u662f\u300c\u6309\u5c97\u4f4d JD \u81ea\u52a8\u6311\u5757\u300d\u7684\u7d22\u5f15'}>{'\u6982\u62ec'}</span>
+                            <input className="flex-1 rounded bg-bg-card px-2.5 py-2 text-xs text-text-2 focus:outline-none" style={inputStyle} placeholder={'\u4e00\u53e5\u8bdd\u6982\u62ec\u8fd9\u4e2a\u5757\uff08\u4e0d\u4e0a\u7b80\u5386\uff1b\u6309 JD \u5b9a\u5236\u65f6 AI \u9760\u5b83\u6311\u5757\u2014\u2014\u5199\u5f97\u51c6\uff0c\u6311\u5757\u624d\u51c6\uff09'} value={blk.summary} onChange={(e) => updateBlock(key, i, { summary: e.target.value })} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </div>
             )
           })}
         </div>
