@@ -595,11 +595,14 @@ export default function Resume() {
                       transition: 'opacity .15s',
                     }}>
                     <div className="mb-2 flex items-center gap-2">
-                      <span draggable title={'\u62d6\u52a8\u8c03\u6574\u5206\u533a\u987a\u5e8f'}
+                      <div draggable title={'\u62d6\u52a8\u8c03\u6574\u5206\u533a\u987a\u5e8f'}
                         onDragStart={secDragStart(key)} onDragEnd={secDragEnd}
-                        className="cursor-grab text-[13px] leading-none text-text-3 transition hover:text-text-1 active:cursor-grabbing">{'\u2af6'}</span>
-                      <span className="text-[13px] font-semibold tracking-wide text-text-1">{label}</span>
-                      <span className="rounded-full px-1.5 text-[10px] text-text-3" style={{ background: 'rgba(255,255,255,0.06)' }}>{list.length}</span>
+                        className="group flex min-w-0 flex-1 cursor-grab select-none items-center gap-2 rounded-lg px-1 py-1 transition active:cursor-grabbing"
+                        style={{ margin: '-4px 0 -4px -4px' }}>
+                        <span className="text-[13px] leading-none text-text-3 opacity-60 transition group-hover:opacity-100">{'\u2af6'}</span>
+                        <span className="text-[13px] font-semibold tracking-wide text-text-1">{label}</span>
+                        <span className="rounded-full px-1.5 text-[10px] text-text-3" style={{ background: 'rgba(255,255,255,0.06)' }}>{list.length}</span>
+                      </div>
                       <button type="button" onClick={() => addBlock(key)}
                         className="ml-auto rounded-lg px-2.5 py-1 text-[11px] text-signal-bright transition hover:bg-signal-blue/10">{'+ \u6dfb\u52a0'}</button>
                     </div>
