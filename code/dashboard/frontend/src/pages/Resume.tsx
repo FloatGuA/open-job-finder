@@ -389,18 +389,24 @@ export default function Resume() {
   // \u2500\u2500 \u5757\u62d6\u62fd\uff08\u6761\u72b6\uff1a\u6574\u6761\u53ef\u62d6\uff0c\u63d2\u5165\u7ebf\u6307\u793a\u843d\u70b9\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   const blockDragStart = (cat: Cat, i: number) => (e: React.DragEvent) => {
     dragBlk.current = { cat, i }
-    setDragKey(`${cat}:${i}`)
-    setOpen(null)
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', 'blk')
+    // Chrome\uff1adragstart \u91cc\u540c\u6b65 setState \u91cd\u6e32\u67d3\u53ef\u80fd\u76f4\u63a5\u53d6\u6d88\u62d6\u62fd \u2192 \u63a8\u8fdf\u4e00\u5e27
+    window.requestAnimationFrame(() => { setDragKey(`${cat}:${i}`); setOpen(null) })
   }
   const blockDragOver = (cat: Cat, i: number) => (e: React.DragEvent) => {
-    if (dragBlk.current?.cat !== cat) return
+    const from = dragBlk.current
+    if (from?.cat !== cat) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     const r = e.currentTarget.getBoundingClientRect()
     const before = e.clientY < r.top + r.height / 2
-    setBlkSlot({ cat, slot: before ? i : i + 1 })
+    let slot = before ? i : i + 1
+    // \u6d88\u9664\u76f8\u90bb\u6b7b\u533a\uff1a\u60ac\u505c\u6e90\u81ea\u8eab\u2192\u4e0d\u663e\u793a\uff1b\u7d27\u90bb\u6761\u7684\u201c\u65e0\u6548\u534a\u533a\u201d\u2192\u63a8\u6210\u4ea4\u6362\u4f4d
+    if (i === from.i) { setBlkSlot(null); return }
+    if (slot === from.i + 1 && i === from.i + 1) slot = i + 1
+    else if (slot === from.i && i === from.i - 1) slot = i
+    setBlkSlot({ cat, slot })
   }
   const blockDrop = (cat: Cat) => (e: React.DragEvent) => {
     e.preventDefault()
@@ -421,18 +427,23 @@ export default function Resume() {
   // \u2500\u2500 \u5206\u533a\u62d6\u62fd \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   const secDragStart = (cat: Cat) => (e: React.DragEvent) => {
     dragSec.current = cat
-    setSecDragKey(cat)
-    setOpen(null)
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', 'sec')
+    window.requestAnimationFrame(() => { setSecDragKey(cat); setOpen(null) })
   }
   const secDragOver = (si: number) => (e: React.DragEvent) => {
     if (!dragSec.current) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
+    const fi = sectionOrder.indexOf(dragSec.current)
     const r = e.currentTarget.getBoundingClientRect()
     const before = e.clientY < r.top + r.height / 2
-    setSecSlot(before ? si : si + 1)
+    let slot = before ? si : si + 1
+    // \u6d88\u9664\u76f8\u90bb\u6b7b\u533a\uff1a\u9996\u5206\u533a\u5411\u4e0b\u632a\u4e00\u683c\u4e0d\u518d\u8981\u6c42\u7cbe\u51c6\u547d\u4e2d\u4e0b\u4e2a\u5206\u533a\u7684\u4e0b\u534a\u533a
+    if (si === fi) { setSecSlot(null); return }
+    if (slot === fi + 1 && si === fi + 1) slot = si + 1
+    else if (slot === fi && si === fi - 1) slot = si
+    setSecSlot(slot)
   }
   const secDrop = () => (e: React.DragEvent) => {
     e.preventDefault()
