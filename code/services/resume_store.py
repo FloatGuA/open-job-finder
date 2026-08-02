@@ -63,10 +63,12 @@ class ResumeStore:
     def list(self) -> dict:
         return self._load_index()
 
-    def create(self, name: str, target: str = "", copy_from_active: bool = True) -> dict:
+    def create(self, name: str, target: str = "", copy_from_active: bool = True, blocks: dict = None) -> dict:
+        """新建一份简历。blocks 给定则用它（AI 组合落地）；否则复制激活份/空结构。"""
         idx = self._load_index()
         slug = uuid.uuid4().hex[:8]
-        blocks = rb.load_blocks(self.active_blocks_path) if copy_from_active else rb.empty_blocks()
+        if blocks is None:
+            blocks = rb.load_blocks(self.active_blocks_path) if copy_from_active else rb.empty_blocks()
         rb.save_blocks(blocks, self._blocks_path(slug))
         item = {"slug": slug, "name": name or "未命名简历", "target": target, "updated_at": _now()}
         idx["items"].append(item)

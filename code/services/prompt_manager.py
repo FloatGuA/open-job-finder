@@ -8,7 +8,7 @@ from typing import Optional
 # 显式列名，杜绝无关 profile 键意外泄进 prompt。
 _TASK_INJECTION_NAMES = frozenset({
     "score_job", "analyze_intent", "generate_reply",
-    "resume_parse", "resume_build", "resume_tailor", "resume_greeting",
+    "resume_parse", "resume_build", "resume_tailor", "resume_greeting", "resume_compose",
 })
 
 # 用户可在前端编辑的 prompt 模板（system 全局角色 + 3 个工作任务模板 + 3 个简历生成模板）。
@@ -17,7 +17,8 @@ _TASK_INJECTION_NAMES = frozenset({
 # 也各自吃 prompt 注入（同名 task 注入 + global）——简历端点用带 injection 的 PromptManager。
 EDITABLE_PROMPTS = (
     "system", "score_job", "analyze_intent", "generate_reply",
-    "resume_parse", "resume_parse_vision", "resume_build", "resume_tailor", "resume_greeting",
+    "resume_parse", "resume_parse_vision", "resume_build", "resume_compose",
+    "resume_tailor", "resume_greeting",
 )
 
 

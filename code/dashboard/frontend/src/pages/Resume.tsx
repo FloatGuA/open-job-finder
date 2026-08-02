@@ -1,15 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
-import { API, type ResumeBlocks, type ResumeBlock, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type Job } from '@/api'
+import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type Job } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
 
-type Cat = 'education' | 'internship' | 'project' | 'skills' | 'awards'
-const CATS: Array<{ key: Cat; label: string }> = [
-  { key: 'education', label: '\u6559\u80b2' },
-  { key: 'internship', label: '\u5b9e\u4e60\u7ecf\u5386' },
-  { key: 'project', label: '\u9879\u76ee\u7ecf\u5386' },
-  { key: 'skills', label: '\u6280\u80fd\u7279\u957f' },
-  { key: 'awards', label: '\u83b7\u5956\u8363\u8a89' },
-]
+// v2.16\uff1a\u5206\u533a\u4e0d\u518d\u56fa\u5b9a\uff0c\u540d\u79f0\u81ea\u5b9a\u4e49\uff08\u5982\u300c\u6e38\u620f\u7ecf\u5386\u300d\u300cAgent \u7ecf\u5386\u300d\uff09\u3002\u8fd9\u4e9b\u53ea\u662f\u65b0\u5efa\u65f6\u7684\u5feb\u6377\u5019\u9009\u3002
+const SECTION_PRESETS = ['\u6559\u80b2\u7ecf\u5386', '\u5b9e\u4e60\u7ecf\u5386', '\u9879\u76ee\u7ecf\u5386', '\u6280\u80fd\u7279\u957f', '\u83b7\u5956\u8363\u8a89']
 const BASIC_FIELDS: Array<{ key: keyof ResumeBasicInfo; label: string }> = [
   { key: 'name', label: '\u59d3\u540d' },
   { key: 'phone', label: '\u7535\u8bdd' },
@@ -174,16 +168,12 @@ function TailorCard() {
 const escHtml = (s: string) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-const catLabel = (k: string) => CATS.find((c) => c.key === k)?.label ?? k
-
-// FlowCV\u300cclassic\u300d\u98ce\u683c\uff1a\u5c45\u4e2d\u5927\u6807\u9898 + \u8054\u7cfb\u884c + \u5206\u533a\u6574\u884c\u4e0b\u5212\u7ebf + \u6761\u76ee\u7c97\u6807\u9898/\u53f3\u7070\u65e5\u671f\u3002
-// px \u753b\u5e03(794=A4@96dpi\u5bbd)\uff0c\u9884\u89c8 iframe \u4e0e\u5bfc\u51fa PDF \u540c\u6e90\uff1b\u5206\u533a\u987a\u5e8f\u8ddf\u968f section_order\u3002
-function buildResumeHtml(blocks: ResumeBlocks): string {
-  const bi = blocks.basic_info
+// FlowCV\u300cclassic\u300d\u98ce\u683c\uff1b\u5206\u533a\u540d\u4e0e\u987a\u5e8f\u5b8c\u5168\u8ddf\u968f\u6587\u6863 sections\u3002
+function buildResumeHtml(doc: ResumeBlocks): string {
+  const bi = doc.basic_info
   const contact = [bi.email, bi.phone, bi.city].filter(Boolean).map(escHtml).join('<span class="sep">\u00b7</span>')
-  const order = (blocks.section_order?.length ? blocks.section_order : CATS.map((c) => c.key)) as Cat[]
-  const secs = order.map((key) => {
-    const list = (blocks[key] || []).filter((b) => b.title || b.bullets.some((x) => x.trim()))
+  const secs = (doc.sections || []).map((sec) => {
+    const list = (sec.blocks || []).filter((b) => b.title || b.bullets.some((x) => x.trim()))
     if (!list.length) return ''
     const entries = list
       .map((b) => {
@@ -192,7 +182,7 @@ function buildResumeHtml(blocks: ResumeBlocks): string {
         return `<div class="entry">${head}${bullets ? `<ul>${bullets}</ul>` : ''}</div>`
       })
       .join('')
-    return `<div class="section"><div class="s-title">${escHtml(catLabel(key))}</div>${entries}</div>`
+    return `<div class="section"><div class="s-title">${escHtml(sec.name)}</div>${entries}</div>`
   }).join('')
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 @page { size:A4; margin:0; }
@@ -220,7 +210,6 @@ ${secs}
 </body></html>`
 }
 
-// \u53f3\u4fa7\u56fa\u5b9a A4\uff1aiframe \u4ee5 794x(\u5185\u5bb9\u9ad8) \u539f\u751f\u6e32\u67d3\uff0c\u6309\u9762\u677f\u5bbd\u7b49\u6bd4 scale\uff0c\u5c45\u4e2d\u5e26\u7eb8\u5f20\u9634\u5f71\u3002
 function A4Preview({ html }: { html: string }) {
   const boxRef = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(0.72)
@@ -248,8 +237,320 @@ function A4Preview({ html }: { html: string }) {
   )
 }
 
-// \u5de6\u4fa7\u72ec\u7acb\u680f\uff1a\u591a\u4efd\u7b80\u5386\uff08\u6bcf\u4efd\u72ec\u7acb\u5b8c\u6574\uff0c\u6309\u5c97\u4f4d\u547d\u540d\uff09+ \u6700\u8fd1\u751f\u6210\uff08\u5bfc\u51fa PDF \u5b58\u6863\uff09
-function SidePanel({ resumes, exports, busy, onSwitch, onCreate, onDelete, onMeta, onDeleteExport }: {
+// \u2500\u2500 \u5171\u7528\u5206\u533a\u7f16\u8f91\u5668\uff08\u4fe1\u606f\u6c60\u4e0e\u7b80\u5386\u5171\u7528\u540c\u4e00\u4ea4\u4e92\uff1a\u6761\u72b6\u53ef\u62d6 + \u70b9\u51fb\u5c55\u5f00\u8be6\u60c5\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function SectionEditor({ doc, onChange, summaryHint }: {
+  doc: ResumeBlocks
+  onChange: (next: ResumeBlocks) => void
+  summaryHint: string
+}) {
+  const [open, setOpen] = useState<string | null>(null)
+  const dragBlk = useRef<{ si: number; bi: number } | null>(null)
+  const [dragKey, setDragKey] = useState<string | null>(null)
+  const [blkSlot, setBlkSlot] = useState<{ si: number; slot: number } | null>(null)
+  const dragSec = useRef<number | null>(null)
+  const [secDragIdx, setSecDragIdx] = useState<number | null>(null)
+  const [secSlot, setSecSlot] = useState<number | null>(null)
+
+  const sections = doc.sections || []
+  const setSections = (next: ResumeSection[]) => onChange({ ...doc, sections: next })
+  const patchSection = (si: number, patch: Partial<ResumeSection>) =>
+    setSections(sections.map((s, i) => (i === si ? { ...s, ...patch } : s)))
+  const addSection = (name: string) => { setSections([...sections, { name, blocks: [] }]); }
+  const removeSection = (si: number) => {
+    if (!window.confirm(`\u5220\u9664\u5206\u533a\u300c${sections[si].name}\u300d\u53ca\u5176\u4e2d ${sections[si].blocks.length} \u6761\u5185\u5bb9\uff1f`)) return
+    setSections(sections.filter((_, i) => i !== si)); setOpen(null)
+  }
+  const addBlock = (si: number) => {
+    patchSection(si, { blocks: [...sections[si].blocks, emptyBlock()] })
+    setOpen(`${si}:${sections[si].blocks.length}`)
+  }
+  const updateBlock = (si: number, bi: number, patch: Partial<ResumeBlock>) =>
+    patchSection(si, { blocks: sections[si].blocks.map((b, j) => (j === bi ? { ...b, ...patch } : b)) })
+  const removeBlock = (si: number, bi: number) => {
+    patchSection(si, { blocks: sections[si].blocks.filter((_, j) => j !== bi) }); setOpen(null)
+  }
+  const moveBlock = (si: number, bi: number, dir: -1 | 1) => {
+    const list = [...sections[si].blocks]
+    const j = bi + dir
+    if (j < 0 || j >= list.length) return
+    const t = list[bi]; list[bi] = list[j]; list[j] = t
+    patchSection(si, { blocks: list }); setOpen(`${si}:${j}`)
+  }
+
+  // \u5757\u62d6\u62fd\uff08\u540c\u5206\u533a\u5185\uff09
+  const blkDragStart = (si: number, bi: number) => (e: React.DragEvent) => {
+    dragBlk.current = { si, bi }
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', 'blk')
+    window.requestAnimationFrame(() => { setDragKey(`${si}:${bi}`); setOpen(null) })
+  }
+  const blkDragOver = (si: number, bi: number) => (e: React.DragEvent) => {
+    const from = dragBlk.current
+    if (from?.si !== si) return
+    e.preventDefault(); e.dataTransfer.dropEffect = 'move'
+    const r = e.currentTarget.getBoundingClientRect()
+    let slot = e.clientY < r.top + r.height / 2 ? bi : bi + 1
+    if (bi === from.bi) { setBlkSlot(null); return }
+    if (slot === from.bi + 1 && bi === from.bi + 1) slot = bi + 1
+    else if (slot === from.bi && bi === from.bi - 1) slot = bi
+    setBlkSlot({ si, slot })
+  }
+  const blkDrop = (si: number) => (e: React.DragEvent) => {
+    e.preventDefault()
+    const from = dragBlk.current, s = blkSlot
+    blkDragEnd()
+    if (!from || !s || from.si !== si || s.si !== si) return
+    let to = s.slot
+    if (from.bi < to) to -= 1
+    if (to === from.bi) return
+    const list = [...sections[si].blocks]
+    const [m] = list.splice(from.bi, 1)
+    list.splice(to, 0, m)
+    patchSection(si, { blocks: list })
+  }
+  const blkDragEnd = () => { dragBlk.current = null; setDragKey(null); setBlkSlot(null) }
+
+  // \u5206\u533a\u62d6\u62fd
+  const secDragStart = (si: number) => (e: React.DragEvent) => {
+    dragSec.current = si
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', 'sec')
+    window.requestAnimationFrame(() => { setSecDragIdx(si); setOpen(null) })
+  }
+  const secDragOver = (si: number) => (e: React.DragEvent) => {
+    const fi = dragSec.current
+    if (fi === null) return
+    e.preventDefault(); e.dataTransfer.dropEffect = 'move'
+    const r = e.currentTarget.getBoundingClientRect()
+    let slot = e.clientY < r.top + r.height / 2 ? si : si + 1
+    if (si === fi) { setSecSlot(null); return }
+    if (slot === fi + 1 && si === fi + 1) slot = si + 1
+    else if (slot === fi && si === fi - 1) slot = si
+    setSecSlot(slot)
+  }
+  const secDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    const fi = dragSec.current, slot = secSlot
+    secDragEnd()
+    if (fi === null || slot === null) return
+    let to = slot
+    if (fi < to) to -= 1
+    if (to === fi) return
+    const list = [...sections]
+    const [m] = list.splice(fi, 1)
+    list.splice(to, 0, m)
+    setSections(list)
+  }
+  const secDragEnd = () => { dragSec.current = null; setSecDragIdx(null); setSecSlot(null) }
+
+  const detailInput = 'w-full rounded-lg bg-bg-card px-3 py-2 text-sm text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue'
+
+  return (
+    <div className="space-y-5" onDrop={secDrop}>
+      {sections.length === 0 && (
+        <p className="text-xs text-text-3">{'\u8fd8\u6ca1\u6709\u5206\u533a\u3002\u7528\u4e0b\u65b9\u6309\u94ae\u6dfb\u52a0\uff0c\u5206\u533a\u540d\u4f1a\u539f\u6837\u51fa\u73b0\u5728\u7b80\u5386\u4e0a\u3002'}</p>
+      )}
+      {sections.map((sec, si) => {
+        const isLastSec = si === sections.length - 1
+        return (
+          <div key={si} onDragOver={secDragOver(si)}
+            style={{
+              opacity: secDragIdx === si ? 0.35 : 1,
+              borderTop: secSlot === si ? '2px solid #0a84ff' : '2px solid transparent',
+              borderBottom: isLastSec && secSlot === sections.length ? '2px solid #0a84ff' : '2px solid transparent',
+              transition: 'opacity .15s',
+            }}>
+            <div className="mb-2 flex items-center gap-2">
+              <div draggable title={'\u62d6\u52a8\u8c03\u6574\u5206\u533a\u987a\u5e8f'}
+                onDragStart={secDragStart(si)} onDragEnd={secDragEnd}
+                className="group flex shrink-0 cursor-grab select-none items-center gap-1.5 rounded-lg py-1 pl-1 pr-0.5 transition active:cursor-grabbing">
+                <span className="text-[13px] leading-none text-text-3 opacity-60 transition group-hover:opacity-100">{'\u2af6'}</span>
+              </div>
+              <input value={sec.name} onChange={(e) => patchSection(si, { name: e.target.value })}
+                className="min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1 text-[13px] font-semibold tracking-wide text-text-1 transition hover:bg-bg-card2 focus:bg-bg-card2 focus:outline-none focus:ring-1 focus:ring-signal-blue"
+                placeholder={'\u5206\u533a\u540d\uff08\u5982 \u6e38\u620f\u7ecf\u5386\uff09'} />
+              <span className="shrink-0 rounded-full px-1.5 text-[10px] text-text-3" style={{ background: 'rgba(255,255,255,0.06)' }}>{sec.blocks.length}</span>
+              <button type="button" onClick={() => addBlock(si)}
+                className="shrink-0 rounded-lg px-2.5 py-1 text-[11px] text-signal-bright transition hover:bg-signal-blue/10">{'+ \u6dfb\u52a0'}</button>
+              <button type="button" title={'\u5220\u9664\u5206\u533a'} onClick={() => removeSection(si)}
+                className="shrink-0 px-1 text-[11px] text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
+            </div>
+
+            {sec.blocks.length === 0 ? (
+              <button type="button" onClick={() => addBlock(si)}
+                className="w-full rounded-[10px] py-2.5 text-[11px] text-text-3 transition hover:text-text-1"
+                style={{ border: '1px dashed rgba(255,255,255,0.14)' }}>{'\u7a7a\u5206\u533a \u00b7 \u70b9\u51fb\u6dfb\u52a0\u4e00\u6761'}</button>
+            ) : (
+              <div className="space-y-1.5" onDrop={blkDrop(si)}>
+                {sec.blocks.map((blk, bi) => {
+                  const k = `${si}:${bi}`
+                  const isOpen = open === k
+                  const isLast = bi === sec.blocks.length - 1
+                  const slotHere = blkSlot?.si === si
+                  return (
+                    <div key={k} onDragOver={blkDragOver(si, bi)}
+                      style={{
+                        borderTop: slotHere && blkSlot?.slot === bi ? '2px solid #0a84ff' : '2px solid transparent',
+                        borderBottom: isLast && slotHere && blkSlot?.slot === sec.blocks.length ? '2px solid #0a84ff' : '2px solid transparent',
+                      }}>
+                      <div className="overflow-hidden rounded-[10px] transition"
+                        style={{
+                          background: isOpen ? 'rgba(255,255,255,0.055)' : 'rgba(255,255,255,0.035)',
+                          border: isOpen ? '1px solid rgba(10,132,255,0.4)' : '1px solid rgba(255,255,255,0.07)',
+                          opacity: dragKey === k ? 0.35 : 1,
+                        }}>
+                        <div draggable={!isOpen}
+                          onDragStart={blkDragStart(si, bi)} onDragEnd={blkDragEnd}
+                          onClick={() => setOpen(isOpen ? null : k)}
+                          className={`group flex select-none items-center gap-2.5 px-3 py-2.5 ${isOpen ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'}`}>
+                          <span className="text-[13px] leading-none text-text-3 opacity-50 transition group-hover:opacity-100">{'\u2af6'}</span>
+                          <span className={`min-w-0 flex-1 truncate text-sm ${blk.title ? 'font-medium text-text-1' : 'text-text-3'}`}>
+                            {blk.title || '\u672a\u547d\u540d\u6761\u76ee'}</span>
+                          {blk.time && <span className="shrink-0 text-[11px] text-text-3" style={{ fontVariantNumeric: 'tabular-nums' }}>{blk.time}</span>}
+                          <span className="shrink-0 text-[10px] text-text-3 transition" style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }}>{'\u25be'}</span>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateRows: isOpen ? '1fr' : '0fr', transition: 'grid-template-rows .28s ease' }}>
+                          <div className="min-h-0 overflow-hidden">
+                            <div className="space-y-2.5 px-3 pb-3 pt-1">
+                              <div className="flex gap-2">
+                                <input className={detailInput} style={inputStyle} placeholder={'\u6807\u9898\uff08\u5355\u4f4d/\u9879\u76ee/\u6280\u80fd\u540d\uff09'}
+                                  value={blk.title} onChange={(e) => updateBlock(si, bi, { title: e.target.value })} />
+                                <input className="w-32 shrink-0 rounded-lg bg-bg-card px-3 py-2 text-sm text-text-1 focus:outline-none" style={inputStyle}
+                                  placeholder={'\u65f6\u95f4'} value={blk.time} onChange={(e) => updateBlock(si, bi, { time: e.target.value })} />
+                              </div>
+                              <textarea className={`${detailInput} leading-relaxed`} style={{ ...inputStyle, minHeight: 120 }}
+                                placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')}
+                                onChange={(e) => updateBlock(si, bi, { bullets: e.target.value.split('\n') })} />
+                              <input className="w-full rounded bg-bg-card px-2.5 py-1.5 text-xs text-text-2 focus:outline-none" style={inputStyle}
+                                placeholder={summaryHint} value={blk.summary}
+                                onChange={(e) => updateBlock(si, bi, { summary: e.target.value })} />
+                              <div className="flex items-center gap-1 pt-0.5">
+                                <button type="button" onClick={() => moveBlock(si, bi, -1)} disabled={bi === 0}
+                                  className="rounded px-2 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2191 \u4e0a\u79fb'}</button>
+                                <button type="button" onClick={() => moveBlock(si, bi, 1)} disabled={bi === sec.blocks.length - 1}
+                                  className="rounded px-2 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2193 \u4e0b\u79fb'}</button>
+                                <button type="button" onClick={() => removeBlock(si, bi)}
+                                  className="ml-auto rounded px-2 py-1 text-[11px] text-signal-red transition hover:brightness-125">{'\u5220\u9664\u6761\u76ee'}</button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      <div className="flex flex-wrap items-center gap-1.5 border-t pt-3" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+        <span className="mr-1 text-[11px] text-text-3">{'\u6dfb\u52a0\u5206\u533a\uff1a'}</span>
+        {SECTION_PRESETS.filter((p) => !sections.some((s) => s.name === p)).map((p) => (
+          <button key={p} type="button" onClick={() => addSection(p)}
+            className="rounded-lg px-2.5 py-1 text-[11px] text-text-2 transition hover:text-text-1"
+            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>{p}</button>
+        ))}
+        <button type="button" onClick={() => addSection('\u65b0\u5206\u533a')}
+          className="rounded-lg px-2.5 py-1 text-[11px] text-signal-bright transition hover:bg-signal-blue/10">{'+ \u81ea\u5b9a\u4e49'}</button>
+      </div>
+    </div>
+  )
+}
+
+function BasicInfoCard({ doc, onChange }: { doc: ResumeBlocks; onChange: (d: ResumeBlocks) => void }) {
+  return (
+    <Card title={'\u57fa\u672c\u4fe1\u606f'} dev="ResumeBasic">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {BASIC_FIELDS.map(({ key, label }) => (
+          <label key={key} className="flex flex-col gap-1.5">
+            <span className="text-xs text-text-3">{label}</span>
+            <input className={inputCls} style={inputStyle} value={doc.basic_info[key] ?? ''}
+              onChange={(e) => onChange({ ...doc, basic_info: { ...doc.basic_info, [key]: e.target.value } })} />
+          </label>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+// \u2500\u2500 \u5b50\u9875 1\uff1a\u4fe1\u606f\u6c60 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function PoolTab({ onErr }: { onErr: (m: string | null) => void }) {
+  const [pool, setPool] = useState<ResumeBlocks | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [building, setBuilding] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { void API.getPool().then(setPool).catch((e) => onErr((e as Error).message)) }, [])
+  if (!pool) return <div className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</div>
+
+  const save = async () => {
+    setSaving(true); onErr(null); setSaved(false)
+    try { await API.savePool(pool); setSaved(true); window.setTimeout(() => setSaved(false), 3000) }
+    catch (e) { onErr((e as Error).message) } finally { setSaving(false) }
+  }
+  const build = async () => {
+    if (!window.confirm('\u7528 LLM \u628a\u81ea\u6211\u63cf\u8ff0\u878d\u8fdb\u4fe1\u606f\u6c60\uff08\u4f1a\u91cd\u65b0\u6574\u7406\u5206\u533a\uff0c\u5df2\u6709\u5185\u5bb9\u4fdd\u7559\uff09\u3002\u7ee7\u7eed\uff1f')) return
+    setBuilding(true); onErr(null)
+    try { setPool(await API.buildPool(pool.self_description)) }
+    catch (e) { onErr((e as Error).message) } finally { setBuilding(false) }
+  }
+  const upload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true); onErr(null)
+    try { await API.uploadResume(file); setPool(await API.getPool()) }
+    catch (e2) { onErr((e2 as Error).message) }
+    finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
+  }
+
+  const blockCount = pool.sections.reduce((n, s) => n + s.blocks.length, 0)
+  return (
+    <div className="max-w-3xl space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <input ref={fileRef} type="file" accept=".pdf,.docx" onChange={upload} disabled={uploading} className="hidden" id="pool-upload-input" />
+        <label htmlFor="pool-upload-input"
+          className={`cursor-pointer rounded-full px-4 py-2 text-sm text-text-1 transition ${uploading ? 'cursor-not-allowed opacity-50' : 'hover:brightness-110'}`}
+          style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)' }}>
+          {uploading ? '\u89e3\u6790\u4e2d\u2026\uff08\u7ea6 1 \u5206\u949f\uff09' : '\u4e0a\u4f20\u7b80\u5386\u5165\u6c60'}</label>
+        <button type="button" onClick={() => void save()} disabled={saving}
+          className="rounded-full px-5 py-2 text-sm text-white transition hover:brightness-110 disabled:opacity-50"
+          style={{ background: '#0a84ff' }}>{saving ? '\u4fdd\u5b58\u4e2d\u2026' : '\u4fdd\u5b58\u4fe1\u606f\u6c60'}</button>
+        {saved && <span className="text-sm text-signal-green">{'\u2713 \u5df2\u4fdd\u5b58'}</span>}
+        <span className="ml-auto text-xs text-text-3">{`${pool.sections.length} \u4e2a\u5206\u533a \u00b7 ${blockCount} \u6761\u5185\u5bb9`}</span>
+      </div>
+
+      <div className="rounded-xl px-4 py-3 text-xs leading-relaxed text-text-2" style={{ background: 'rgba(10,132,255,0.08)', border: '1px solid rgba(10,132,255,0.2)' }}>
+        {'\u4fe1\u606f\u6c60\u5b58\u653e\u5173\u4e8e\u4f60\u7684\u5168\u90e8\u4fe1\u606f\uff0c\u662f\u6240\u6709\u7b80\u5386\u7684\u7d20\u6750\u6765\u6e90\u3002\u4e0a\u4f20\u7b80\u5386\u4f1a\u628a\u89e3\u6790\u7ed3\u679c\u5e76\u5165\u6c60\u4e2d\uff08\u540c\u540d\u6761\u76ee\u66f4\u65b0\u3001\u65b0\u6761\u76ee\u8ffd\u52a0\uff0c\u4e0d\u4f1a\u5220\u4e1c\u897f\uff09\u3002\u505a\u5b9a\u5236\u7b80\u5386\u65f6\uff0cAI \u4ece\u6c60\u91cc\u6311\u9009\u5408\u9002\u7684\u5185\u5bb9\u7ec4\u5408\u2014\u2014\u6c60\u8d8a\u5168\uff0c\u6311\u5f97\u8d8a\u51c6\u3002'}
+      </div>
+
+      <BasicInfoCard doc={pool} onChange={setPool} />
+
+      <Card title={'\u81ea\u6211\u63cf\u8ff0'} dev="PoolSelfDesc" action={
+        <button type="button" onClick={() => void build()} disabled={building}
+          className="rounded-lg px-3 py-1.5 text-xs text-text-1 transition disabled:opacity-40"
+          style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
+          {building ? '\u6574\u7406\u4e2d\u2026' : '\u878d\u5165\u4fe1\u606f\u6c60'}</button>
+      }>
+        <p className="mb-2 text-xs text-text-3">{'\u7b80\u5386\u91cc\u6ca1\u5199\u5168\u7684\u7ecf\u5386\u3001\u7279\u957f\u3001\u60f3\u5f3a\u8c03\u7684\u4e1c\u897f\uff0c\u5199\u5728\u8fd9\u91cc\uff1b\u70b9\u53f3\u4e0a\u8ba9 LLM \u6574\u7406\u8fdb\u4e0b\u65b9\u5206\u533a\u3002'}</p>
+        <textarea className={inputCls} style={{ ...inputStyle, minHeight: 110 }} value={pool.self_description}
+          onChange={(e) => setPool({ ...pool, self_description: e.target.value })} />
+      </Card>
+
+      <Card title={'\u5168\u90e8\u5185\u5bb9'} dev="PoolSections">
+        <p className="mb-4 text-[11px] text-text-3">{'\u5206\u533a\u540d\u53ef\u76f4\u63a5\u6539\uff08\u5982\u300c\u6e38\u620f\u7ecf\u5386\u300d\uff09\uff1b\u6761\u76ee\u70b9\u5f00\u7f16\u8f91\uff0c\u6761\u76ee\u548c\u5206\u533a\u90fd\u53ef\u62d6\u52a8\u6392\u5e8f\u3002'}</p>
+        <SectionEditor doc={pool} onChange={setPool}
+          summaryHint={'\u6982\u62ec\uff1a\u4e00\u53e5\u8bdd\u8bf4\u8fd9\u6761\u7ecf\u5386\u662f\u4ec0\u4e48\uff08\u4e0d\u4e0a\u7b80\u5386\uff1bAI \u6309\u5c97\u4f4d\u6311\u5185\u5bb9\u9760\u5b83\u2014\u2014\u5199\u5f97\u51c6\uff0c\u6311\u5f97\u51c6\uff09'} />
+      </Card>
+    </div>
+  )
+}
+
+// \u2500\u2500 \u5b50\u9875 2\uff1a\u7b80\u5386\u5236\u4f5c \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function SidePanel({ resumes, exports, busy, onSwitch, onCreate, onDelete, onMeta, onDeleteExport, onCompose }: {
   resumes: ResumeIndex | null
   exports: ResumeExport[]
   busy: boolean
@@ -258,13 +559,30 @@ function SidePanel({ resumes, exports, busy, onSwitch, onCreate, onDelete, onMet
   onDelete: (slug: string) => void
   onMeta: (slug: string, patch: { name?: string; target?: string }) => void
   onDeleteExport: (fname: string) => void
+  onCompose: (jobTitle: string, jdText: string) => void
 }) {
   const [newName, setNewName] = useState('')
   const [newTarget, setNewTarget] = useState('')
+  const [jobTitle, setJobTitle] = useState('')
+  const [jdText, setJdText] = useState('')
+  const [composing, setComposing] = useState(false)
   return (
-    <div className="w-full shrink-0 space-y-4 lg:w-60">
+    <div className="w-full shrink-0 space-y-4 lg:w-64">
+      <Card title={'AI \u5b9a\u5236\u7b80\u5386'} dev="ResumeCompose">
+        <p className="mb-2.5 text-[11px] leading-relaxed text-text-3">{'\u586b\u76ee\u6807\u5c97\u4f4d\uff0cAI \u4ece\u4fe1\u606f\u6c60\u6311\u51fa\u5408\u9002\u5185\u5bb9\u7ec4\u5408\u6210\u4e00\u4efd\u65b0\u7b80\u5386\uff08\u81ea\u52a8\u5207\u6362\u8fc7\u53bb\u7f16\u8f91\uff09\u3002'}</p>
+        <div className="space-y-1.5">
+          <input className="w-full rounded bg-bg-card px-2 py-1.5 text-xs text-text-1 focus:outline-none" style={inputStyle}
+            placeholder={'\u76ee\u6807\u5c97\u4f4d\uff08\u5982 \u6e38\u620f\u7b56\u5212\uff09'} value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} />
+          <textarea className="w-full rounded bg-bg-card px-2 py-1.5 text-[11px] text-text-2 focus:outline-none" style={{ ...inputStyle, minHeight: 60 }}
+            placeholder={'JD \u6b63\u6587\uff08\u53ef\u9009\uff0c\u7c98\u4e0a\u66f4\u51c6\uff09'} value={jdText} onChange={(e) => setJdText(e.target.value)} />
+          <button type="button" disabled={busy || composing || !(jobTitle.trim() || jdText.trim())}
+            onClick={async () => { setComposing(true); try { await onCompose(jobTitle.trim(), jdText.trim()); setJobTitle(''); setJdText('') } finally { setComposing(false) } }}
+            className="w-full rounded-lg px-2 py-1.5 text-xs text-white transition hover:brightness-110 disabled:opacity-40"
+            style={{ background: '#0a84ff' }}>{composing ? '\u7ec4\u5408\u4e2d\u2026' : '\u6309\u5c97\u4f4d\u751f\u6210\u7b80\u5386'}</button>
+        </div>
+      </Card>
+
       <Card title={'\u6211\u7684\u7b80\u5386'} dev="ResumeList">
-        <p className="mb-3 text-[11px] leading-relaxed text-text-3">{'\u6bcf\u4efd\u72ec\u7acb\u7f16\u8f91\uff1b\u7ed9\u4e0d\u540c\u5c97\u4f4d\u5404\u5efa\u4e00\u4efd\uff0c\u6295\u5bf9\u5e94\u5c97\u4f4d\u65f6\u7528\u5bf9\u5e94\u7248\u672c\u3002'}</p>
         <div className="space-y-2">
           {(resumes?.items ?? []).map((it) => {
             const isActive = it.slug === resumes?.active
@@ -278,7 +596,7 @@ function SidePanel({ resumes, exports, busy, onSwitch, onCreate, onDelete, onMet
                     <input className="w-full rounded bg-bg-card px-2 py-1 text-xs font-medium text-text-1 focus:outline-none" style={inputStyle}
                       value={it.name} onChange={(e) => onMeta(it.slug, { name: e.target.value })} />
                     <input className="w-full rounded bg-bg-card px-2 py-1 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
-                      placeholder={'\u76ee\u6807\u5c97\u4f4d\uff08\u5982 AI Agent \u5f00\u53d1\uff09'} value={it.target} onChange={(e) => onMeta(it.slug, { target: e.target.value })} />
+                      placeholder={'\u76ee\u6807\u5c97\u4f4d'} value={it.target} onChange={(e) => onMeta(it.slug, { target: e.target.value })} />
                     <p className="text-[10px] text-signal-bright">{'\u25cf \u5f53\u524d\u7f16\u8f91'}</p>
                   </div>
                 ) : (
@@ -330,201 +648,79 @@ function SidePanel({ resumes, exports, busy, onSwitch, onCreate, onDelete, onMet
   )
 }
 
-export default function Resume() {
-  const [blocks, setBlocks] = useState<ResumeBlocks | null>(null)
+function ResumeTab({ onErr }: { onErr: (m: string | null) => void }) {
+  const [doc, setDoc] = useState<ResumeBlocks | null>(null)
   const [resumes, setResumes] = useState<ResumeIndex | null>(null)
   const [exportsList, setExportsList] = useState<ResumeExport[]>([])
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [building, setBuilding] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [switching, setSwitching] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  const [uploading, setUploading] = useState(false)
-  const fileRef = useRef<HTMLInputElement>(null)
   const metaTimer = useRef<number | null>(null)
-  // \u5c55\u5f00\u72b6\u6001\uff1a\u4e00\u6b21\u5c55\u5f00\u4e00\u6761\uff08FlowCV \u5f0f\uff09\uff1b\u62d6\u52a8\u5f00\u59cb\u5373\u5168\u90e8\u6536\u8d77
-  const [open, setOpen] = useState<string | null>(null)
-  // \u5757\u62d6\u62fd\uff1adragKey \u6807\u6e90\u6761\u6837\u5f0f\uff1bblkSlot=\u63d2\u5165\u69fd\u4f4d\uff08\u6307\u793a\u7ebf\u4f4d\u7f6e\uff09
-  const dragBlk = useRef<{ cat: Cat; i: number } | null>(null)
-  const [dragKey, setDragKey] = useState<string | null>(null)
-  const [blkSlot, setBlkSlot] = useState<{ cat: Cat; slot: number } | null>(null)
-  // \u5206\u533a\u62d6\u62fd
-  const dragSec = useRef<Cat | null>(null)
-  const [secDragKey, setSecDragKey] = useState<Cat | null>(null)
-  const [secSlot, setSecSlot] = useState<number | null>(null)
 
   const refreshMeta = () => {
     void API.getResumes().then(setResumes).catch(() => {})
     void API.getResumeExports().then((r) => setExportsList(r.exports)).catch(() => {})
   }
   useEffect(() => {
-    void API.getResumeBlocks().then(setBlocks).catch((e) => setErr((e as Error).message))
+    void API.getResumeBlocks().then(setDoc).catch((e) => onErr((e as Error).message))
     refreshMeta()
   }, [])
 
-  const resumeHtml = useMemo(() => (blocks ? buildResumeHtml(blocks) : ''), [blocks])
+  const html = useMemo(() => (doc ? buildResumeHtml(doc) : ''), [doc])
+  if (!doc) return <div className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</div>
 
-  if (!blocks) return <div className="text-sm text-text-3">{err ?? '\u52a0\u8f7d\u4e2d\u2026'}</div>
-
-  const sectionOrder = (blocks.section_order?.length ? blocks.section_order : CATS.map((c) => c.key)) as Cat[]
   const activeMeta = resumes?.items.find((it) => it.slug === resumes.active)
-
-  const setBasic = (k: keyof ResumeBasicInfo, v: string) =>
-    setBlocks((b) => (b ? { ...b, basic_info: { ...b.basic_info, [k]: v } } : b))
-  const setCatList = (cat: Cat, list: ResumeBlock[]) => setBlocks((b) => (b ? { ...b, [cat]: list } : b))
-  const addBlock = (cat: Cat) => { setCatList(cat, [...blocks[cat], emptyBlock()]); setOpen(`${cat}:${blocks[cat].length}`) }
-  const updateBlock = (cat: Cat, i: number, patch: Partial<ResumeBlock>) =>
-    setCatList(cat, blocks[cat].map((b, j) => (j === i ? { ...b, ...patch } : b)))
-  const removeBlock = (cat: Cat, i: number) => { setCatList(cat, blocks[cat].filter((_, j) => j !== i)); setOpen(null) }
-  const moveBlock = (cat: Cat, i: number, dir: -1 | 1) => {
-    const list = [...blocks[cat]]
-    const j = i + dir
-    if (j < 0 || j >= list.length) return
-    const tmp = list[i]; list[i] = list[j]; list[j] = tmp
-    setCatList(cat, list)
-    setOpen(`${cat}:${j}`)
-  }
-
-  // \u2500\u2500 \u5757\u62d6\u62fd\uff08\u6761\u72b6\uff1a\u6574\u6761\u53ef\u62d6\uff0c\u63d2\u5165\u7ebf\u6307\u793a\u843d\u70b9\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  const blockDragStart = (cat: Cat, i: number) => (e: React.DragEvent) => {
-    dragBlk.current = { cat, i }
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', 'blk')
-    // Chrome\uff1adragstart \u91cc\u540c\u6b65 setState \u91cd\u6e32\u67d3\u53ef\u80fd\u76f4\u63a5\u53d6\u6d88\u62d6\u62fd \u2192 \u63a8\u8fdf\u4e00\u5e27
-    window.requestAnimationFrame(() => { setDragKey(`${cat}:${i}`); setOpen(null) })
-  }
-  const blockDragOver = (cat: Cat, i: number) => (e: React.DragEvent) => {
-    const from = dragBlk.current
-    if (from?.cat !== cat) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    const r = e.currentTarget.getBoundingClientRect()
-    const before = e.clientY < r.top + r.height / 2
-    let slot = before ? i : i + 1
-    // \u6d88\u9664\u76f8\u90bb\u6b7b\u533a\uff1a\u60ac\u505c\u6e90\u81ea\u8eab\u2192\u4e0d\u663e\u793a\uff1b\u7d27\u90bb\u6761\u7684\u201c\u65e0\u6548\u534a\u533a\u201d\u2192\u63a8\u6210\u4ea4\u6362\u4f4d
-    if (i === from.i) { setBlkSlot(null); return }
-    if (slot === from.i + 1 && i === from.i + 1) slot = i + 1
-    else if (slot === from.i && i === from.i - 1) slot = i
-    setBlkSlot({ cat, slot })
-  }
-  const blockDrop = (cat: Cat) => (e: React.DragEvent) => {
-    e.preventDefault()
-    const from = dragBlk.current
-    const s = blkSlot
-    blockDragEnd()
-    if (!from || !s || from.cat !== cat || s.cat !== cat) return
-    let to = s.slot
-    if (from.i < to) to -= 1
-    if (to === from.i) return
-    const list = [...blocks[cat]]
-    const [moved] = list.splice(from.i, 1)
-    list.splice(to, 0, moved)
-    setCatList(cat, list)
-  }
-  const blockDragEnd = () => { dragBlk.current = null; setDragKey(null); setBlkSlot(null) }
-
-  // \u2500\u2500 \u5206\u533a\u62d6\u62fd \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  const secDragStart = (cat: Cat) => (e: React.DragEvent) => {
-    dragSec.current = cat
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', 'sec')
-    window.requestAnimationFrame(() => { setSecDragKey(cat); setOpen(null) })
-  }
-  const secDragOver = (si: number) => (e: React.DragEvent) => {
-    if (!dragSec.current) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    const fi = sectionOrder.indexOf(dragSec.current)
-    const r = e.currentTarget.getBoundingClientRect()
-    const before = e.clientY < r.top + r.height / 2
-    let slot = before ? si : si + 1
-    // \u6d88\u9664\u76f8\u90bb\u6b7b\u533a\uff1a\u9996\u5206\u533a\u5411\u4e0b\u632a\u4e00\u683c\u4e0d\u518d\u8981\u6c42\u7cbe\u51c6\u547d\u4e2d\u4e0b\u4e2a\u5206\u533a\u7684\u4e0b\u534a\u533a
-    if (si === fi) { setSecSlot(null); return }
-    if (slot === fi + 1 && si === fi + 1) slot = si + 1
-    else if (slot === fi && si === fi - 1) slot = si
-    setSecSlot(slot)
-  }
-  const secDrop = () => (e: React.DragEvent) => {
-    e.preventDefault()
-    const from = dragSec.current
-    const slot = secSlot
-    secDragEnd()
-    if (!from || slot === null) return
-    const fi = sectionOrder.indexOf(from)
-    let to = slot
-    if (fi < to) to -= 1
-    if (to === fi) return
-    const order = [...sectionOrder]
-    order.splice(fi, 1)
-    order.splice(to, 0, from)
-    setBlocks((b) => (b ? { ...b, section_order: order } : b))
-  }
-  const secDragEnd = () => { dragSec.current = null; setSecDragKey(null); setSecSlot(null) }
-
   const save = async () => {
-    setSaving(true); setErr(null); setSaved(false)
-    try {
-      await API.saveResumeBlocks(blocks)
-      setSaved(true); window.setTimeout(() => setSaved(false), 3000)
-      refreshMeta()
-    } catch (e) { setErr((e as Error).message) } finally { setSaving(false) }
-  }
-  const build = async () => {
-    if (!window.confirm('\u5c06\u6839\u636e\u5f53\u524d\u5757\u5e93 + \u81ea\u6211\u63cf\u8ff0\uff0c\u7528 LLM \u91cd\u65b0\u6574\u7406\u5757\u5e93\uff0c\u8986\u76d6\u5f53\u524d\u5185\u5bb9\u3002\u7ee7\u7eed\uff1f')) return
-    setBuilding(true); setErr(null)
-    try { setBlocks(await API.buildResumeBlocks(blocks.self_description)) }
-    catch (e) { setErr((e as Error).message) } finally { setBuilding(false) }
-  }
-  const handleUpload = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setUploading(true); setErr(null)
-    try {
-      await API.uploadResume(file)
-      setBlocks(await API.getResumeBlocks())
-      refreshMeta()
-    } catch (e2) { setErr((e2 as Error).message) }
-    finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
+    setSaving(true); onErr(null); setSaved(false)
+    try { await API.saveResumeBlocks(doc); setSaved(true); window.setTimeout(() => setSaved(false), 3000); refreshMeta() }
+    catch (e) { onErr((e as Error).message) } finally { setSaving(false) }
   }
   const exportPdf = async () => {
-    setExporting(true); setErr(null)
+    setExporting(true); onErr(null)
     try {
-      const label = [blocks.basic_info.name, activeMeta?.name].filter(Boolean).join('_') || 'resume'
-      const blob = await API.printResumePdf(buildResumeHtml(blocks), label)
+      const label = [doc.basic_info.name, activeMeta?.name].filter(Boolean).join('_') || 'resume'
+      const blob = await API.printResumePdf(buildResumeHtml(doc), label)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url; a.download = `${label}.pdf`
       document.body.appendChild(a); a.click(); a.remove()
       URL.revokeObjectURL(url)
       refreshMeta()
-    } catch (e) { setErr((e as Error).message) } finally { setExporting(false) }
+    } catch (e) { onErr((e as Error).message) } finally { setExporting(false) }
   }
   const switchResume = async (slug: string) => {
-    setSwitching(true); setErr(null)
+    setSwitching(true); onErr(null)
     try {
-      await API.saveResumeBlocks(blocks)
+      await API.saveResumeBlocks(doc)
       await API.activateResume(slug)
-      setBlocks(await API.getResumeBlocks())
-      setOpen(null)
+      setDoc(await API.getResumeBlocks())
       refreshMeta()
-    } catch (e) { setErr((e as Error).message) } finally { setSwitching(false) }
+    } catch (e) { onErr((e as Error).message) } finally { setSwitching(false) }
   }
   const createResume = async (name: string, target: string) => {
-    setSwitching(true); setErr(null)
+    setSwitching(true); onErr(null)
     try {
-      await API.saveResumeBlocks(blocks)
+      await API.saveResumeBlocks(doc)
       const item = await API.createResume(name, target, true)
       await API.activateResume(item.slug)
-      setBlocks(await API.getResumeBlocks())
-      setOpen(null)
+      setDoc(await API.getResumeBlocks())
       refreshMeta()
-    } catch (e) { setErr((e as Error).message) } finally { setSwitching(false) }
+    } catch (e) { onErr((e as Error).message) } finally { setSwitching(false) }
+  }
+  const compose = async (jobTitle: string, jdText: string) => {
+    setSwitching(true); onErr(null)
+    try {
+      await API.saveResumeBlocks(doc)
+      await API.composeResume({ job_title: jobTitle, jd_text: jdText })
+      setDoc(await API.getResumeBlocks())
+      refreshMeta()
+    } catch (e) { onErr((e as Error).message) } finally { setSwitching(false) }
   }
   const deleteResume = async (slug: string) => {
     if (!window.confirm('\u5220\u9664\u8fd9\u4efd\u7b80\u5386\uff1f\u4e0d\u53ef\u6062\u590d\u3002')) return
-    try { await API.deleteResume(slug); setBlocks(await API.getResumeBlocks()); refreshMeta() }
-    catch (e) { setErr((e as Error).message) }
+    try { await API.deleteResume(slug); setDoc(await API.getResumeBlocks()); refreshMeta() }
+    catch (e) { onErr((e as Error).message) }
   }
   const updateMeta = (slug: string, patch: { name?: string; target?: string }) => {
     setResumes((r) => (r ? { ...r, items: r.items.map((it) => (it.slug === slug ? { ...it, ...patch } : it)) } : r))
@@ -533,22 +729,12 @@ export default function Resume() {
   }
   const deleteExport = async (fname: string) => {
     try { await API.deleteResumeExport(fname); setExportsList((l) => l.filter((x) => x.file !== fname)) }
-    catch (e) { setErr((e as Error).message) }
+    catch (e) { onErr((e as Error).message) }
   }
 
-  const detailInput = 'w-full rounded-lg bg-bg-card px-3 py-2 text-sm text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue'
-
   return (
-    <div className="relative">
-      <DevLabel name="ResumePage" float />
-      {err && <div className="mb-4 rounded-lg bg-signal-red/10 px-4 py-2 text-xs text-signal-red">{err}</div>}
-
+    <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <input ref={fileRef} type="file" accept=".pdf,.docx" onChange={handleUpload} disabled={uploading} className="hidden" id="resume-upload-input" />
-        <label htmlFor="resume-upload-input"
-          className={`cursor-pointer rounded-full px-4 py-2 text-sm text-text-1 transition ${uploading ? 'cursor-not-allowed opacity-50' : 'hover:brightness-110'}`}
-          style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)' }}>
-          {uploading ? '\u89e3\u6790\u4e2d\u2026\uff08\u7ea6 1 \u5206\u949f\uff09' : '\u4e0a\u4f20\u7b80\u5386'}</label>
         <button type="button" onClick={() => void save()} disabled={saving}
           className="rounded-full px-5 py-2 text-sm text-white transition hover:brightness-110 disabled:opacity-50"
           style={{ background: '#0a84ff' }}>{saving ? '\u4fdd\u5b58\u4e2d\u2026' : '\u4fdd\u5b58'}</button>
@@ -557,157 +743,62 @@ export default function Resume() {
           style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)' }}>
           {exporting ? '\u5bfc\u51fa\u4e2d\u2026' : '\u5bfc\u51fa PDF'}</button>
         {saved && <span className="text-sm text-signal-green">{'\u2713 \u5df2\u4fdd\u5b58'}</span>}
-        {switching && <span className="text-sm text-text-3">{'\u5207\u6362\u4e2d\u2026'}</span>}
-        <span className="ml-auto text-xs text-text-3">{'\u70b9\u6761\u76ee\u5c55\u5f00\u7f16\u8f91\uff0c\u6309\u4f4f\u53ef\u62d6\u52a8\u6392\u5e8f'}</span>
+        {switching && <span className="text-sm text-text-3">{'\u5904\u7406\u4e2d\u2026'}</span>}
+        <span className="ml-auto text-xs text-text-3">{'\u8fd9\u4efd\u7b80\u5386\u7684\u5185\u5bb9\u6539\u52a8\u4e0d\u5f71\u54cd\u4fe1\u606f\u6c60'}</span>
       </div>
 
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
         <SidePanel resumes={resumes} exports={exportsList} busy={switching}
           onSwitch={(s) => void switchResume(s)} onCreate={(n, t) => void createResume(n, t)}
-          onDelete={(s) => void deleteResume(s)} onMeta={updateMeta} onDeleteExport={(f) => void deleteExport(f)} />
+          onDelete={(s) => void deleteResume(s)} onMeta={updateMeta} onDeleteExport={(f) => void deleteExport(f)}
+          onCompose={compose} />
 
-        <div className="min-w-0 flex-1 space-y-4 lg:max-w-[520px]">
-          <Card title={'\u57fa\u672c\u4fe1\u606f'} dev="ResumeBasic">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {BASIC_FIELDS.map(({ key, label }) => (
-                <label key={key} className="flex flex-col gap-1.5">
-                  <span className="text-xs text-text-3">{label}</span>
-                  <input className={inputCls} style={inputStyle} value={blocks.basic_info[key] ?? ''} onChange={(e) => setBasic(key, e.target.value)} />
-                </label>
-              ))}
-            </div>
-          </Card>
-
-          <Card title={'\u81ea\u6211\u63cf\u8ff0'} dev="ResumeSelfDesc" action={
-            <button type="button" onClick={() => void build()} disabled={building}
-              className="rounded-lg px-3 py-1.5 text-xs text-text-1 transition disabled:opacity-40"
-              style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
-              {building ? '\u6574\u7406\u4e2d\u2026' : '\u878d\u5165\u5757\u5e93'}</button>
-          }>
-            <p className="mb-2 text-xs text-text-3">{'\u8865\u5145\u6ca1\u5199\u5168\u7684\u7ecf\u5386/\u7279\u957f\uff1b\u70b9\u53f3\u4e0a\u7528 LLM \u628a\u8fd9\u6bb5\u63cf\u8ff0\u878d\u8fdb\u4e0b\u65b9\u5757\u5e93\uff08\u8986\u76d6\uff09\u3002'}</p>
-            <textarea className={inputCls} style={{ ...inputStyle, minHeight: 110 }} value={blocks.self_description}
-              onChange={(e) => setBlocks((b) => (b ? { ...b, self_description: e.target.value } : b))} />
-          </Card>
-
+        <div className="min-w-0 flex-1 space-y-4 lg:max-w-[500px]">
+          <BasicInfoCard doc={doc} onChange={setDoc} />
           <Card title={'\u7b80\u5386\u5185\u5bb9'} dev="ResumeSections">
             <p className="mb-4 text-[11px] text-text-3">{'\u70b9\u6761\u76ee\u5c55\u5f00\u7f16\u8f91\uff1b\u6761\u76ee\u548c\u5206\u533a\u90fd\u53ef\u6309\u4f4f\u62d6\u52a8\u6392\u5e8f\uff0c\u84dd\u7ebf\u662f\u843d\u70b9\u3002'}</p>
-            <div className="space-y-5" onDrop={secDrop()}>
-              {sectionOrder.map((key, si) => {
-                const label = catLabel(key)
-                const list = blocks[key]
-                const isLastSec = si === sectionOrder.length - 1
-                return (
-                  <div key={key}
-                    onDragOver={secDragOver(si)}
-                    style={{
-                      opacity: secDragKey === key ? 0.35 : 1,
-                      borderTop: secSlot === si ? '2px solid #0a84ff' : '2px solid transparent',
-                      borderBottom: isLastSec && secSlot === sectionOrder.length ? '2px solid #0a84ff' : '2px solid transparent',
-                      transition: 'opacity .15s',
-                    }}>
-                    <div className="mb-2 flex items-center gap-2">
-                      <div draggable title={'\u62d6\u52a8\u8c03\u6574\u5206\u533a\u987a\u5e8f'}
-                        onDragStart={secDragStart(key)} onDragEnd={secDragEnd}
-                        className="group flex min-w-0 flex-1 cursor-grab select-none items-center gap-2 rounded-lg px-1 py-1 transition active:cursor-grabbing"
-                        style={{ margin: '-4px 0 -4px -4px' }}>
-                        <span className="text-[13px] leading-none text-text-3 opacity-60 transition group-hover:opacity-100">{'\u2af6'}</span>
-                        <span className="text-[13px] font-semibold tracking-wide text-text-1">{label}</span>
-                        <span className="rounded-full px-1.5 text-[10px] text-text-3" style={{ background: 'rgba(255,255,255,0.06)' }}>{list.length}</span>
-                      </div>
-                      <button type="button" onClick={() => addBlock(key)}
-                        className="ml-auto rounded-lg px-2.5 py-1 text-[11px] text-signal-bright transition hover:bg-signal-blue/10">{'+ \u6dfb\u52a0'}</button>
-                    </div>
-
-                    {list.length === 0 ? (
-                      <button type="button" onClick={() => addBlock(key)}
-                        className="w-full rounded-[10px] py-2.5 text-[11px] text-text-3 transition hover:text-text-1"
-                        style={{ border: '1px dashed rgba(255,255,255,0.14)' }}>{'\u7a7a\u5206\u533a \u00b7 \u70b9\u51fb\u6dfb\u52a0\u4e00\u6761'}</button>
-                    ) : (
-                      <div className="space-y-1.5" onDrop={blockDrop(key)}>
-                        {list.map((blk, i) => {
-                          const k = `${key}:${i}`
-                          const isOpen = open === k
-                          const isLast = i === list.length - 1
-                          const slotHere = blkSlot?.cat === key
-                          return (
-                            <div key={k}
-                              onDragOver={blockDragOver(key, i)}
-                              style={{
-                                borderTop: slotHere && blkSlot?.slot === i ? '2px solid #0a84ff' : '2px solid transparent',
-                                borderBottom: isLast && slotHere && blkSlot?.slot === list.length ? '2px solid #0a84ff' : '2px solid transparent',
-                              }}>
-                              <div className="overflow-hidden rounded-[10px] transition"
-                                style={{
-                                  background: isOpen ? 'rgba(255,255,255,0.055)' : 'rgba(255,255,255,0.035)',
-                                  border: isOpen ? '1px solid rgba(10,132,255,0.4)' : '1px solid rgba(255,255,255,0.07)',
-                                  opacity: dragKey === k ? 0.35 : 1,
-                                }}>
-                                {/* \u6761\uff1a\u6536\u8d77\u6001\u6574\u6761\u53ef\u62d6\uff1b\u70b9\u51fb\u5c55\u5f00 */}
-                                <div draggable={!isOpen}
-                                  onDragStart={blockDragStart(key, i)} onDragEnd={blockDragEnd}
-                                  onClick={() => setOpen(isOpen ? null : k)}
-                                  className={`group flex select-none items-center gap-2.5 px-3 py-2.5 ${isOpen ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'}`}>
-                                  <span className="text-[13px] leading-none text-text-3 opacity-50 transition group-hover:opacity-100">{'\u2af6'}</span>
-                                  <span className={`min-w-0 flex-1 truncate text-sm ${blk.title ? 'font-medium text-text-1' : 'text-text-3'}`}>
-                                    {blk.title || '\u672a\u547d\u540d\u6761\u76ee'}</span>
-                                  {blk.time && <span className="shrink-0 text-[11px] text-text-3" style={{ fontVariantNumeric: 'tabular-nums' }}>{blk.time}</span>}
-                                  <span className="shrink-0 text-[10px] text-text-3 transition" style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }}>{'\u25be'}</span>
-                                </div>
-                                {/* \u5c55\u5f00\u8be6\u60c5\uff08grid-rows \u8fc7\u6e21\uff09 */}
-                                <div style={{ display: 'grid', gridTemplateRows: isOpen ? '1fr' : '0fr', transition: 'grid-template-rows .28s ease' }}>
-                                  <div className="min-h-0 overflow-hidden">
-                                    <div className="space-y-2.5 px-3 pb-3 pt-1">
-                                      <div className="flex gap-2">
-                                        <input className={detailInput} style={inputStyle} placeholder={'\u6807\u9898\uff08\u5355\u4f4d/\u9879\u76ee/\u6280\u80fd\u540d\uff09'}
-                                          value={blk.title} onChange={(e) => updateBlock(key, i, { title: e.target.value })} />
-                                        <input className="w-32 shrink-0 rounded-lg bg-bg-card px-3 py-2 text-sm text-text-1 focus:outline-none" style={inputStyle}
-                                          placeholder={'\u65f6\u95f4'} value={blk.time} onChange={(e) => updateBlock(key, i, { time: e.target.value })} />
-                                      </div>
-                                      <textarea className={`${detailInput} leading-relaxed`} style={{ ...inputStyle, minHeight: 120 }}
-                                        placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')}
-                                        onChange={(e) => updateBlock(key, i, { bullets: e.target.value.split('\n') })} />
-                                      <input className="w-full rounded bg-bg-card px-2.5 py-1.5 text-xs text-text-2 focus:outline-none" style={inputStyle}
-                                        placeholder={'\u6982\u62ec\uff1a\u4e00\u53e5\u8bdd\u8bf4\u8fd9\u4e2a\u5757\u662f\u4ec0\u4e48\uff08\u4e0d\u4e0a\u7b80\u5386\uff1bAI \u6309 JD \u6311\u5757\u9760\u5b83\u2014\u2014\u5199\u5f97\u51c6\uff0c\u6311\u5757\u624d\u51c6\uff09'}
-                                        value={blk.summary} onChange={(e) => updateBlock(key, i, { summary: e.target.value })} />
-                                      <div className="flex items-center gap-1 pt-0.5">
-                                        <button type="button" onClick={() => moveBlock(key, i, -1)} disabled={i === 0}
-                                          className="rounded px-2 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2191 \u4e0a\u79fb'}</button>
-                                        <button type="button" onClick={() => moveBlock(key, i, 1)} disabled={i === list.length - 1}
-                                          className="rounded px-2 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2193 \u4e0b\u79fb'}</button>
-                                        <button type="button" onClick={() => removeBlock(key, i)}
-                                          className="ml-auto rounded px-2 py-1 text-[11px] text-signal-red transition hover:brightness-125">{'\u5220\u9664\u6761\u76ee'}</button>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
+            <SectionEditor doc={doc} onChange={setDoc}
+              summaryHint={'\u6982\u62ec\uff08\u4e0d\u4e0a\u7b80\u5386\uff0c\u4ec5\u4f5c AI \u6311\u5757\u7d22\u5f15\uff09'} />
           </Card>
         </div>
 
         <div className="min-w-0 flex-1">
           <div className="sticky top-4">
             <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-3">{'\u5b9e\u65f6\u9884\u89c8\uff08A4\uff09'}<DevLabel name="ResumePreview" /></div>
-            <A4Preview html={resumeHtml} />
+            <A4Preview html={html} />
           </div>
         </div>
       </div>
 
       <details className="mt-6">
-        <summary className="cursor-pointer select-none text-sm text-text-3 transition hover:text-text-1">{'\u5c97\u4f4d\u5b9a\u5236\uff08\u8fdb\u9636\uff09\uff1a\u6309 JD \u7ec4\u5408\u5b9a\u5236\u7b80\u5386 / \u62db\u547c\u8bed'}</summary>
+        <summary className="cursor-pointer select-none text-sm text-text-3 transition hover:text-text-1">{'\u5c97\u4f4d\u5b9a\u5236\uff08\u8fdb\u9636\uff09\uff1a\u9884\u5236\u6a21\u677f / \u6309\u5df2\u6295\u5c97\u4f4d\u751f\u6210\u65b9\u6848\u4e0e\u62db\u547c\u8bed'}</summary>
         <div className="mt-4 space-y-5">
           <TemplatesCard />
           <TailorCard />
         </div>
       </details>
+    </div>
+  )
+}
+
+export default function Resume() {
+  const [tab, setTab] = useState<'resume' | 'pool'>(() =>
+    (window.localStorage.getItem('resume.tab') as 'resume' | 'pool') || 'resume')
+  const [err, setErr] = useState<string | null>(null)
+  const switchTab = (t: 'resume' | 'pool') => { setTab(t); setErr(null); window.localStorage.setItem('resume.tab', t) }
+
+  return (
+    <div className="relative">
+      <DevLabel name="ResumePage" float />
+      <div className="mb-4 inline-flex gap-1 rounded-xl bg-bg-card2 p-1" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+        {([['resume', '\u7b80\u5386\u5236\u4f5c'], ['pool', '\u4fe1\u606f\u6c60']] as const).map(([k, label]) => (
+          <button key={k} type="button" onClick={() => switchTab(k)}
+            className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${tab === k ? 'text-white' : 'text-text-3 hover:text-text-1'}`}
+            style={tab === k ? { background: '#0a84ff' } : undefined}>{label}</button>
+        ))}
+      </div>
+      {err && <div className="mb-4 rounded-lg bg-signal-red/10 px-4 py-2 text-xs text-signal-red">{err}</div>}
+      {tab === 'resume' ? <ResumeTab onErr={setErr} /> : <PoolTab onErr={setErr} />}
     </div>
   )
 }

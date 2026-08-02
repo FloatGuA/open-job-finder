@@ -56,8 +56,9 @@ class OnboardingChecker:
 
     def _blocks_available(self) -> bool:
         from services import resume_blocks
+        pool_path = os.path.join(os.path.dirname(self.resume_blocks_path) or "data", "info_pool.yaml")
         try:
-            return resume_blocks.is_available(self.resume_blocks_path)
+            return resume_blocks.is_available(self.resume_blocks_path) or resume_blocks.is_available(pool_path)
         except Exception:
             return False
 

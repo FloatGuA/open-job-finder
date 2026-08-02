@@ -1,60 +1,84 @@
-"""简历积木库（功能一）。
+"""简历块文档（v2.16 起为「自定义动态分区」形状；信息池与每份简历共用同一形状）。
 
-把简历 + 用户自我描述拆成"可排列组合的块"，按固定类别分组：
-- basic_info：固定字段（姓名/电话/邮箱/城市/学历/期望岗位）
-- education / internship / project / skills / awards：块列表，
-  每块 = {title, time, bullets[], summary}（一段经历 = 一个块）
+文档形状（信息池 data/info_pool.yaml 与简历 data/resumes/{slug}.yaml 相同）：
+  basic_info: {name, phone, email, city, degree, target_title}
+  self_description: str          # 信息池实际使用（融入池的原料）；简历文件保留兼容
+  sections: [ {name: str, blocks: [ {title, time, bullets[], summary} ]} ]
 
-单一可编辑真相：data/resume_blocks.yaml。上传简历仅用于预填。
-非 basic_info 的块各带一个 LLM 生成的「简单概括」(summary)，供功能二挑块用。
+分区名自定义（如「游戏经历」「Agent 经历」），顺序即数组顺序（拖拽直接重排数组）。
+旧形状（≤v2.15：education/... 固定五键 + section_order）在 load_blocks 读入时自动
+转换为动态 sections，一次保存后即固化为新形状。
 """
-import copy
 import os
 from typing import Optional
 
 import yaml
 
-# 非 basic_info 的固定类别（块列表）
-BLOCK_CATEGORIES = ["education", "internship", "project", "skills", "awards"]
+# 旧形状的固定类别键（仅用于 legacy 转换）及其中文分区名
+LEGACY_CATEGORIES = ["education", "internship", "project", "skills", "awards"]
+LEGACY_LABELS = {
+    "education": "教育经历", "internship": "实习经历", "project": "项目经历",
+    "skills": "技能特长", "awards": "获奖荣誉",
+}
 
 _BASIC_FIELDS = ["name", "phone", "email", "city", "degree", "target_title"]
 
 
 def empty_blocks() -> dict:
-    data: dict = {"basic_info": {k: "" for k in _BASIC_FIELDS}, "self_description": ""}
-    for cat in BLOCK_CATEGORIES:
-        data[cat] = []
-    # 分区在简历里的先后顺序（编辑器可拖拽调整，预览/导出按此渲染）
-    data["section_order"] = list(BLOCK_CATEGORIES)
-    return data
+    return {"basic_info": {k: "" for k in _BASIC_FIELDS}, "self_description": "", "sections": []}
 
 
-def normalize_section_order(order) -> list:
-    """归一化分区顺序：只认已知类别、去重，缺的按默认顺序补到尾部（结构稳定）。"""
-    seen = []
-    for c in order if isinstance(order, list) else []:
-        if c in BLOCK_CATEGORIES and c not in seen:
-            seen.append(c)
-    return seen + [c for c in BLOCK_CATEGORIES if c not in seen]
+def _clean_block(it) -> Optional[dict]:
+    if not isinstance(it, dict):
+        return None
+    return {
+        "title": str(it.get("title", "")),
+        "time": str(it.get("time", "")),
+        "bullets": [str(b) for b in (it.get("bullets") or []) if str(b).strip()],
+        "summary": str(it.get("summary", "")),
+    }
+
+
+def clean_sections(items) -> list:
+    """归一化 sections：只认 {name, blocks[]}，块逐字段兜底；无名分区给占位名。"""
+    out = []
+    for sec in items if isinstance(items, list) else []:
+        if not isinstance(sec, dict):
+            continue
+        blocks = [b for b in (_clean_block(it) for it in (sec.get("blocks") or [])) if b is not None]
+        name = str(sec.get("name", "")).strip() or "未命名分区"
+        out.append({"name": name, "blocks": blocks})
+    return out
+
+
+def _convert_legacy(data: dict) -> list:
+    """旧五键形状 → 动态 sections（按 section_order 顺序，含空分区保留编辑位）。"""
+    order = [c for c in (data.get("section_order") or []) if c in LEGACY_CATEGORIES]
+    order += [c for c in LEGACY_CATEGORIES if c not in order]
+    sections = []
+    for cat in order:
+        items = data.get(cat)
+        blocks = [b for b in (_clean_block(it) for it in (items if isinstance(items, list) else [])) if b is not None]
+        sections.append({"name": LEGACY_LABELS[cat], "blocks": blocks})
+    return sections
 
 
 def load_blocks(path: str = "data/resume_blocks.yaml") -> dict:
-    """读取块库；不存在返回空结构。补齐缺失类别，保证结构稳定。"""
+    """读取文档；不存在返回空结构；旧形状自动转换为动态 sections。"""
     if not os.path.exists(path):
         return empty_blocks()
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     base = empty_blocks()
-    # 浅合并，保留已有、补齐缺失
     bi = data.get("basic_info") or {}
     for k in _BASIC_FIELDS:
         if k in bi:
             base["basic_info"][k] = bi[k]
     base["self_description"] = data.get("self_description", "")
-    for cat in BLOCK_CATEGORIES:
-        if isinstance(data.get(cat), list):
-            base[cat] = data[cat]
-    base["section_order"] = normalize_section_order(data.get("section_order"))
+    if isinstance(data.get("sections"), list):
+        base["sections"] = clean_sections(data["sections"])
+    elif any(k in data for k in LEGACY_CATEGORIES):
+        base["sections"] = _convert_legacy(data)
     return base
 
 
@@ -69,32 +93,11 @@ def is_available(path: str = "data/resume_blocks.yaml") -> bool:
         d = load_blocks(path)
     except Exception:
         return False
-    return bool(d["basic_info"].get("name")) or any(d.get(c) for c in BLOCK_CATEGORIES)
+    return bool(d["basic_info"].get("name")) or any(s["blocks"] for s in d["sections"])
 
 
-def build_blocks(resume_base: dict, self_description: str, model_router, prompt_manager) -> dict:
-    """用 LLM 把解析后的简历 + 自我描述整理成结构化块库（含每块 summary）。
-
-    models judge：分类/概括是判断活儿，交给 LLM；结构与存储由 code 决定。
-    """
-    import json
-
-    from services.llm_parser import safe_parse_json
-
-    prompt = prompt_manager.render("resume_build", {
-        "resume_json": json.dumps(resume_base or {}, ensure_ascii=False),
-        "self_desc": (self_description or "").strip() or "（无）",
-    })
-    text, _provider = model_router.complete(prompt=prompt, capability="balanced")
-    parsed = safe_parse_json(text, required_fields={"basic_info": dict})
-    return _normalize_parsed_blocks(parsed, self_description)
-
-
-def _normalize_parsed_blocks(parsed: dict, self_description: str = "") -> dict:
-    """把 LLM 解析出的 JSON 归一化成稳定的块库结构（basic_info + 5 类块，逐字段兜底）。
-
-    build_blocks（简历+自述整理）与 parse_resume_to_blocks（PDF 文本一步解析）共用。
-    """
+def normalize_parsed_doc(parsed: dict, self_description: str = "") -> dict:
+    """LLM 解析输出（{basic_info, sections}）→ 稳定文档结构，逐字段兜底。"""
     out = empty_blocks()
     out["self_description"] = self_description or ""
     bi = parsed.get("basic_info") or {}
@@ -102,42 +105,29 @@ def _normalize_parsed_blocks(parsed: dict, self_description: str = "") -> dict:
         v = bi.get(k)
         if isinstance(v, str):
             out["basic_info"][k] = v
-    for cat in BLOCK_CATEGORIES:
-        items = parsed.get(cat)
-        if not isinstance(items, list):
-            continue
-        clean = []
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            clean.append({
-                "title": str(it.get("title", "")),
-                "time": str(it.get("time", "")),
-                "bullets": [str(b) for b in (it.get("bullets") or []) if str(b).strip()],
-                "summary": str(it.get("summary", "")),
-            })
-        out[cat] = clean
+    out["sections"] = clean_sections(parsed.get("sections"))
     return out
 
 
 def parse_resume_to_blocks(raw_text: str, model_router, prompt_manager) -> dict:
-    """LLM 一步解析：PDF/DOCX 提取的纯文本 → 结构化块库（跳过脆弱正则，更接近 flowcv）。
+    """LLM 一步解析：PDF/DOCX 提取的纯文本 → 动态分区文档（入信息池用）。
 
-    models judge：解析/归类/概括交给 LLM；结构与存储由 code 决定。
+    models judge：解析/归类/概括交给 LLM（分区名由它按内容起，如「游戏经历」）；
+    结构与存储由 code 决定。
     """
     from services.llm_parser import safe_parse_json
 
     prompt = prompt_manager.render("resume_parse", {"raw_text": (raw_text or "").strip()})
     text, _provider = model_router.complete(prompt=prompt, capability="balanced")
     parsed = safe_parse_json(text, required_fields={"basic_info": dict})
-    return _normalize_parsed_blocks(parsed, "")
+    return normalize_parsed_doc(parsed, "")
 
 
 def parse_resume_vision(pdf_path: str, model_router, prompt_manager) -> dict:
-    """视觉解析：PDF 渲染成页面图片 → 视觉模型（vision 链）直接读版式 → 结构化块库。
+    """视觉解析：PDF 渲染成页面图片 → 视觉模型（vision 链）直接读版式 → 动态分区文档。
 
     排版型简历（多栏/图形/表格）的纯文本提取会丢结构，视觉模型看真实版面能更准地
-    归类。走 vision capability 链（本地 qwen2.5vl 主 + 云端 claude 兜底）。
+    归类。走 vision capability 链（codex_cli 主 + claude_cli 兜底）。
     """
     from services.llm_parser import safe_parse_json
     from services.resume_parser import render_pdf_to_images
@@ -148,4 +138,4 @@ def parse_resume_vision(pdf_path: str, model_router, prompt_manager) -> dict:
     prompt = prompt_manager.render("resume_parse_vision", {})
     text, _provider = model_router.complete(prompt=prompt, images=images, capability="vision")
     parsed = safe_parse_json(text, required_fields={"basic_info": dict})
-    return _normalize_parsed_blocks(parsed, "")
+    return normalize_parsed_doc(parsed, "")

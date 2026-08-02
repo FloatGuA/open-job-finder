@@ -629,13 +629,13 @@ async def resume_scheduler() -> JSONResponse:
     return JSONResponse({"paused": False, "message": "Scheduler resumed."})
 
 
-def _parse_resume_upload_to_blocks(path: str, suffix: str) -> tuple[dict, str]:
-    """上传简历 → 结构化块库（单一可编辑真相 resume_blocks.yaml）。
+def _parse_resume_upload(path: str, suffix: str) -> tuple[dict, str]:
+    """上传简历 → 解析成动态分区文档（v2.16 起入信息池，池是唯一源头）。
 
     PDF 走视觉解析（vision 链 codex_cli→claude_cli）；两个 CLI 都失败**直接抛错**——不回落
     弱的 pdfminer 文本路径，宁可报错让用户知道（用户 2026-08-01 定，fail fast）。
     DOCX 无页面图可渲染，走文本解析（docx 文本 → LLM 结构化）。
-    返回 (blocks, method)，method ∈ {vision, text}。
+    返回 (parsed_doc, method)，method ∈ {vision, text}。
     """
     from services import resume_blocks as rb
     from services.resume_parser import _extract_text_from_docx
@@ -663,26 +663,26 @@ async def upload_resume(file: UploadFile = File(...)) -> JSONResponse:
         if len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=400, detail="File too large. Maximum size is 10 MB.")
         saved_path.write_bytes(content)
-        blocks, method = _parse_resume_upload_to_blocks(str(saved_path), suffix)
+        parsed, method = _parse_resume_upload(str(saved_path), suffix)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    from services import resume_blocks as rb
-    from services.resume_store import ResumeStore
-    if not (blocks["basic_info"].get("name") or any(blocks.get(c) for c in rb.BLOCK_CATEGORIES)):
+    from services import info_pool
+    if not (parsed["basic_info"].get("name") or any(s["blocks"] for s in parsed["sections"])):
         raise HTTPException(status_code=400, detail="Resume parsing failed: no meaningful content detected.")
-    # 解析结果写入当前激活简历（双写兼容位 + {slug}.yaml）
-    ResumeStore(str(DATA_DIR)).save_active_blocks(blocks)
+    # 解析结果合并入信息池（同名分区并组、同标题块替换；池只增改不删）
+    pool_path = str(DATA_DIR / "info_pool.yaml")
+    pool = info_pool.merge_parsed(info_pool.load_pool(pool_path, str(DATA_DIR / "resume_blocks.yaml")), parsed)
+    info_pool.save_pool(pool, pool_path)
 
-    sections_found = [c for c in rb.BLOCK_CATEGORIES if blocks.get(c)]
     return JSONResponse(
         {
             "success": True,
-            "message": "Resume parsed and saved.",
+            "message": "Resume parsed into info pool.",
             "method": method,
-            "sections_found": sections_found,
+            "sections_found": [s["name"] for s in parsed["sections"] if s["blocks"]],
         }
     )
 
@@ -700,29 +700,85 @@ async def put_resume_blocks(body: dict[str, Any] = Body(...)) -> JSONResponse:
 
     经 ResumeStore 双写：兼容位 resume_blocks.yaml + 当前激活简历 {slug}.yaml。
     """
-    from services import resume_blocks
     from services.resume_store import ResumeStore
+    ResumeStore(str(DATA_DIR)).save_active_blocks(_clean_doc_body(body))
+    return JSONResponse({"ok": True})
+
+
+def _clean_doc_body(body: dict) -> dict:
+    """请求体 → 动态分区文档（白名单清洗，池与简历共用同一形状）。"""
+    from services import resume_blocks
     clean = resume_blocks.empty_blocks()
     bi = body.get("basic_info") or {}
     for k in clean["basic_info"]:
         if k in bi:
             clean["basic_info"][k] = str(bi[k] or "")
     clean["self_description"] = str(body.get("self_description") or "")
-    for cat in resume_blocks.BLOCK_CATEGORIES:
-        items = body.get(cat)
-        if isinstance(items, list):
-            clean[cat] = [
-                {
-                    "title": str(it.get("title", "")),
-                    "time": str(it.get("time", "")),
-                    "bullets": [str(b) for b in (it.get("bullets") or []) if str(b).strip()],
-                    "summary": str(it.get("summary", "")),
-                }
-                for it in items if isinstance(it, dict)
-            ]
-    clean["section_order"] = resume_blocks.normalize_section_order(body.get("section_order"))
-    ResumeStore(str(DATA_DIR)).save_active_blocks(clean)
+    clean["sections"] = resume_blocks.clean_sections(body.get("sections"))
+    return clean
+
+
+# ── 信息池（v2.16：求职者全部信息的主库；上传解析入池，简历从池组合）──────────
+@app.get("/api/pool")
+async def get_pool() -> JSONResponse:
+    """读信息池；首次自动从激活简历迁移初始化。"""
+    from services import info_pool
+    return JSONResponse(info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"), str(DATA_DIR / "resume_blocks.yaml")))
+
+
+@app.put("/api/pool")
+async def put_pool(body: dict[str, Any] = Body(...)) -> JSONResponse:
+    from services import info_pool
+    info_pool.save_pool(_clean_doc_body(body), str(DATA_DIR / "info_pool.yaml"))
     return JSONResponse({"ok": True})
+
+
+@app.post("/api/pool/build")
+async def build_pool_endpoint(body: dict[str, Any] | None = None) -> JSONResponse:
+    """用 LLM 把自我描述融进信息池，存盘并返回整理后的池。"""
+    _initialize_state()
+    body = body or {}
+    from services import info_pool
+    pool_path = str(DATA_DIR / "info_pool.yaml")
+    pool = info_pool.load_pool(pool_path, str(DATA_DIR / "resume_blocks.yaml"))
+    merged = info_pool.build_pool(pool, str(body.get("self_description") or ""),
+                                  app.state.model_router, _resume_prompt_manager())
+    info_pool.save_pool(merged, pool_path)
+    return JSONResponse(merged)
+
+
+@app.post("/api/resume/compose")
+async def compose_resume(body: dict[str, Any] = Body(...)) -> JSONResponse:
+    """AI 组合：按岗位 JD 从信息池挑块+排序 → 落成一份新简历并激活。
+
+    LLM 只挑 id（judge），块内容由 code 从池复制（不杜撰）；basic_info 取池值。
+    """
+    _initialize_state()
+    from services import info_pool, resume_blocks, resume_tailor
+    from services.resume_store import ResumeStore
+    job = {
+        "title": str(body.get("job_title") or ""),
+        "company": str(body.get("company") or ""),
+        "jd_text": str(body.get("jd_text") or ""),
+    }
+    if not (job["title"] or job["jd_text"]):
+        raise HTTPException(status_code=400, detail="job_title 或 jd_text 至少给一个")
+    pool = info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"), str(DATA_DIR / "resume_blocks.yaml"))
+    if not any(s["blocks"] for s in pool["sections"]):
+        raise HTTPException(status_code=400, detail="信息池为空，先上传简历或在信息池里添加内容")
+    sections = resume_tailor.generate_composed_sections(pool, job, app.state.model_router, _resume_prompt_manager())
+    if not sections:
+        raise HTTPException(status_code=502, detail="AI 没有挑出任何有效内容，请重试或检查信息池概括")
+    doc = resume_blocks.empty_blocks()
+    doc["basic_info"] = dict(pool.get("basic_info") or {})
+    doc["sections"] = sections
+    store = ResumeStore(str(DATA_DIR))
+    item = store.create(
+        name=str(body.get("name") or "").strip() or (job["title"] + " 定制" if job["title"] else "AI 定制简历"),
+        target=job["title"], blocks=doc,
+    )
+    store.activate(item["slug"])
+    return JSONResponse({"resume": item, "sections": [s["name"] for s in sections]})
 
 
 # ── 多份简历管理（v2.15 简历制作台：每份独立完整，激活份镜像到 resume_blocks.yaml）──
@@ -804,21 +860,8 @@ async def delete_resume_export(fname: str) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-@app.post("/api/resume/blocks/build")
-async def build_resume_blocks_endpoint(body: dict[str, Any] | None = None) -> JSONResponse:
-    """用 LLM 把当前块库 + 自我描述重新整理成结构化块库，存盘并返回（重建/融合自述）。
-
-    上传解析已经直接产出块库（视觉/文本），此处的「重建」是把用户填的自我描述融进
-    当前块库——所以读的是当前 resume_blocks.yaml，不是已被解析路径取代的 resume_base.yaml。
-    """
-    _initialize_state()
-    body = body or {}
-    from services import resume_blocks
-    current = resume_blocks.load_blocks(str(DATA_DIR / "resume_blocks.yaml"))
-    self_desc = str(body.get("self_description") or "")
-    blocks = resume_blocks.build_blocks(current, self_desc, app.state.model_router, _resume_prompt_manager())
-    resume_blocks.save_blocks(blocks, str(DATA_DIR / "resume_blocks.yaml"))
-    return JSONResponse(blocks)
+# v2.16：旧 /api/resume/blocks/build（自述融入当前简历）已由 POST /api/pool/build 取代——
+# 自我描述属于「关于我」的信息，融入目标是信息池而非某一份简历。
 
 
 # ── 功能二：岗位特化生成（预制模板 / 简历方案 / 招呼语 / 渲染 PDF）────────────
@@ -878,10 +921,11 @@ async def tailor_resume(body: dict[str, Any] = Body(...)) -> JSONResponse:
     if not job_id:
         raise HTTPException(status_code=400, detail="job_id is required")
     job = _tailor_job_from_body(body)
-    blocks = resume_blocks.load_blocks(str(DATA_DIR / "resume_blocks.yaml"))
+    from services import info_pool
+    pool = info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"), str(DATA_DIR / "resume_blocks.yaml"))
     templates = resume_tailor.load_templates(str(DATA_DIR / "resume_templates.yaml"))
     tmpl = resume_tailor.match_template(templates, job["title"], job["jd_text"])
-    sections = resume_tailor.generate_resume_sections(blocks, job, tmpl, app.state.model_router, _resume_prompt_manager())
+    sections = resume_tailor.generate_resume_sections(pool, job, tmpl, app.state.model_router, _resume_prompt_manager())
     plan = resume_tailor._set_plan_part(
         job_id, "resume", sections, job_title=job["title"], company=job["company"],
         path=str(DATA_DIR / "resume_plans.yaml"),
@@ -897,10 +941,11 @@ async def tailor_greeting(body: dict[str, Any] = Body(...)) -> JSONResponse:
     if not job_id:
         raise HTTPException(status_code=400, detail="job_id is required")
     job = _tailor_job_from_body(body)
-    blocks = resume_blocks.load_blocks(str(DATA_DIR / "resume_blocks.yaml"))
+    from services import info_pool
+    pool = info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"), str(DATA_DIR / "resume_blocks.yaml"))
     templates = resume_tailor.load_templates(str(DATA_DIR / "resume_templates.yaml"))
     tmpl = resume_tailor.match_template(templates, job["title"], job["jd_text"])
-    greeting = resume_tailor.generate_greeting(blocks, job, tmpl, app.state.model_router, _resume_prompt_manager())
+    greeting = resume_tailor.generate_greeting(pool, job, tmpl, app.state.model_router, _resume_prompt_manager())
     plan = resume_tailor._set_plan_part(
         job_id, "greeting", greeting, job_title=job["title"], company=job["company"],
         path=str(DATA_DIR / "resume_plans.yaml"),

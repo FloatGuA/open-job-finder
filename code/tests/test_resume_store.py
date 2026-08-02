@@ -67,14 +67,18 @@ def test_delete_keeps_at_least_one_and_reactivates(tmp_path):
     assert idx["active"] == idx["items"][0]["slug"]
 
 
-def test_section_order_normalize_and_roundtrip(tmp_path):
-    assert rb.normalize_section_order(["project", "education", "bogus", "project"]) == [
-        "project", "education", "internship", "skills", "awards"]
+def test_dynamic_sections_roundtrip(tmp_path):
+    """v2.16 动态分区：自定义分区名与顺序原样往返。"""
     blocks = rb.empty_blocks()
-    blocks["section_order"] = ["skills", "project", "education", "internship", "awards"]
+    blocks["sections"] = [
+        {"name": "游戏经历", "blocks": [{"title": "手游", "time": "", "bullets": ["b"], "summary": ""}]},
+        {"name": "教育经历", "blocks": []},
+    ]
     p = str(tmp_path / "b.yaml")
     rb.save_blocks(blocks, p)
-    assert rb.load_blocks(p)["section_order"][0] == "skills"
+    out = rb.load_blocks(p)
+    assert [s["name"] for s in out["sections"]] == ["游戏经历", "教育经历"]
+    assert out["sections"][0]["blocks"][0]["title"] == "手游"
 
 
 def test_export_archive_list_and_prune(tmp_path):

@@ -11,6 +11,7 @@
 """
 import json
 import os
+import re
 import time
 from typing import Optional
 
@@ -79,14 +80,47 @@ def _set_plan_part(job_id: str, part_key: str, value, *, job_title: str, company
 
 
 # ── LLM 生成 ────────────────────────────────────────────────────────────────
-def _blocks_digest(blocks: dict) -> str:
-    """把积木库压成「id: 概括/标题」清单，喂给 LLM 挑块（省 token，仍可定位到块）。"""
+def _blocks_digest(doc: dict) -> str:
+    """把信息池压成「s{分区}#{块}: [分区名] 标题 | 概括」清单，喂给 LLM 挑块
+    （省 token，仍可精确定位到块；v2.16 起吃动态 sections 形状）。"""
     lines = []
-    for cat in rb.BLOCK_CATEGORIES:
-        for i, b in enumerate(blocks.get(cat) or []):
+    for si, sec in enumerate(doc.get("sections") or []):
+        for bi, b in enumerate(sec.get("blocks") or []):
             label = b.get("summary") or b.get("title") or ""
-            lines.append(f"{cat}#{i}: {b.get('title','')} | {label}")
-    return "\n".join(lines) or "（块库为空）"
+            lines.append(f"s{si}#{bi}: [{sec.get('name','')}] {b.get('title','')} | {label}")
+    return "\n".join(lines) or "（信息池为空）"
+
+
+def generate_composed_sections(pool: dict, job: dict, model_router, prompt_manager) -> list:
+    """Agent 组合（v2.16 核心）：按岗位 JD 从信息池挑块+排序，产出简历 sections。
+
+    LLM 只输出「分区名 + 挑中的块 id 列表」（judge），块内容由 code 从池里**复制**
+    （不杜撰、不改写）；非法 id 丢弃，空分区丢弃。
+    """
+    from services.llm_parser import safe_parse_json
+
+    prompt = prompt_manager.render("resume_compose", {
+        "job": _job_str(job), "digest": _blocks_digest(pool),
+    })
+    text, _p = model_router.complete(prompt=prompt, capability="balanced")
+    parsed = safe_parse_json(text, required_fields={"sections": list})
+    pool_secs = pool.get("sections") or []
+    out = []
+    for sec in parsed.get("sections") or []:
+        if not isinstance(sec, dict):
+            continue
+        blocks = []
+        for pick in sec.get("picks") or []:
+            m = re.fullmatch(r"s(\d+)#(\d+)", str(pick).strip())
+            if not m:
+                continue
+            si, bi = int(m.group(1)), int(m.group(2))
+            if si < len(pool_secs) and bi < len(pool_secs[si].get("blocks") or []):
+                blocks.append(dict(pool_secs[si]["blocks"][bi]))
+        if blocks:
+            name = str(sec.get("name", "")).strip() or "经历"
+            out.append({"name": name, "blocks": blocks})
+    return out
 
 
 # 简历 / 招呼语生成 prompt 已迁入 prompts/resume_tailor.md、resume_greeting.md

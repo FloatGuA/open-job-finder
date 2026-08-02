@@ -388,15 +388,15 @@ export interface ResumeBasicInfo {
   degree: string
   target_title: string
 }
+export interface ResumeSection {
+  name: string
+  blocks: ResumeBlock[]
+}
+// v2.16 动态分区形状：信息池与每份简历共用（sections 数组顺序即分区顺序）
 export interface ResumeBlocks {
   basic_info: ResumeBasicInfo
   self_description: string
-  education: ResumeBlock[]
-  internship: ResumeBlock[]
-  project: ResumeBlock[]
-  skills: ResumeBlock[]
-  awards: ResumeBlock[]
-  section_order: string[]
+  sections: ResumeSection[]
 }
 
 export interface ResumeMeta {
@@ -532,11 +532,25 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-  buildResumeBlocks: (self_description: string): Promise<ResumeBlocks> =>
-    requestJson('/api/resume/blocks/build', {
+  // 信息池（v2.16：求职者全部信息主库；上传解析入池，简历从池组合）
+  getPool: (): Promise<ResumeBlocks> => requestJson('/api/pool'),
+  savePool: (body: ResumeBlocks): Promise<{ ok: boolean }> =>
+    requestJson('/api/pool', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  buildPool: (self_description: string): Promise<ResumeBlocks> =>
+    requestJson('/api/pool/build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ self_description }),
+    }),
+  composeResume: (body: { job_title?: string; jd_text?: string; name?: string }): Promise<{ resume: ResumeMeta; sections: string[] }> =>
+    requestJson('/api/resume/compose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     }),
   // 把预览用的简历 HTML 交后端 Chromium 打印成 PDF（与预览同源），返回 blob 供下载；
   // name 用于服务端「最近生成」存档命名

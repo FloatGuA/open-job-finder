@@ -503,9 +503,9 @@ class TestResumeUpload:
         assert "10 MB" in r.json()["detail"]
 
     def test_upload_pdf_ok(self, client):
-        blocks = {"basic_info": {"name": "张三"},
-                  "skills": [{"title": "Python", "time": "", "bullets": [], "summary": ""}]}
-        with patch("dashboard.server._parse_resume_upload_to_blocks", return_value=(blocks, "vision")):
+        doc = {"basic_info": {"name": "张三"}, "self_description": "",
+               "sections": [{"name": "技能特长", "blocks": [{"title": "Python", "time": "", "bullets": [], "summary": ""}]}]}
+        with patch("dashboard.server._parse_resume_upload", return_value=(doc, "vision")):
             r = client.post(
                 "/api/resume/upload",
                 files=_upload_file(b"%PDF-1.4 minimal content", "my_resume.pdf"),
@@ -514,11 +514,11 @@ class TestResumeUpload:
         data = r.json()
         assert data["success"] is True
         assert data["method"] == "vision"
-        assert "skills" in data["sections_found"]
+        assert "技能特长" in data["sections_found"]
 
     def test_upload_docx_ok(self, client):
-        blocks = {"basic_info": {"name": "李四"}}
-        with patch("dashboard.server._parse_resume_upload_to_blocks", return_value=(blocks, "text")):
+        doc = {"basic_info": {"name": "李四"}, "self_description": "", "sections": []}
+        with patch("dashboard.server._parse_resume_upload", return_value=(doc, "text")):
             r = client.post(
                 "/api/resume/upload",
                 files=_upload_file(b"PK fake docx bytes", "cv.docx"),
