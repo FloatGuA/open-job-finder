@@ -11,6 +11,9 @@ from pipeline.w2.scan_step import ScanStep
 class W2Config:
     dry_run: bool
     max_conversations: int = 200
+    # \u5f00\uff1aHR \u8981\u7b80\u5386\u65f6\u4f18\u5148\u53d1\u300c\u6309\u5c97\u4f4d\u5339\u914d\u5230\u7684\u90a3\u4efd\u7b80\u5386\u7684\u5df2\u5bfc\u51fa PDF\u300d\uff1b
+    # \u6ca1\u5bfc\u51fa\u8fc7 / \u4e0a\u4f20\u5931\u8d25 \u2192 \u81ea\u52a8\u56de\u9000 Boss \u7ad9\u5185\u7b80\u5386\uff08\u4e0d\u4f1a\u6f0f\u53d1\uff09\u3002
+    auto_send_adapted_resume: bool = False
     no_response_days: int = 14
     stale_conv_days: int = 30
     # Wall-clock budget for the whole conversation loop. A run that exceeds it stops

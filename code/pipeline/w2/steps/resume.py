@@ -15,10 +15,28 @@ class ResumeStep:
     def __init__(self, registry):
         self._reg = registry
 
-    def run(self, request_type: Optional[str], scope: dict = None) -> ResumeStepOutput:
+    def run(self, request_type: Optional[str], scope: dict = None,
+            adapted_resume: str = "") -> ResumeStepOutput:
         start_ts = time.time()
         step_scope = scope or {}
         self._reg.set_context("resume", step_scope)
+
+        # 开关开启且这个岗位匹配到了简历：先试发它的**已导出 PDF**附件。
+        # 用已导出存档而不是让后端再渲染一份，是为了避免 A4 排版出现第二套实现
+        # （唯一实现在前端 src/lib/resumeHtml.ts）——代价是用户得先导出过该简历。
+        # 任何一步不成（没导出过 / 找不到上传控件 / 没出现送达气泡）都**继续往下走**
+        # 原有策略，绝不因为"想发适配版"而漏发简历。
+        if adapted_resume:
+            path = self._adapted_pdf_path(adapted_resume)
+            if path:
+                up = self._reg.call("upload_resume_file", resume_path=path)
+                if up.ok and up.data.get("sent"):
+                    return self._done(step_scope, start_ts, "adapted_pdf")
+                self._log_fallback(step_scope, adapted_resume,
+                                   up.error or "upload not confirmed")
+            else:
+                self._log_fallback(step_scope, adapted_resume,
+                                   "no exported PDF for this resume")
 
         # Two strategies tried in order; first success wins.
         #   1. accept_card -- click "agree" on an HR resume-exchange card
@@ -60,6 +78,25 @@ class ResumeStep:
         out = ResumeStepOutput(status=StepStatus.DEGRADED, sent=False, strategy_used="")
         self._log_step(step_scope, out, start_ts, {"strategy_used": ""})
         return out
+
+    def _adapted_pdf_path(self, name: str) -> str:
+        """按简历名回查最近一次导出的 PDF；查不到返回 ""（调用方回退站内简历）。"""
+        try:
+            from services.resume_store import ResumeStore
+            return ResumeStore().latest_export_for(name)
+        except Exception:
+            return ""
+
+    def _log_fallback(self, scope: dict, name: str, reason: str) -> None:
+        """适配版没发成 → 明确记一笔再回退，别让"为什么发的是站内简历"变成哑谜。"""
+        logger = getattr(self._reg, "logger", None)
+        if logger is None:
+            return
+        logger.log(
+            "adapted_resume_fallback",
+            scope=scope,
+            data={"resume": name, "reason": reason},
+        )
 
     def _done(self, scope, start_ts, strategy: str) -> ResumeStepOutput:
         out = ResumeStepOutput(status=StepStatus.SUCCESSFUL, sent=True, strategy_used=strategy)

@@ -135,14 +135,17 @@ class ConversationPipeline:
         # HR 要简历 → 先算出「这个岗位该发哪一份」并记下来（只选不写：Agent 从用户
         # 已存的几份里挑，永不生成内容）。默认仍发 Boss 站内简历，这一步只产出建议，
         # 供前端展示 + 事后追溯选得准不准；真按它发本地 PDF 需开 auto_send_adapted_resume。
+        matched_resume = ""
         if needs_resume and not already_sent_resume:
-            self._record_matched_resume(conv, scope)
+            matched_resume = self._record_matched_resume(conv, scope)
 
         resume_sent = False
         if needs_resume and not already_sent_resume and not self._config.dry_run:
             res_out = ResumeStep(self._reg).run(
                 request_type=analyze.request_type,
                 scope={"conv_id": conv.conv_id},
+                # \u5f00\u5173\u5173\u7740\u65f6\u4f20\u7a7a\u4e32 \u2192 ResumeStep \u5b8c\u5168\u8d70\u539f\u6709\u7ad9\u5185\u7b80\u5386\u8def\u5f84
+                adapted_resume=matched_resume if getattr(self._config, "auto_send_adapted_resume", False) else "",
             )
             if res_out.sent:
                 resume_sent = True
@@ -240,7 +243,7 @@ class ConversationPipeline:
             llm_degraded=llm_degraded,
         )
 
-    def _record_matched_resume(self, conv, scope: dict) -> None:
+    def _record_matched_resume(self, conv, scope: dict) -> str:
         """按岗位选出「该发哪一份简历」，落库 + 上监控流（只选不写）。
 
         走 registry.call 而非直接摸 tracker：一是 registry 上本来就没有 tracker，
@@ -249,14 +252,16 @@ class ConversationPipeline:
         """
         self._reg.set_context("resume", scope)
         res = self._reg.call("match_resume", conv_id=conv.conv_id, job_id=conv.job_id or "")
-        if res.ok and res.data.get("resume"):
-            self._logger.log(
-                "resume_matched",
-                scope=scope,
-                data={
-                    "resume": res.data.get("resume"),
-                    "matched": res.data.get("matched"),
-                    "reason": res.data.get("reason"),
-                    "job_title": res.data.get("job_title", ""),
-                },
-            )
+        if not (res.ok and res.data.get("resume")):
+            return ""
+        self._logger.log(
+            "resume_matched",
+            scope=scope,
+            data={
+                "resume": res.data.get("resume"),
+                "matched": res.data.get("matched"),
+                "reason": res.data.get("reason"),
+                "job_title": res.data.get("job_title", ""),
+            },
+        )
+        return res.data.get("resume", "")

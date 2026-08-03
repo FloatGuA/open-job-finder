@@ -56,6 +56,10 @@ w1:                           # 投递流程
   dry_run: false              # true = 演练，不真实投递
   headless: true              # 浏览器无头模式
 w2:                           # 检查回应流程
+  auto_send_adapted_resume: false   # 关：HR 要简历时只给出「建议发哪一份」，实际发 Boss 站内简历（默认）
+                                    # 开：优先把该岗位匹配到的那份简历的**已导出 PDF**作为附件发出，
+                                    #     没导出过 / 上传失败 → 自动回退站内简历（不会漏发）。
+                                    # ⚠️ 附件上传对 Boss 页面的选择器从未真机验证过，首次开启请盯一次。
   max_conversations: 200      # 本次最多处理会话数
   no_response_days: 14        # 会话多少天无新消息 → 打「停滞」软标记(stage=closed)+提醒；不再拒绝 application
   stale_conv_days: 30         # 投递满多少天且无进展(排除面试/offer) → 清理数据(级联删岗位+会话+消息)，重新走流程

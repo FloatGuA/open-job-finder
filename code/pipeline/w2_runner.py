@@ -30,6 +30,7 @@ def run_w2(
     max_conversations: int = 200,
     no_response_days: int = 14,
     stale_conv_days: int = 30,
+    auto_send_adapted_resume: bool = False,
     headless: bool = True,
     debug: bool = False,
     data_dir: Optional[Path] = None,
@@ -121,6 +122,7 @@ def run_w2(
             no_response_days=no_response_days,
             stale_conv_days=stale_conv_days,
             max_run_minutes=max_run_minutes,
+            auto_send_adapted_resume=auto_send_adapted_resume,
         )
         summary = pipeline.run(cfg_obj)
 

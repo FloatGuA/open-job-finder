@@ -120,6 +120,7 @@ class OrchestrationService:
             max_conversations=int(p.get("max_conversations", 200)),
             no_response_days=int(p.get("no_response_days", 14)),
             stale_conv_days=int(p.get("stale_conv_days", 30)),
+            auto_send_adapted_resume=bool(p.get("auto_send_adapted_resume", False)),
             headless=bool(p.get("headless", True)),
             debug=bool(overrides.get("debug", True)),
             data_dir=self._data_dir,

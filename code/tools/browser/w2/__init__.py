@@ -9,6 +9,7 @@ from tools.browser.w2.send_chat_message import SendChatMessage
 from tools.browser.w2.accept_resume_card import AcceptResumeCard
 from tools.browser.w2.accept_wechat_card import AcceptWechatCard
 from tools.browser.w2.click_toolbar_send_resume import ClickToolbarSendResume
+from tools.browser.w2.upload_resume_file import UploadResumeFile
 
 
 def register_w2_browser_tools(registry, browser) -> None:
@@ -30,5 +31,6 @@ def register_w2_browser_tools(registry, browser) -> None:
         AcceptResumeCard,
         AcceptWechatCard,
         ClickToolbarSendResume,
+        UploadResumeFile,
     ):
         registry.register(tool_cls(browser=browser))

@@ -136,6 +136,31 @@ class ResumeStore:
         self._prune_exports()
         return os.path.join(self.exports_dir, fname)
 
+    def latest_export_for(self, name: str) -> str:
+        """按简历名回查最近一次导出的 PDF 路径；没有返回 ""。
+
+        方案 a（用户 2026-08-04 定）：自动发送复用**已导出的存档**，而不是让后端再
+        实现一套排版——当前 A4 版式的唯一实现在前端 `src/lib/resumeHtml.ts`，后端
+        再写一份就是"同一契约两份实现"，必然漂移。代价是用户得先导出过该简历。
+
+        存档名格式 `{ts}_{safe(人名_简历名)}.pdf`，这里按同一规则重建后缀精确匹配
+        （不用模糊包含：「开发版」会误命中「AI Agent 开发版」）。
+        """
+        item = next((it for it in self._load_index()["items"] if it.get("name") == name), None)
+        if item is None or not os.path.isdir(self.exports_dir):
+            return ""
+        doc = rb.load_blocks(self._blocks_path(item["slug"]))
+        label = "_".join([x for x in [(doc.get("basic_info") or {}).get("name", ""), name] if x])
+        safe = re.sub(r'[\\/:*?"<>|\s]+', "_", label).strip("_")
+        if not safe:
+            return ""
+        suffix = f"_{safe}.pdf"
+        hits = sorted(
+            (f for f in os.listdir(self.exports_dir) if f.endswith(suffix)),
+            reverse=True,                      # 文件名以时间戳开头 → 倒序即最新
+        )
+        return os.path.join(self.exports_dir, hits[0]) if hits else ""
+
     def list_exports(self) -> list:
         if not os.path.isdir(self.exports_dir):
             return []
