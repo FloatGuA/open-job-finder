@@ -414,6 +414,12 @@ export interface ResumeExport {
   size: number
   mtime: string
 }
+export interface PoolSnapshot {
+  file: string
+  saved_at: string
+  blocks: number
+  sections: number
+}
 
 export interface ResumeTemplate {
   name: string
@@ -540,12 +546,17 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-  buildPool: (self_description: string): Promise<ResumeBlocks> =>
+  // 返回体带 _stats（整理前后条目数）供前端提醒是否丢内容
+  buildPool: (self_description: string): Promise<ResumeBlocks & { _stats?: { before: number; after: number } }> =>
     requestJson('/api/pool/build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ self_description }),
     }),
+  // 信息池快照（每次保存前自动留档，可回滚）
+  getPoolSnapshots: (): Promise<{ snapshots: PoolSnapshot[] }> => requestJson('/api/pool/snapshots'),
+  restorePoolSnapshot: (fname: string): Promise<ResumeBlocks> =>
+    requestJson(`/api/pool/snapshots/${encodeURIComponent(fname)}/restore`, { method: 'POST' }),
   composeResume: (body: { job_title?: string; jd_text?: string; name?: string }): Promise<{ resume: ResumeMeta; sections: string[] }> =>
     requestJson('/api/resume/compose', {
       method: 'POST',

@@ -62,3 +62,47 @@ def test_build_pool_keeps_basic_info_fallback(tmp_path):
     assert out["sections"][0]["blocks"][0]["title"] == "Python"
     assert out["basic_info"]["email"] == "a@b.c"    # LLM 没回的字段用池原值兜底
     assert out["self_description"] == "会 Python"
+
+
+# ── 快照（每次 save_pool 前留档，防 LLM 整理丢内容不可逆）────────────────────
+def test_save_pool_snapshots_previous_content(tmp_path):
+    p = str(tmp_path / "info_pool.yaml")
+    info_pool.save_pool(_doc(sections=[{"name": "教育经历", "blocks": [
+        {"title": "原始", "time": "", "bullets": [], "summary": ""}]}]), p)
+    assert info_pool.list_snapshots(p) == []          # 首次写盘时无旧内容可留档
+
+    info_pool.save_pool(_doc(sections=[]), p)          # 第二次写盘 → 旧内容进快照
+    snaps = info_pool.list_snapshots(p)
+    assert len(snaps) == 1 and snaps[0]["blocks"] == 1
+
+
+def test_restore_snapshot_recovers_and_protects_current(tmp_path):
+    p = str(tmp_path / "info_pool.yaml")
+    good = _doc(sections=[{"name": "教育经历", "blocks": [
+        {"title": "重要经历", "time": "", "bullets": ["别丢"], "summary": ""}]}])
+    info_pool.save_pool(good, p)
+    info_pool.save_pool(_doc(sections=[]), p)          # 模拟"被 LLM 清空"
+    assert sum(len(s["blocks"]) for s in info_pool.load_pool(p)["sections"]) == 0
+
+    snap = info_pool.list_snapshots(p)[0]["file"]
+    restored = info_pool.restore_snapshot(snap, p)
+    assert restored["sections"][0]["blocks"][0]["title"] == "重要经历"
+    assert info_pool.load_pool(p)["sections"][0]["blocks"][0]["bullets"] == ["别丢"]
+    # 回滚本身也留了档（可以再回滚回去）
+    assert len(info_pool.list_snapshots(p)) >= 2
+
+
+def test_snapshot_rejects_path_traversal(tmp_path):
+    import pytest
+    p = str(tmp_path / "info_pool.yaml")
+    info_pool.save_pool(_doc(), p)
+    with pytest.raises(ValueError):
+        info_pool.restore_snapshot("../../secret.yaml", p)
+
+
+def test_snapshots_pruned_to_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(info_pool, "SNAPSHOT_KEEP", 3)
+    p = str(tmp_path / "info_pool.yaml")
+    for i in range(6):
+        info_pool.save_pool(_doc(name=f"v{i}"), p)      # 同秒也各留一档（加序号）
+    assert len(info_pool.list_snapshots(p)) == 3

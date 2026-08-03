@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
-import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type Job } from '@/api'
+import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type PoolSnapshot, type Job } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
 
 // v2.16\uff1a\u5206\u533a\u4e0d\u518d\u56fa\u5b9a\uff0c\u540d\u79f0\u81ea\u5b9a\u4e49\uff08\u5982\u300c\u6e38\u620f\u7ecf\u5386\u300d\u300cAgent \u7ecf\u5386\u300d\uff09\u3002\u8fd9\u4e9b\u53ea\u662f\u65b0\u5efa\u65f6\u7684\u5feb\u6377\u5019\u9009\u3002
@@ -165,49 +165,7 @@ function TailorCard() {
 }
 
 // -- \u5b9e\u65f6\u9884\u89c8\uff1a\u7531\u5757\u5e93\u5ba2\u6237\u7aef\u6e32\u67d3\u6210\u7b80\u5386 HTML\uff08\u9884\u89c8 iframe \u4e0e\u5bfc\u51fa PDF \u540c\u6e90\uff0c\u907f\u514d\u4e24\u5957\u6392\u7248\u6f02\u79fb\uff09--
-const escHtml = (s: string) =>
-  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-
-function buildResumeHtml(doc: ResumeBlocks): string {
-  const bi = doc.basic_info
-  const contact = [bi.email, bi.phone, bi.city].filter(Boolean).map(escHtml).join('<span class="sep">\u00b7</span>')
-  const secs = (doc.sections || []).map((sec) => {
-    const list = (sec.blocks || []).filter((b) => b.title || b.bullets.some((x) => x.trim()))
-    // 只要分区有名字就渲染标题：所见即所得，新建分区/清空条目后预览要立刻有反馈；
-    // 不想要的空分区删掉即可。名字与内容都空才整块跳过。
-    if (!sec.name.trim() && !list.length) return ''
-    const entries = list.map((b) => {
-      const bullets = b.bullets.filter((x) => x.trim()).map((x) => `<li>${escHtml(x)}</li>`).join('')
-      const head = `<div class="e-head"><span class="e-title">${escHtml(b.title)}</span>${b.time ? `<span class="e-date">${escHtml(b.time)}</span>` : ''}</div>`
-      return `<div class="entry">${head}${bullets ? `<ul>${bullets}</ul>` : ''}</div>`
-    }).join('')
-    return `<div class="section"><div class="s-title">${escHtml(sec.name)}</div>${entries}</div>`
-  }).join('')
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
-@page { size:A4; margin:0; }
-* { box-sizing:border-box; }
-html,body { margin:0; padding:0; }
-body { width:794px; min-height:1123px; padding:46px 56px; background:#fff; color:#1a1a1a;
-  font-family: Georgia, "Times New Roman", "Microsoft YaHei", "PingFang SC", serif; font-size:14px; line-height:1.52; }
-.name { text-align:center; font-size:31px; font-weight:700; letter-spacing:2px; margin:0 0 10px; }
-.contact { text-align:center; font-size:12.5px; color:#333; margin-bottom:4px; }
-.contact .sep { margin:0 10px; color:#c2c2c2; }
-.subtitle { text-align:center; font-size:12.5px; color:#555; margin-bottom:4px; }
-.section { margin-top:17px; }
-.s-title { font-size:15px; font-weight:700; letter-spacing:1px; padding-bottom:4px; margin-bottom:8px; border-bottom:1px solid #1a1a1a; }
-.entry { margin-bottom:10px; }
-.e-head { display:flex; justify-content:space-between; align-items:baseline; gap:12px; }
-.e-title { font-weight:700; font-size:14px; }
-.e-date { color:#777; font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
-ul { margin:4px 0 0; padding-left:17px; }
-li { margin-bottom:2px; }
-</style></head><body>
-<div class="name">${escHtml(bi.name)}</div>
-${contact ? `<div class="contact">${contact}</div>` : ''}
-${bi.target_title ? `<div class="subtitle">${escHtml(bi.target_title)}</div>` : ''}
-${secs}
-</body></html>`
-}
+import { buildResumeHtml } from '@/lib/resumeHtml'
 
 function A4Preview({ html }: { html: string }) {
   const boxRef = useRef<HTMLDivElement>(null)
@@ -244,7 +202,7 @@ type DragItem =
 let dragItem: DragItem | null = null
 
 // \u2500\u2500 \u5171\u7528\u5206\u533a\u7f16\u8f91\u5668\uff08\u4fe1\u606f\u6c60\u4e0e\u5f53\u524d\u7b80\u5386\u540c\u6784\uff1a\u540c\u4e00\u5c55\u793a\u3001\u540c\u4e00\u4ea4\u4e92\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQuickAdd, onQuickAddSection, compact }: {
+export function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQuickAdd, onQuickAddSection, compact }: {
   doc: ResumeBlocks
   onChange: (next: ResumeBlocks) => void
   owner: Owner
@@ -558,9 +516,13 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
   const [exporting, setExporting] = useState(false)
   const [building, setBuilding] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [snaps, setSnaps] = useState<PoolSnapshot[]>([])
+  const [showSnaps, setShowSnaps] = useState(false)
+  const [buildNote, setBuildNote] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const html = useMemo(() => buildResumeHtml(doc), [doc])
+  const loadSnaps = () => { void API.getPoolSnapshots().then((r) => setSnaps(r.snapshots)).catch(() => {}) }
 
   // \u6c60 \u2192 \u7b80\u5386\uff1a\u590d\u5236\u5757\uff0c\u843d\u5230\u540c\u540d\u5206\u533a\uff08\u6ca1\u6709\u5c31\u6309\u6c60\u91cc\u7684\u5206\u533a\u540d\u65b0\u5efa\uff09
   const copyBlockToResume = (poolSi: number, poolBi: number, target?: { si: number | null; slot: number }) => {
@@ -632,12 +594,26 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
     finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
   }
   const buildPool = async () => {
-    if (!window.confirm('\u7528 LLM \u628a\u81ea\u6211\u63cf\u8ff0\u878d\u8fdb\u4fe1\u606f\u6c60\uff08\u91cd\u65b0\u6574\u7406\u5206\u533a\uff0c\u5df2\u6709\u5185\u5bb9\u4fdd\u7559\uff09\u3002\u7ee7\u7eed\uff1f')) return
-    setBuilding(true); onErr(null)
+    if (!window.confirm(CONFIRM_BUILD)) return
+    setBuilding(true); onErr(null); setBuildNote(null)
     try {
-      if (poolDirty) await savePool()          // \u5148\u843d\u76d8\uff0c\u907f\u514d LLM \u7ed3\u679c\u8986\u76d6\u6389\u672a\u4fdd\u5b58\u7684\u624b\u6539
-      setPool(await API.buildPool(pool.self_description))
+      if (poolDirty) await savePool()          // 先落盘，避免 LLM 结果覆盖掉未保存的手改
+      const r = await API.buildPool(pool.self_description)
+      setPool(r)
+      const st = r._stats
+      if (st && st.after < st.before) {
+        setBuildNote(`${NOTE_SHRINK_A}${st.before} \u2192 ${st.after}${NOTE_SHRINK_B}`)
+        loadSnaps()
+      } else if (st) {
+        setBuildNote(`${NOTE_OK_A}${st.before} \u2192 ${st.after}${NOTE_OK_B}`)
+      }
     } catch (e) { onErr((e as Error).message) } finally { setBuilding(false) }
+  }
+  const restoreSnap = async (fname: string) => {
+    if (!window.confirm(CONFIRM_RESTORE)) return
+    onErr(null)
+    try { await API.restorePoolSnapshot(fname); await reloadPool(); setShowSnaps(false); setBuildNote(null); loadSnaps() }
+    catch (e) { onErr((e as Error).message) }
   }
 
   const poolCount = pool.sections.reduce((n, x) => n + x.blocks.length, 0)
@@ -647,6 +623,18 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
   const esc_saving = '\u4fdd\u5b58\u4e2d\u2026'
   const esc_save = '\u4fdd\u5b58'
   const esc_saved = '\u2713 \u5df2\u4fdd\u5b58'
+  const CONFIRM_BUILD = '\u7528 LLM \u628a\u81ea\u6211\u63cf\u8ff0\u878d\u8fdb\u4fe1\u606f\u6c60\uff08\u4f1a\u91cd\u65b0\u6574\u7406\u5206\u533a\uff09\u3002\u6574\u7406\u524d\u4f1a\u81ea\u52a8\u7559\u4e00\u4efd\u5feb\u7167\uff0c\u53ef\u56de\u6eda\u3002\u7ee7\u7eed\uff1f'
+  const CONFIRM_RESTORE = '\u56de\u6eda\u5230\u8fd9\u4e2a\u7248\u672c\uff1f\u5f53\u524d\u5185\u5bb9\u4f1a\u5148\u81ea\u52a8\u7559\u4e00\u4efd\u5feb\u7167\u3002'
+  const NOTE_SHRINK_A = '\u26a0 \u6574\u7406\u540e\u6761\u76ee\u53d8\u5c11\u4e86\uff08'
+  const NOTE_SHRINK_B = ' \u6761\uff09\u3002\u8bf7\u6838\u5bf9\u4e0b\u65b9\u5185\u5bb9\uff1b\u4e0d\u5bf9\u5c31\u70b9\u300c\u5386\u53f2\u7248\u672c\u300d\u56de\u6eda\uff0c\u6216\u8005\u76f4\u63a5\u4e0d\u4fdd\u5b58\uff08\u672a\u70b9\u4fdd\u5b58\u4e0d\u4f1a\u5199\u76d8\uff09\u3002'
+  const NOTE_OK_A = '\u6574\u7406\u5b8c\u6210\uff08'
+  const NOTE_OK_B = ' \u6761\uff09\u3002\u6838\u5bf9\u65e0\u8bef\u540e\u8bb0\u5f97\u4fdd\u5b58\u3002'
+  const LABEL_HISTORY = '\u5386\u53f2\u7248\u672c'
+  const HINT_HISTORY = '\u6bcf\u6b21\u4fdd\u5b58\u4fe1\u606f\u6c60\u524d\u90fd\u4f1a\u81ea\u52a8\u7559\u6863\uff0c\u53ef\u56de\u6eda\u5230\u4efb\u4e00\u7248\u672c\uff08\u56de\u6eda\u672c\u8eab\u4e5f\u4f1a\u7559\u6863\uff09\u3002'
+  const HINT_NO_HISTORY = '\u8fd8\u6ca1\u6709\u5386\u53f2\u7248\u672c\uff1b\u4fdd\u5b58\u4e00\u6b21\u4fe1\u606f\u6c60\u540e\u5c31\u4f1a\u6709\u4e86\u3002'
+  const LABEL_SEC = ' \u5206\u533a \u00b7 '
+  const LABEL_BLK = ' \u6761'
+  const LABEL_RESTORE = '\u56de\u6eda'
   const dirtyDot = <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#f5a623' }} />
 
   return (
@@ -706,13 +694,41 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
                 onChange={(e) => setPool({ ...pool, self_description: e.target.value })} />
             </Card>
             <Card title={'\u5168\u90e8\u7d20\u6750'} dev="PoolSections" action={
+              <div className="flex items-center gap-2">
+              <button type="button" onClick={() => { setShowSnaps((v) => !v); if (!showSnaps) loadSnaps() }}
+                className="rounded-lg px-2.5 py-1 text-[11px] text-text-3 transition hover:bg-bg-card2 hover:text-text-1"
+                style={{ border: '1px solid rgba(255,255,255,0.1)' }}>{LABEL_HISTORY}</button>
               <button type="button" onClick={() => void doSavePool()} disabled={savingPool || !poolDirty}
                 className={saveBtn}
                 style={poolDirty
                   ? { background: '#0a84ff', color: '#fff', boxShadow: '0 0 0 3px rgba(10,132,255,0.22)' }
                   : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.45)', border: '1px solid rgba(255,255,255,0.12)' }}>
                 {savingPool ? esc_saving : poolDirty ? esc_save : esc_saved}</button>
+              </div>
             }>
+              {buildNote && (
+                <div className="mb-3 rounded-lg px-3 py-2 text-[11px] leading-relaxed"
+                  style={{ background: 'rgba(245,166,35,0.1)', border: '1px solid rgba(245,166,35,0.3)', color: '#f5a623' }}>
+                  {buildNote}
+                </div>
+              )}
+              {showSnaps && (
+                <div className="mb-3 rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }}>
+                  <p className="mb-2 text-[11px] text-text-3">{HINT_HISTORY}</p>
+                  {snaps.length === 0 ? <p className="text-[11px] text-text-3">{HINT_NO_HISTORY}</p> : (
+                    <div className="space-y-1">
+                      {snaps.map((sn) => (
+                        <div key={sn.file} className="flex items-center gap-2 rounded px-2 py-1" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                          <span className="flex-1 truncate text-[11px] text-text-2">{sn.saved_at}</span>
+                          <span className="shrink-0 text-[11px] text-text-3">{sn.sections}{LABEL_SEC}{sn.blocks}{LABEL_BLK}</span>
+                          <button type="button" onClick={() => void restoreSnap(sn.file)}
+                            className="shrink-0 rounded px-2 py-0.5 text-[11px] font-medium text-signal-bright transition hover:bg-signal-blue/15">{LABEL_RESTORE}</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <p className="mb-3 text-[11px] leading-relaxed text-text-3">{'\u8fd9\u91cc\u662f\u4f60\u7684\u5168\u90e8\u4fe1\u606f\uff0c\u6295\u4ec0\u4e48\u5c97\u90fd\u4ece\u8fd9\u91cc\u6311\u3002\u62d6\u6761\u76ee\u5230\u4e2d\u95f4\u6216\u70b9 \u2192 \u52a0\u5165\u5f53\u524d\u7b80\u5386\uff08\u6c60\u91cc\u4ecd\u4fdd\u7559\uff09\u3002\u6539\u5b8c\u8bb0\u5f97\u70b9\u300c\u4fdd\u5b58\u300d\u3002'}</p>
               <SectionEditor doc={pool} onChange={setPool} owner="pool" compact
                 onQuickAdd={(si, bi) => copyBlockToResume(si, bi)}

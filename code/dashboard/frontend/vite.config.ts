@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'   // vitest 版本，才认 test 字段
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
@@ -18,5 +18,9 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:8765',
     },
+  },
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.{ts,tsx}'],
   },
 })

@@ -735,16 +735,38 @@ async def put_pool(body: dict[str, Any] = Body(...)) -> JSONResponse:
 
 @app.post("/api/pool/build")
 async def build_pool_endpoint(body: dict[str, Any] | None = None) -> JSONResponse:
-    """用 LLM 把自我描述融进信息池，存盘并返回整理后的池。"""
+    """用 LLM 把自我描述融进信息池，存盘并返回整理后的池。
+
+    LLM 是整体重写 sections（可能丢内容），故：①save_pool 会先留快照 ②回包带上
+    整理前后的条目数，前端据此提醒用户核对。
+    """
     _initialize_state()
     body = body or {}
     from services import info_pool
     pool_path = str(DATA_DIR / "info_pool.yaml")
     pool = info_pool.load_pool(pool_path, str(DATA_DIR / "resume_blocks.yaml"))
+    before = sum(len(s["blocks"]) for s in pool["sections"])
     merged = info_pool.build_pool(pool, str(body.get("self_description") or ""),
                                   app.state.model_router, _resume_prompt_manager())
     info_pool.save_pool(merged, pool_path)
-    return JSONResponse(merged)
+    after = sum(len(s["blocks"]) for s in merged["sections"])
+    return JSONResponse({**merged, "_stats": {"before": before, "after": after}})
+
+
+# ── 信息池快照（每次保存前留档，可回滚）────────────────────────────────────────
+@app.get("/api/pool/snapshots")
+async def list_pool_snapshots() -> JSONResponse:
+    from services import info_pool
+    return JSONResponse({"snapshots": info_pool.list_snapshots(str(DATA_DIR / "info_pool.yaml"))})
+
+
+@app.post("/api/pool/snapshots/{fname}/restore")
+async def restore_pool_snapshot(fname: str) -> JSONResponse:
+    from services import info_pool
+    try:
+        return JSONResponse(info_pool.restore_snapshot(fname, str(DATA_DIR / "info_pool.yaml")))
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail=fname)
 
 
 @app.post("/api/resume/compose")

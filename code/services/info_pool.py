@@ -7,10 +7,17 @@
 - 首次使用自动迁移：把当前激活简历的内容收编为池的初始内容。
 """
 import os
+import shutil
+import time
 
 from services import resume_blocks as rb
 
 POOL_PATH = "data/info_pool.yaml"
+SNAPSHOT_KEEP = 20          # 快照滚动上限
+
+
+def _snapshot_dir(path: str) -> str:
+    return os.path.join(os.path.dirname(path) or ".", "pool_snapshots")
 
 
 def load_pool(path: str = POOL_PATH, active_resume_path: str = "data/resume_blocks.yaml") -> dict:
@@ -23,7 +30,73 @@ def load_pool(path: str = POOL_PATH, active_resume_path: str = "data/resume_bloc
 
 
 def save_pool(pool: dict, path: str = POOL_PATH) -> None:
+    """写池；**覆盖前先把旧内容存一份快照**。
+
+    池是「关于求职者的全部信息」的唯一主库，而 build_pool 让 LLM 整体重写 sections
+    （可能丢内容），一次错误保存就不可逆。故每次写盘前留档，可回滚。
+    """
+    snapshot_pool(path)
     rb.save_blocks(pool, path)
+
+
+def snapshot_pool(path: str = POOL_PATH) -> str:
+    """把当前池文件复制一份到 pool_snapshots/{时间戳}.yaml；文件不存在则跳过。"""
+    if not os.path.exists(path):
+        return ""
+    d = _snapshot_dir(path)
+    os.makedirs(d, exist_ok=True)
+    base = time.strftime("%Y%m%d_%H%M%S")
+    # 同一秒内多次保存也各留一档（加序号）——否则快速连续保存会丢中间状态。
+    # 序号在后，倒序排列时 _1 排在无序号之前，正好等于"更晚创建的更靠前"。
+    dest = os.path.join(d, f"{base}.yaml")
+    n = 0
+    while os.path.exists(dest):
+        n += 1
+        dest = os.path.join(d, f"{base}_{n}.yaml")
+    shutil.copy2(path, dest)
+    _prune_snapshots(d)
+    return dest
+
+
+def list_snapshots(path: str = POOL_PATH) -> list:
+    """快照列表（新→旧）。"""
+    d = _snapshot_dir(path)
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for fn in sorted(os.listdir(d), reverse=True):
+        if not fn.endswith(".yaml"):
+            continue
+        p = os.path.join(d, fn)
+        doc = rb.load_blocks(p)
+        out.append({
+            "file": fn,
+            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(p))),
+            "blocks": sum(len(s["blocks"]) for s in doc["sections"]),
+            "sections": len(doc["sections"]),
+        })
+    return out
+
+
+def restore_snapshot(fname: str, path: str = POOL_PATH) -> dict:
+    """回滚到某个快照（回滚本身也会先给当前内容留档，防误回滚）。"""
+    if "/" in fname or "\\" in fname or ".." in fname:
+        raise ValueError(f"非法快照名: {fname}")
+    src = os.path.join(_snapshot_dir(path), fname)
+    if not os.path.isfile(src):
+        raise FileNotFoundError(fname)
+    doc = rb.load_blocks(src)
+    save_pool(doc, path)        # 走 save_pool → 当前内容先留档
+    return doc
+
+
+def _prune_snapshots(d: str) -> None:
+    files = sorted([f for f in os.listdir(d) if f.endswith(".yaml")], reverse=True)
+    for fn in files[SNAPSHOT_KEEP:]:
+        try:
+            os.remove(os.path.join(d, fn))
+        except OSError:
+            pass
 
 
 def merge_parsed(pool: dict, parsed: dict) -> dict:
