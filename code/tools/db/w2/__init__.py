@@ -8,6 +8,7 @@ from tools.db.w2.sync_application_status import SyncApplicationStatusFromConvers
 from tools.db.w2.backfill_application_from_conversation import BackfillApplicationFromConversation
 from tools.db.w2.mark_timeout_statuses import MarkTimeoutStatuses
 from tools.db.w2.purge_stale_applications import PurgeStaleApplications
+from tools.db.w2.match_resume import MatchResume
 
 
 def register_w2_tools(registry, db, model_router, prompt_manager, tool_providers=None) -> None:
@@ -41,3 +42,4 @@ def register_w2_tools(registry, db, model_router, prompt_manager, tool_providers
     registry.register(BackfillApplicationFromConversation(db=db))
     registry.register(MarkTimeoutStatuses(db=db))
     registry.register(PurgeStaleApplications(db=db))
+    registry.register(MatchResume(db=db))

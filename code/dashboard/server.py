@@ -229,6 +229,8 @@ def _serialize_conversation(conv, messages: list[dict], job_url: str, job_title:
         # Manual resume-send queue state (null | 'queued'): frontend shows a
         # "待发简历" tag + cancel button when queued (mirrors the reply flow).
         "resume_status": conv.resume_status,
+        "matched_resume": conv.matched_resume,
+        "matched_resume_reason": conv.matched_resume_reason,
         "message_count": len(msgs),
     }
 

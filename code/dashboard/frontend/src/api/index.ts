@@ -62,6 +62,8 @@ export interface Conversation {
   reply_status?: 'pending' | 'approved' | 'revision' | 'dismissed' | 'sent'
   reply_draft?: string
   resume_status?: 'queued' | null
+  matched_resume?: string          // W2 按岗位选出的「建议发这一份」
+  matched_resume_reason?: string
   status: string
   job_id?: string
   job_url?: string

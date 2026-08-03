@@ -684,6 +684,16 @@ export default function Chat() {
                         {'\u5f85\u53d1\u7b80\u5386'}
                       </span>
                     )}
+                    {selected.matched_resume && (
+                      <div className="mt-1 flex items-center gap-1.5 text-xs" title={selected.matched_resume_reason || ''}>
+                        <span className="rounded px-1.5 py-0.5 text-[11px]"
+                          style={{ background: 'rgba(10,132,255,0.14)', color: '#4aa3ff' }}>
+                          {'\u5efa\u8bae\u53d1'}{selected.matched_resume}</span>
+                        {selected.matched_resume_reason && (
+                          <span className="truncate text-[11px] text-text-3">{selected.matched_resume_reason}</span>
+                        )}
+                      </div>
+                    )}
                     {selected.job_title && (
                       <div className="mt-0.5 truncate text-xs text-text-3" style={{ letterSpacing: '-0.224px' }} title={selected.job_title}>
                         {'\u5728\u62db\u5c97\u4f4d\uff1a'}{selected.job_title}

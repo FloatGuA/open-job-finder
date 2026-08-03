@@ -132,6 +132,12 @@ class ConversationPipeline:
         elif new_stage == "new":
             new_stage = "active"
 
+        # HR 要简历 → 先算出「这个岗位该发哪一份」并记下来（只选不写：Agent 从用户
+        # 已存的几份里挑，永不生成内容）。默认仍发 Boss 站内简历，这一步只产出建议，
+        # 供前端展示 + 事后追溯选得准不准；真按它发本地 PDF 需开 auto_send_adapted_resume。
+        if needs_resume and not already_sent_resume:
+            self._record_matched_resume(conv, scope)
+
         resume_sent = False
         if needs_resume and not already_sent_resume and not self._config.dry_run:
             res_out = ResumeStep(self._reg).run(
@@ -233,3 +239,24 @@ class ConversationPipeline:
             stage_changed=stage_changed,
             llm_degraded=llm_degraded,
         )
+
+    def _record_matched_resume(self, conv, scope: dict) -> None:
+        """按岗位选出「该发哪一份简历」，落库 + 上监控流（只选不写）。
+
+        走 registry.call 而非直接摸 tracker：一是 registry 上本来就没有 tracker，
+        二是走 tool 才有统一的 trace/SSE 与 ToolResult 契约（后端分层铁律）。
+        建议失败绝不能拖垮真正的发送——registry.call 不抛，失败只是没有建议。
+        """
+        self._reg.set_context("resume", scope)
+        res = self._reg.call("match_resume", conv_id=conv.conv_id, job_id=conv.job_id or "")
+        if res.ok and res.data.get("resume"):
+            self._logger.log(
+                "resume_matched",
+                scope=scope,
+                data={
+                    "resume": res.data.get("resume"),
+                    "matched": res.data.get("matched"),
+                    "reason": res.data.get("reason"),
+                    "job_title": res.data.get("job_title", ""),
+                },
+            )

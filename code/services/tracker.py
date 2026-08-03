@@ -209,6 +209,15 @@ class ApplicationTracker:
             # detect_resume_request.already_sent (system bubble), NOT duplicated here.
             if "resume_status" not in hr_conv_cols:
                 self.conn.execute("ALTER TABLE hr_conversations ADD COLUMN resume_status TEXT")
+            # Migration (v2.18): matched_resume / matched_resume_reason — W2 在检测到 HR
+            # 索要简历时，按岗位从用户已存的几份简历里**选出该发哪一份**并记下来（只选
+            # 不写：Agent 不生成简历内容）。默认行为仍是发 Boss 站内简历，这两列先服务
+            # 于"给用户看建议 + 事后可追溯选得准不准"；开了 w2.auto_send_adapted_resume
+            # 才真按它发本地 PDF。reason 存人类可读的选中理由，便于判断路由是否合理。
+            if "matched_resume" not in hr_conv_cols:
+                self.conn.execute("ALTER TABLE hr_conversations ADD COLUMN matched_resume TEXT DEFAULT ''")
+            if "matched_resume_reason" not in hr_conv_cols:
+                self.conn.execute("ALTER TABLE hr_conversations ADD COLUMN matched_resume_reason TEXT DEFAULT ''")
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_hr_conversations_stage ON hr_conversations(stage)"
             )
@@ -351,6 +360,8 @@ class ApplicationTracker:
             last_msg_ts=(row["last_msg_ts"] if "last_msg_ts" in row.keys() else 0) or 0,
             last_analyzed_ts=(row["last_analyzed_ts"] if "last_analyzed_ts" in row.keys() else 0) or 0,
             resume_status=(row["resume_status"] if "resume_status" in row.keys() else None),
+            matched_resume=(row["matched_resume"] if "matched_resume" in row.keys() else "") or "",
+            matched_resume_reason=(row["matched_resume_reason"] if "matched_resume_reason" in row.keys() else "") or "",
             created_at=row["created_at"],
         )
 
@@ -918,6 +929,19 @@ class ApplicationTracker:
             cur = self.conn.execute(
                 "UPDATE hr_conversations SET resume_status = ? WHERE conv_id = ?",
                 (status, conv_id),
+            )
+            return cur.rowcount
+
+    def set_matched_resume(self, conv_id: str, name: str, reason: str) -> int:
+        """记录「这个岗位该发哪一份简历」（W2 路由决策，只选不写）。
+
+        唯一一份 SQL。存名字而非 slug：简历可能被删，事后追溯时名字仍可读；
+        真要发送时按名字回查 index，查不到就退回当前激活份。
+        """
+        with self.conn:
+            cur = self.conn.execute(
+                "UPDATE hr_conversations SET matched_resume = ?, matched_resume_reason = ? WHERE conv_id = ?",
+                (name or "", reason or "", conv_id),
             )
             return cur.rowcount
 

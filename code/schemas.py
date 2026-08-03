@@ -93,6 +93,9 @@ class HRConversation:
     last_msg_ts: int = 0                 # getGeekFriendList.lastTS (ms); scan-time last-message time
     last_analyzed_ts: int = 0            # last message ts we SUCCESSFULLY analyzed up to (dirty watermark)
     resume_status: Optional[str] = None  # null|queued — manual "queue a resume" intent; W3 delivers then clears
+    # v2.18: W2 按岗位选出的「该发哪一份简历」（只选不写，Agent 不生成内容）
+    matched_resume: str = ""
+    matched_resume_reason: str = ""
     created_at: str = ""
 
 
