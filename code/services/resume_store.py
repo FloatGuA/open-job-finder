@@ -63,6 +63,13 @@ class ResumeStore:
     def list(self) -> dict:
         return self._load_index()
 
+    def get_blocks(self, slug: str) -> dict:
+        """读某一份简历的内容（不改变激活份）——「已保存简历」预览用。"""
+        idx = self._load_index()
+        if not any(it["slug"] == slug for it in idx["items"]):
+            raise KeyError(slug)
+        return rb.load_blocks(self._blocks_path(slug))
+
     def create(self, name: str, target: str = "", copy_from_active: bool = True, blocks: dict = None) -> dict:
         """新建一份简历。blocks 给定则用它（AI 组合落地）；否则复制激活份/空结构。"""
         idx = self._load_index()

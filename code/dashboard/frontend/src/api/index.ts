@@ -577,6 +577,8 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     }),
+  // 读某份简历内容（不激活）——已保存简历列表的预览
+  getResumeDoc: (slug: string): Promise<ResumeBlocks> => requestJson(`/api/resumes/${slug}/blocks`),
   activateResume: (slug: string): Promise<ResumeIndex> =>
     requestJson(`/api/resumes/${slug}/activate`, { method: 'POST' }),
   deleteResume: (slug: string): Promise<{ ok: boolean }> =>

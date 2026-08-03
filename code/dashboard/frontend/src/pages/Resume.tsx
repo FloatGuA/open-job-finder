@@ -286,6 +286,11 @@ function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQu
 
   const mine = (it: DragItem | null) => !!it && it.owner === owner
   const foreign = (it: DragItem | null) => !!it && it.owner !== owner && !!onExternalDrop
+  // \u6d4f\u89c8\u5668\u53ea\u628a\u300cdragenter \u4e0e dragover \u90fd\u88ab preventDefault\u300d\u7684\u5143\u7d20\u5f53\u4f5c\u6709\u6548\u653e\u7f6e\u76ee\u6807\uff1b
+  // \u5c11\u4e86 dragenter\uff0cdrop \u6839\u672c\u4e0d\u4f1a\u89e6\u53d1\uff08\u62d6\u8fc7\u53bb\u6beb\u65e0\u53cd\u5e94\uff09\u3002
+  const acceptEnter = (e: React.DragEvent) => {
+    if (mine(dragItem) || foreign(dragItem)) { e.preventDefault(); e.dataTransfer.dropEffect = foreign(dragItem) ? 'copy' : 'move' }
+  }
 
   // \u5757\u62d6\u62fd\uff1a\u672c\u5217\u5185\u79fb\u52a8\uff08\u53ef\u8de8\u5206\u533a\uff09\uff1b\u5916\u6765\u5219\u4ea4\u7ed9 onExternalDrop \u590d\u5236
   const blkDragStart = (si: number, bi: number) => (e: React.DragEvent) => {
@@ -386,7 +391,7 @@ function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQu
     !!it && it.owner === owner && it.kind === 'section' && it.si === si
 
   return (
-    <div onDragOver={columnDragOver} onDragLeave={() => setHot(false)} onDrop={columnDrop}
+    <div onDragEnter={acceptEnter} onDragOver={columnDragOver} onDragLeave={() => setHot(false)} onDrop={columnDrop}
       className="rounded-xl transition"
       style={{ outline: hot ? '2px dashed rgba(10,132,255,0.5)' : '2px dashed transparent', outlineOffset: 4 }}>
       <div className="space-y-4" onDrop={secDrop}>
@@ -399,20 +404,21 @@ function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQu
         {sections.map((sec, si) => {
           const isLastSec = si === sections.length - 1
           return (
-            <div key={si} onDragOver={secDragOver(si)}
+            <div key={si} onDragEnter={acceptEnter} onDragOver={secDragOver(si)}
               style={{
                 opacity: draggingSection(dragItem, si) ? 0.35 : 1,
                 borderTop: secSlot === si ? '2px solid #0a84ff' : '2px solid transparent',
                 borderBottom: isLastSec && secSlot === sections.length ? '2px solid #0a84ff' : '2px solid transparent',
                 transition: 'opacity .15s',
               }}>
-              <div className="mb-1.5 flex items-center gap-1.5">
-                <div draggable title={'\u62d6\u52a8\u5206\u533a'} onDragStart={secDragStart(si)} onDragEnd={clearDrag}
-                  className="group flex shrink-0 cursor-grab select-none items-center rounded-lg px-1 py-1 transition active:cursor-grabbing">
-                  <span className="text-[13px] leading-none text-text-3 opacity-60 transition group-hover:opacity-100">{'\u2af6'}</span>
+              <div className="mb-2 flex items-center gap-1.5 rounded-lg py-0.5 pl-0.5"
+                style={{ borderLeft: '3px solid rgba(10,132,255,0.55)' }}>
+                <div draggable title={'\u6309\u4f4f\u62d6\u52a8\u6574\u4e2a\u5206\u533a'} onDragStart={secDragStart(si)} onDragEnd={clearDrag}
+                  className="group flex shrink-0 cursor-grab select-none items-center rounded px-1.5 py-1.5 transition hover:bg-bg-card2 active:cursor-grabbing">
+                  <span className="text-[15px] leading-none text-text-2 opacity-70 transition group-hover:opacity-100">{'\u283f'}</span>
                 </div>
                 <input value={sec.name} onChange={(e) => patchSection(si, { name: e.target.value })}
-                  className="min-w-0 flex-1 rounded-lg bg-transparent px-1.5 py-1 text-[13px] font-semibold tracking-wide text-text-1 transition hover:bg-bg-card2 focus:bg-bg-card2 focus:outline-none focus:ring-1 focus:ring-signal-blue"
+                  className="min-w-0 flex-1 rounded-lg bg-transparent px-1.5 py-1 text-[15px] font-bold tracking-wide text-text-1 transition hover:bg-bg-card2 focus:bg-bg-card2 focus:outline-none focus:ring-1 focus:ring-signal-blue"
                   placeholder={'\u5206\u533a\u540d'} />
                 <span className="shrink-0 rounded-full px-1.5 text-[10px] text-text-3" style={{ background: 'rgba(255,255,255,0.06)' }}>{sec.blocks.length}</span>
                 {onQuickAddSection && sec.blocks.length > 0 && (
@@ -426,20 +432,20 @@ function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQu
               </div>
 
               {sec.blocks.length === 0 ? (
-                <div onDrop={blkDrop(si)} onDragOver={(e) => { if (foreign(dragItem) || mine(dragItem)) { e.preventDefault(); setBlkSlot({ si, slot: 0 }) } }}>
+                <div className="ml-2 pl-2.5" style={{ borderLeft: '1px solid rgba(255,255,255,0.08)' }} onDrop={blkDrop(si)} onDragEnter={acceptEnter} onDragOver={(e) => { if (foreign(dragItem) || mine(dragItem)) { e.preventDefault(); e.dataTransfer.dropEffect = foreign(dragItem) ? 'copy' : 'move'; setBlkSlot({ si, slot: 0 }) } }}>
                   <button type="button" onClick={() => addBlock(si)}
                     className="w-full rounded-[10px] py-2 text-[11px] text-text-3 transition hover:text-text-1"
                     style={{ border: blkSlot?.si === si ? '1px solid #0a84ff' : '1px dashed rgba(255,255,255,0.14)' }}>{'\u7a7a\u5206\u533a \u00b7 \u70b9\u51fb\u6dfb\u52a0'}</button>
                 </div>
               ) : (
-                <div className="space-y-1.5" onDrop={blkDrop(si)}>
+                <div className="ml-2 space-y-1.5 pl-2.5" style={{ borderLeft: '1px solid rgba(255,255,255,0.08)' }} onDrop={blkDrop(si)}>
                   {sec.blocks.map((blk, bi) => {
                     const k = `${si}:${bi}`
                     const isOpen = open === k
                     const isLast = bi === sec.blocks.length - 1
                     const slotHere = blkSlot?.si === si
                     return (
-                      <div key={k} onDragOver={blkDragOver(si, bi)}
+                      <div key={k} onDragEnter={acceptEnter} onDragOver={blkDragOver(si, bi)}
                         style={{
                           borderTop: slotHere && blkSlot?.slot === bi ? '2px solid #0a84ff' : '2px solid transparent',
                           borderBottom: isLast && slotHere && blkSlot?.slot === sec.blocks.length ? '2px solid #0a84ff' : '2px solid transparent',
@@ -452,8 +458,8 @@ function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQu
                           }}>
                           <div draggable={!isOpen} onDragStart={blkDragStart(si, bi)} onDragEnd={clearDrag}
                             onClick={() => setOpen(isOpen ? null : k)}
-                            className={`group flex select-none items-center gap-2 px-2.5 py-2 ${isOpen ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'}`}>
-                            <span className="text-[13px] leading-none text-text-3 opacity-50 transition group-hover:opacity-100">{'\u2af6'}</span>
+                            className={`group flex select-none items-center gap-1.5 py-2 pl-1.5 pr-2.5 ${isOpen ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'}`}>
+                            <span className="rounded px-1 py-0.5 text-[14px] leading-none text-text-3 opacity-55 transition group-hover:bg-bg-card2 group-hover:opacity-100">{'\u283f'}</span>
                             <span className={`min-w-0 flex-1 truncate text-[13px] ${blk.title ? 'font-medium text-text-1' : 'text-text-3'}`}>
                               {blk.title || '\u672a\u547d\u540d\u6761\u76ee'}</span>
                             {blk.time && <span className="shrink-0 text-[10px] text-text-3" style={{ fontVariantNumeric: 'tabular-nums' }}>{blk.time}</span>}
@@ -721,10 +727,20 @@ function SavedTab({ onErr }: { onErr: (m: string | null) => void }) {
   const [jobTitle, setJobTitle] = useState('')
   const [jdText, setJdText] = useState('')
   const [composing, setComposing] = useState(false)
+  const [previewSlug, setPreviewSlug] = useState<string>('')
+  const [previewDoc, setPreviewDoc] = useState<ResumeBlocks | null>(null)
   const metaTimer = useRef<number | null>(null)
+  const previewName = resumes?.items.find((i) => i.slug === previewSlug)?.name ?? ''
 
+  const showPreview = (slug: string) => {
+    setPreviewSlug(slug)
+    void API.getResumeDoc(slug).then(setPreviewDoc).catch(() => setPreviewDoc(null))
+  }
   const refresh = () => {
-    void API.getResumes().then(setResumes).catch((e) => onErr((e as Error).message))
+    void API.getResumes().then((r) => {
+      setResumes(r)
+      if (!previewSlug && r.active) showPreview(r.active)
+    }).catch((e) => onErr((e as Error).message))
     void API.getResumeExports().then((r) => setExportsList(r.exports)).catch(() => {})
   }
   useEffect(refresh, [])
@@ -763,7 +779,8 @@ function SavedTab({ onErr }: { onErr: (m: string | null) => void }) {
   }
 
   return (
-    <div className="max-w-4xl space-y-4">
+    <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+      <div className="min-w-0 flex-1 space-y-4">
       <Card title={'\u6211\u7684\u7b80\u5386'} dev="ResumeList">
         <p className="mb-3 text-[11px] leading-relaxed text-text-3">{'\u7ed9\u4e0d\u540c\u5c97\u4f4d\u5404\u5b58\u4e00\u4efd\uff1b\u9009\u4e2d\u7684\u90a3\u4efd\u4f1a\u5728\u300c\u7b80\u5386\u5de5\u4f5c\u53f0\u300d\u91cc\u7f16\u8f91\u3002\u6295\u9012\u65f6\u6309\u5c97\u4f4d\u9009\u7528\u5bf9\u5e94\u7248\u672c\u3002'}</p>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -772,8 +789,12 @@ function SavedTab({ onErr }: { onErr: (m: string | null) => void }) {
             return (
               <div key={it.slug}
                 className={`rounded-xl p-3 transition ${isActive ? '' : 'cursor-pointer hover:brightness-110'}`}
-                style={{ background: isActive ? 'rgba(10,132,255,0.12)' : 'rgba(255,255,255,0.04)', border: isActive ? '1px solid rgba(10,132,255,0.45)' : '1px solid rgba(255,255,255,0.07)' }}
-                onClick={() => { if (!isActive && !busy) void activate(it.slug) }}>
+                style={{
+                  background: isActive ? 'rgba(10,132,255,0.12)' : 'rgba(255,255,255,0.04)',
+                  border: isActive ? '1px solid rgba(10,132,255,0.45)' : '1px solid rgba(255,255,255,0.07)',
+                  outline: it.slug === previewSlug ? '1px solid rgba(255,255,255,0.35)' : 'none', outlineOffset: 2,
+                }}
+                onClick={() => showPreview(it.slug)}>
                 <div className="space-y-1.5" onClick={(e) => { if (isActive) e.stopPropagation() }}>
                   {isActive ? (
                     <>
@@ -789,8 +810,13 @@ function SavedTab({ onErr }: { onErr: (m: string | null) => void }) {
                         <p className="truncate text-xs font-medium text-text-1">{it.name}</p>
                         <p className="truncate text-[11px] text-text-3">{it.target || '\u672a\u8bbe\u76ee\u6807\u5c97\u4f4d'}</p>
                       </div>
-                      <button type="button" title={'\u5220\u9664'} onClick={(e) => { e.stopPropagation(); void remove(it.slug) }}
-                        className="shrink-0 px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button type="button" title={'\u5207\u6362\u4e3a\u7f16\u8f91\u8fd9\u4efd'} disabled={busy}
+                          onClick={(e) => { e.stopPropagation(); void activate(it.slug) }}
+                          className="rounded px-1.5 py-0.5 text-[10px] text-signal-bright transition hover:bg-signal-blue/10 disabled:opacity-40">{'\u7f16\u8f91'}</button>
+                        <button type="button" title={'\u5220\u9664'} onClick={(e) => { e.stopPropagation(); void remove(it.slug) }}
+                          className="px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -868,6 +894,18 @@ function SavedTab({ onErr }: { onErr: (m: string | null) => void }) {
           <TailorCard />
         </div>
       </details>
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-3">
+          {'\u9884\u89c8\uff08A4\uff09'}<DevLabel name="SavedPreview" />
+          <span className="font-normal normal-case text-text-3">{previewName}</span>
+        </div>
+        <div className="sticky top-4">
+          {previewDoc ? <A4Preview html={buildResumeHtml(previewDoc)} />
+            : <div className="rounded-xl px-4 py-10 text-center text-xs text-text-3" style={{ border: '1px dashed rgba(255,255,255,0.14)' }}>{'\u9009\u4e00\u4efd\u7b80\u5386\u67e5\u770b\u9884\u89c8'}</div>}
+        </div>
+      </div>
     </div>
   )
 }

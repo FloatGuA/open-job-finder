@@ -799,6 +799,16 @@ async def create_resume(body: dict[str, Any] = Body(...)) -> JSONResponse:
     return JSONResponse(item)
 
 
+@app.get("/api/resumes/{slug}/blocks")
+async def get_resume_doc(slug: str) -> JSONResponse:
+    """读某一份简历的内容（不激活它）——已保存简历列表的预览用。"""
+    from services.resume_store import ResumeStore
+    try:
+        return JSONResponse(ResumeStore(str(DATA_DIR)).get_blocks(slug))
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=404, detail=f"resume not found: {slug}")
+
+
 @app.put("/api/resumes/{slug}")
 async def update_resume_meta(slug: str, body: dict[str, Any] = Body(...)) -> JSONResponse:
     from services.resume_store import ResumeStore
