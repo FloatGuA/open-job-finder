@@ -168,20 +168,17 @@ function TailorCard() {
 const escHtml = (s: string) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-// FlowCV\u300cclassic\u300d\u98ce\u683c\uff1b\u5206\u533a\u540d\u4e0e\u987a\u5e8f\u5b8c\u5168\u8ddf\u968f\u6587\u6863 sections\u3002
 function buildResumeHtml(doc: ResumeBlocks): string {
   const bi = doc.basic_info
   const contact = [bi.email, bi.phone, bi.city].filter(Boolean).map(escHtml).join('<span class="sep">\u00b7</span>')
   const secs = (doc.sections || []).map((sec) => {
     const list = (sec.blocks || []).filter((b) => b.title || b.bullets.some((x) => x.trim()))
     if (!list.length) return ''
-    const entries = list
-      .map((b) => {
-        const bullets = b.bullets.filter((x) => x.trim()).map((x) => `<li>${escHtml(x)}</li>`).join('')
-        const head = `<div class="e-head"><span class="e-title">${escHtml(b.title)}</span>${b.time ? `<span class="e-date">${escHtml(b.time)}</span>` : ''}</div>`
-        return `<div class="entry">${head}${bullets ? `<ul>${bullets}</ul>` : ''}</div>`
-      })
-      .join('')
+    const entries = list.map((b) => {
+      const bullets = b.bullets.filter((x) => x.trim()).map((x) => `<li>${escHtml(x)}</li>`).join('')
+      const head = `<div class="e-head"><span class="e-title">${escHtml(b.title)}</span>${b.time ? `<span class="e-date">${escHtml(b.time)}</span>` : ''}</div>`
+      return `<div class="entry">${head}${bullets ? `<ul>${bullets}</ul>` : ''}</div>`
+    }).join('')
     return `<div class="section"><div class="s-title">${escHtml(sec.name)}</div>${entries}</div>`
   }).join('')
   return `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -212,7 +209,7 @@ ${secs}
 
 function A4Preview({ html }: { html: string }) {
   const boxRef = useRef<HTMLDivElement>(null)
-  const [scale, setScale] = useState(0.72)
+  const [scale, setScale] = useState(0.6)
   const [pageH, setPageH] = useState(1123)
   useEffect(() => {
     const el = boxRef.current
@@ -224,11 +221,11 @@ function A4Preview({ html }: { html: string }) {
     return () => ro.disconnect()
   }, [])
   const onLoad = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
-    const doc = e.currentTarget.contentDocument
-    if (doc && doc.body) setPageH(Math.max(1123, doc.body.scrollHeight + 2))
+    const d = e.currentTarget.contentDocument
+    if (d && d.body) setPageH(Math.max(1123, d.body.scrollHeight + 2))
   }
   return (
-    <div ref={boxRef} className="w-full overflow-auto" style={{ maxHeight: 'calc(100vh - 170px)' }}>
+    <div ref={boxRef} className="w-full overflow-auto" style={{ maxHeight: 'calc(100vh - 150px)' }}>
       <div style={{ width: 794 * scale, height: pageH * scale, margin: '0 auto' }}>
         <iframe title="resume-preview" srcDoc={html} onLoad={onLoad} className="bg-white shadow-card"
           style={{ width: 794, height: pageH, border: 0, transformOrigin: 'top left', transform: `scale(${scale})` }} />
@@ -237,25 +234,35 @@ function A4Preview({ html }: { html: string }) {
   )
 }
 
-// \u2500\u2500 \u5171\u7528\u5206\u533a\u7f16\u8f91\u5668\uff08\u4fe1\u606f\u6c60\u4e0e\u7b80\u5386\u5171\u7528\u540c\u4e00\u4ea4\u4e92\uff1a\u6761\u72b6\u53ef\u62d6 + \u70b9\u51fb\u5c55\u5f00\u8be6\u60c5\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-function SectionEditor({ doc, onChange, summaryHint }: {
+// \u2500\u2500 \u62d6\u62fd\u8f7d\u8377\uff08\u6a21\u5757\u7ea7\uff1adragover \u9636\u6bb5\u8bfb\u4e0d\u5230 dataTransfer\uff0c\u6545\u7528\u6a21\u5757\u53d8\u91cf\u5171\u4eab\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+type Owner = 'pool' | 'resume'
+type DragItem =
+  | { kind: 'block'; owner: Owner; si: number; bi: number }
+  | { kind: 'section'; owner: Owner; si: number }
+let dragItem: DragItem | null = null
+
+// \u2500\u2500 \u5171\u7528\u5206\u533a\u7f16\u8f91\u5668\uff08\u4fe1\u606f\u6c60\u4e0e\u5f53\u524d\u7b80\u5386\u540c\u6784\uff1a\u540c\u4e00\u5c55\u793a\u3001\u540c\u4e00\u4ea4\u4e92\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQuickAdd, onQuickAddSection, compact }: {
   doc: ResumeBlocks
   onChange: (next: ResumeBlocks) => void
+  owner: Owner
   summaryHint: string
+  onExternalDrop?: (item: DragItem, target: { si: number | null; slot: number }) => void   // \u6536\u4e0b\u6765\u81ea\u53e6\u4e00\u5217\u7684\u5757/\u5206\u533a
+  onQuickAdd?: (si: number, bi: number) => void                            // \u6c60 \u2192 \u7b80\u5386 \u5355\u6761\u5feb\u6377\u590d\u5236
+  onQuickAddSection?: (si: number) => void                                 // \u6c60 \u2192 \u7b80\u5386 \u6574\u5206\u533a\u590d\u5236
+  compact?: boolean
 }) {
   const [open, setOpen] = useState<string | null>(null)
-  const dragBlk = useRef<{ si: number; bi: number } | null>(null)
-  const [dragKey, setDragKey] = useState<string | null>(null)
+  const [, force] = useState(0)
   const [blkSlot, setBlkSlot] = useState<{ si: number; slot: number } | null>(null)
-  const dragSec = useRef<number | null>(null)
-  const [secDragIdx, setSecDragIdx] = useState<number | null>(null)
   const [secSlot, setSecSlot] = useState<number | null>(null)
+  const [hot, setHot] = useState(false)   // \u5916\u6765\u62d6\u62fd\u60ac\u505c\u9ad8\u4eae
 
   const sections = doc.sections || []
   const setSections = (next: ResumeSection[]) => onChange({ ...doc, sections: next })
   const patchSection = (si: number, patch: Partial<ResumeSection>) =>
     setSections(sections.map((s, i) => (i === si ? { ...s, ...patch } : s)))
-  const addSection = (name: string) => { setSections([...sections, { name, blocks: [] }]); }
+  const addSection = (name: string) => setSections([...sections, { name, blocks: [] }])
   const removeSection = (si: number) => {
     if (!window.confirm(`\u5220\u9664\u5206\u533a\u300c${sections[si].name}\u300d\u53ca\u5176\u4e2d ${sections[si].blocks.length} \u6761\u5185\u5bb9\uff1f`)) return
     setSections(sections.filter((_, i) => i !== si)); setOpen(null)
@@ -277,195 +284,244 @@ function SectionEditor({ doc, onChange, summaryHint }: {
     patchSection(si, { blocks: list }); setOpen(`${si}:${j}`)
   }
 
-  // \u5757\u62d6\u62fd\uff08\u540c\u5206\u533a\u5185\uff09
+  const mine = (it: DragItem | null) => !!it && it.owner === owner
+  const foreign = (it: DragItem | null) => !!it && it.owner !== owner && !!onExternalDrop
+
+  // \u5757\u62d6\u62fd\uff1a\u672c\u5217\u5185\u79fb\u52a8\uff08\u53ef\u8de8\u5206\u533a\uff09\uff1b\u5916\u6765\u5219\u4ea4\u7ed9 onExternalDrop \u590d\u5236
   const blkDragStart = (si: number, bi: number) => (e: React.DragEvent) => {
-    dragBlk.current = { si, bi }
-    e.dataTransfer.effectAllowed = 'move'
+    dragItem = { kind: 'block', owner, si, bi }
+    e.dataTransfer.effectAllowed = owner === 'pool' ? 'copy' : 'move'
     e.dataTransfer.setData('text/plain', 'blk')
-    window.requestAnimationFrame(() => { setDragKey(`${si}:${bi}`); setOpen(null) })
+    window.requestAnimationFrame(() => { force((n) => n + 1); setOpen(null) })
   }
   const blkDragOver = (si: number, bi: number) => (e: React.DragEvent) => {
-    const from = dragBlk.current
-    if (from?.si !== si) return
-    e.preventDefault(); e.dataTransfer.dropEffect = 'move'
+    const it = dragItem
+    if (!it || it.kind !== 'block') return
+    if (!mine(it) && !foreign(it)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = foreign(it) ? 'copy' : 'move'
     const r = e.currentTarget.getBoundingClientRect()
     let slot = e.clientY < r.top + r.height / 2 ? bi : bi + 1
-    if (bi === from.bi) { setBlkSlot(null); return }
-    if (slot === from.bi + 1 && bi === from.bi + 1) slot = bi + 1
-    else if (slot === from.bi && bi === from.bi - 1) slot = bi
+    if (mine(it) && it.si === si) {            // \u540c\u5206\u533a\u91cd\u6392\uff1a\u6d88\u9664\u76f8\u90bb\u6b7b\u533a
+      if (bi === it.bi) { setBlkSlot(null); return }
+      if (slot === it.bi + 1 && bi === it.bi + 1) slot = bi + 1
+      else if (slot === it.bi && bi === it.bi - 1) slot = bi
+    }
     setBlkSlot({ si, slot })
   }
   const blkDrop = (si: number) => (e: React.DragEvent) => {
-    e.preventDefault()
-    const from = dragBlk.current, s = blkSlot
-    blkDragEnd()
-    if (!from || !s || from.si !== si || s.si !== si) return
-    let to = s.slot
-    if (from.bi < to) to -= 1
-    if (to === from.bi) return
-    const list = [...sections[si].blocks]
-    const [m] = list.splice(from.bi, 1)
-    list.splice(to, 0, m)
-    patchSection(si, { blocks: list })
+    e.preventDefault(); e.stopPropagation()
+    const it = dragItem
+    const s = blkSlot
+    const slot = s?.si === si ? s.slot : sections[si].blocks.length
+    clearDrag()
+    if (!it || it.kind !== 'block') return
+    if (foreign(it)) { onExternalDrop!(it, { si, slot }); return }
+    if (!mine(it)) return
+    const next = sections.map((sec) => ({ ...sec, blocks: [...sec.blocks] }))
+    const [moved] = next[it.si].blocks.splice(it.bi, 1)
+    let to = slot
+    if (it.si === si && it.bi < to) to -= 1
+    next[si].blocks.splice(to, 0, moved)
+    setSections(next)
   }
-  const blkDragEnd = () => { dragBlk.current = null; setDragKey(null); setBlkSlot(null) }
 
-  // \u5206\u533a\u62d6\u62fd
+  // \u5206\u533a\u62d6\u62fd\uff1a\u672c\u5217\u5185\u91cd\u6392\uff1b\u5916\u6765\u5206\u533a\uff08\u6c60\u2192\u7b80\u5386\uff09\u6574\u5757\u590d\u5236
   const secDragStart = (si: number) => (e: React.DragEvent) => {
-    dragSec.current = si
-    e.dataTransfer.effectAllowed = 'move'
+    dragItem = { kind: 'section', owner, si }
+    e.dataTransfer.effectAllowed = owner === 'pool' ? 'copy' : 'move'
     e.dataTransfer.setData('text/plain', 'sec')
-    window.requestAnimationFrame(() => { setSecDragIdx(si); setOpen(null) })
+    window.requestAnimationFrame(() => { force((n) => n + 1); setOpen(null) })
   }
   const secDragOver = (si: number) => (e: React.DragEvent) => {
-    const fi = dragSec.current
-    if (fi === null) return
-    e.preventDefault(); e.dataTransfer.dropEffect = 'move'
+    const it = dragItem
+    if (!it || it.kind !== 'section') return
+    if (!mine(it) && !foreign(it)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = foreign(it) ? 'copy' : 'move'
     const r = e.currentTarget.getBoundingClientRect()
     let slot = e.clientY < r.top + r.height / 2 ? si : si + 1
-    if (si === fi) { setSecSlot(null); return }
-    if (slot === fi + 1 && si === fi + 1) slot = si + 1
-    else if (slot === fi && si === fi - 1) slot = si
+    if (mine(it)) {
+      if (si === it.si) { setSecSlot(null); return }
+      if (slot === it.si + 1 && si === it.si + 1) slot = si + 1
+      else if (slot === it.si && si === it.si - 1) slot = si
+    }
     setSecSlot(slot)
   }
   const secDrop = (e: React.DragEvent) => {
     e.preventDefault()
-    const fi = dragSec.current, slot = secSlot
-    secDragEnd()
-    if (fi === null || slot === null) return
+    const it = dragItem
+    const slot = secSlot
+    clearDrag()
+    if (!it || it.kind !== 'section') return
+    if (foreign(it)) { onExternalDrop!(it, { si: null, slot: slot ?? sections.length }); return }
+    if (!mine(it) || slot === null) return
     let to = slot
-    if (fi < to) to -= 1
-    if (to === fi) return
+    if (it.si < to) to -= 1
+    if (to === it.si) return
     const list = [...sections]
-    const [m] = list.splice(fi, 1)
+    const [m] = list.splice(it.si, 1)
     list.splice(to, 0, m)
     setSections(list)
   }
-  const secDragEnd = () => { dragSec.current = null; setSecDragIdx(null); setSecSlot(null) }
+  const clearDrag = () => { dragItem = null; setBlkSlot(null); setSecSlot(null); setHot(false); force((n) => n + 1) }
+
+  // \u6574\u5217\u515c\u5e95\u843d\u533a\uff1a\u5916\u6765\u5185\u5bb9\u62d6\u5230\u7a7a\u767d\u5904 \u2192 \u8ffd\u52a0\u5230\u672b\u5c3e
+  const columnDragOver = (e: React.DragEvent) => {
+    if (!foreign(dragItem)) return
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setHot(true)
+  }
+  const columnDrop = (e: React.DragEvent) => {
+    if (!foreign(dragItem)) return
+    e.preventDefault()
+    const it = dragItem
+    clearDrag()
+    if (it) onExternalDrop!(it, { si: null, slot: sections.length })
+  }
 
   const detailInput = 'w-full rounded-lg bg-bg-card px-3 py-2 text-sm text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue'
+  const draggingBlock = (it: DragItem | null, si: number, bi: number) =>
+    !!it && it.owner === owner && it.kind === 'block' && it.si === si && it.bi === bi
+  const draggingSection = (it: DragItem | null, si: number) =>
+    !!it && it.owner === owner && it.kind === 'section' && it.si === si
 
   return (
-    <div className="space-y-5" onDrop={secDrop}>
-      {sections.length === 0 && (
-        <p className="text-xs text-text-3">{'\u8fd8\u6ca1\u6709\u5206\u533a\u3002\u7528\u4e0b\u65b9\u6309\u94ae\u6dfb\u52a0\uff0c\u5206\u533a\u540d\u4f1a\u539f\u6837\u51fa\u73b0\u5728\u7b80\u5386\u4e0a\u3002'}</p>
-      )}
-      {sections.map((sec, si) => {
-        const isLastSec = si === sections.length - 1
-        return (
-          <div key={si} onDragOver={secDragOver(si)}
-            style={{
-              opacity: secDragIdx === si ? 0.35 : 1,
-              borderTop: secSlot === si ? '2px solid #0a84ff' : '2px solid transparent',
-              borderBottom: isLastSec && secSlot === sections.length ? '2px solid #0a84ff' : '2px solid transparent',
-              transition: 'opacity .15s',
-            }}>
-            <div className="mb-2 flex items-center gap-2">
-              <div draggable title={'\u62d6\u52a8\u8c03\u6574\u5206\u533a\u987a\u5e8f'}
-                onDragStart={secDragStart(si)} onDragEnd={secDragEnd}
-                className="group flex shrink-0 cursor-grab select-none items-center gap-1.5 rounded-lg py-1 pl-1 pr-0.5 transition active:cursor-grabbing">
-                <span className="text-[13px] leading-none text-text-3 opacity-60 transition group-hover:opacity-100">{'\u2af6'}</span>
+    <div onDragOver={columnDragOver} onDragLeave={() => setHot(false)} onDrop={columnDrop}
+      className="rounded-xl transition"
+      style={{ outline: hot ? '2px dashed rgba(10,132,255,0.5)' : '2px dashed transparent', outlineOffset: 4 }}>
+      <div className="space-y-4" onDrop={secDrop}>
+        {sections.length === 0 && (
+          <div className="rounded-xl px-3 py-6 text-center text-[11px] leading-relaxed text-text-3"
+            style={{ border: '1px dashed rgba(255,255,255,0.14)' }}>
+            {onExternalDrop ? '\u4ece\u5de6\u4fa7\u4fe1\u606f\u6c60\u62d6\u5185\u5bb9\u8fc7\u6765\uff0c\u6216\u70b9\u6761\u76ee\u4e0a\u7684 \u2192 \u6309\u94ae' : '\u8fd8\u6ca1\u6709\u5206\u533a\uff0c\u7528\u4e0b\u65b9\u6309\u94ae\u6dfb\u52a0'}
+          </div>
+        )}
+        {sections.map((sec, si) => {
+          const isLastSec = si === sections.length - 1
+          return (
+            <div key={si} onDragOver={secDragOver(si)}
+              style={{
+                opacity: draggingSection(dragItem, si) ? 0.35 : 1,
+                borderTop: secSlot === si ? '2px solid #0a84ff' : '2px solid transparent',
+                borderBottom: isLastSec && secSlot === sections.length ? '2px solid #0a84ff' : '2px solid transparent',
+                transition: 'opacity .15s',
+              }}>
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <div draggable title={'\u62d6\u52a8\u5206\u533a'} onDragStart={secDragStart(si)} onDragEnd={clearDrag}
+                  className="group flex shrink-0 cursor-grab select-none items-center rounded-lg px-1 py-1 transition active:cursor-grabbing">
+                  <span className="text-[13px] leading-none text-text-3 opacity-60 transition group-hover:opacity-100">{'\u2af6'}</span>
+                </div>
+                <input value={sec.name} onChange={(e) => patchSection(si, { name: e.target.value })}
+                  className="min-w-0 flex-1 rounded-lg bg-transparent px-1.5 py-1 text-[13px] font-semibold tracking-wide text-text-1 transition hover:bg-bg-card2 focus:bg-bg-card2 focus:outline-none focus:ring-1 focus:ring-signal-blue"
+                  placeholder={'\u5206\u533a\u540d'} />
+                <span className="shrink-0 rounded-full px-1.5 text-[10px] text-text-3" style={{ background: 'rgba(255,255,255,0.06)' }}>{sec.blocks.length}</span>
+                {onQuickAddSection && sec.blocks.length > 0 && (
+                  <button type="button" title={'\u6574\u4e2a\u5206\u533a\u52a0\u5165\u5f53\u524d\u7b80\u5386'} onClick={() => onQuickAddSection(si)}
+                    className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-signal-bright transition hover:bg-signal-blue/10">{'\u21d2'}</button>
+                )}
+                <button type="button" title={'\u65b0\u589e\u6761\u76ee'} onClick={() => addBlock(si)}
+                  className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-text-3 transition hover:text-text-1">{'+'}</button>
+                <button type="button" title={'\u5220\u9664\u5206\u533a'} onClick={() => removeSection(si)}
+                  className="shrink-0 px-1 text-[11px] text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
               </div>
-              <input value={sec.name} onChange={(e) => patchSection(si, { name: e.target.value })}
-                className="min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1 text-[13px] font-semibold tracking-wide text-text-1 transition hover:bg-bg-card2 focus:bg-bg-card2 focus:outline-none focus:ring-1 focus:ring-signal-blue"
-                placeholder={'\u5206\u533a\u540d\uff08\u5982 \u6e38\u620f\u7ecf\u5386\uff09'} />
-              <span className="shrink-0 rounded-full px-1.5 text-[10px] text-text-3" style={{ background: 'rgba(255,255,255,0.06)' }}>{sec.blocks.length}</span>
-              <button type="button" onClick={() => addBlock(si)}
-                className="shrink-0 rounded-lg px-2.5 py-1 text-[11px] text-signal-bright transition hover:bg-signal-blue/10">{'+ \u6dfb\u52a0'}</button>
-              <button type="button" title={'\u5220\u9664\u5206\u533a'} onClick={() => removeSection(si)}
-                className="shrink-0 px-1 text-[11px] text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
-            </div>
 
-            {sec.blocks.length === 0 ? (
-              <button type="button" onClick={() => addBlock(si)}
-                className="w-full rounded-[10px] py-2.5 text-[11px] text-text-3 transition hover:text-text-1"
-                style={{ border: '1px dashed rgba(255,255,255,0.14)' }}>{'\u7a7a\u5206\u533a \u00b7 \u70b9\u51fb\u6dfb\u52a0\u4e00\u6761'}</button>
-            ) : (
-              <div className="space-y-1.5" onDrop={blkDrop(si)}>
-                {sec.blocks.map((blk, bi) => {
-                  const k = `${si}:${bi}`
-                  const isOpen = open === k
-                  const isLast = bi === sec.blocks.length - 1
-                  const slotHere = blkSlot?.si === si
-                  return (
-                    <div key={k} onDragOver={blkDragOver(si, bi)}
-                      style={{
-                        borderTop: slotHere && blkSlot?.slot === bi ? '2px solid #0a84ff' : '2px solid transparent',
-                        borderBottom: isLast && slotHere && blkSlot?.slot === sec.blocks.length ? '2px solid #0a84ff' : '2px solid transparent',
-                      }}>
-                      <div className="overflow-hidden rounded-[10px] transition"
+              {sec.blocks.length === 0 ? (
+                <div onDrop={blkDrop(si)} onDragOver={(e) => { if (foreign(dragItem) || mine(dragItem)) { e.preventDefault(); setBlkSlot({ si, slot: 0 }) } }}>
+                  <button type="button" onClick={() => addBlock(si)}
+                    className="w-full rounded-[10px] py-2 text-[11px] text-text-3 transition hover:text-text-1"
+                    style={{ border: blkSlot?.si === si ? '1px solid #0a84ff' : '1px dashed rgba(255,255,255,0.14)' }}>{'\u7a7a\u5206\u533a \u00b7 \u70b9\u51fb\u6dfb\u52a0'}</button>
+                </div>
+              ) : (
+                <div className="space-y-1.5" onDrop={blkDrop(si)}>
+                  {sec.blocks.map((blk, bi) => {
+                    const k = `${si}:${bi}`
+                    const isOpen = open === k
+                    const isLast = bi === sec.blocks.length - 1
+                    const slotHere = blkSlot?.si === si
+                    return (
+                      <div key={k} onDragOver={blkDragOver(si, bi)}
                         style={{
-                          background: isOpen ? 'rgba(255,255,255,0.055)' : 'rgba(255,255,255,0.035)',
-                          border: isOpen ? '1px solid rgba(10,132,255,0.4)' : '1px solid rgba(255,255,255,0.07)',
-                          opacity: dragKey === k ? 0.35 : 1,
+                          borderTop: slotHere && blkSlot?.slot === bi ? '2px solid #0a84ff' : '2px solid transparent',
+                          borderBottom: isLast && slotHere && blkSlot?.slot === sec.blocks.length ? '2px solid #0a84ff' : '2px solid transparent',
                         }}>
-                        <div draggable={!isOpen}
-                          onDragStart={blkDragStart(si, bi)} onDragEnd={blkDragEnd}
-                          onClick={() => setOpen(isOpen ? null : k)}
-                          className={`group flex select-none items-center gap-2.5 px-3 py-2.5 ${isOpen ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'}`}>
-                          <span className="text-[13px] leading-none text-text-3 opacity-50 transition group-hover:opacity-100">{'\u2af6'}</span>
-                          <span className={`min-w-0 flex-1 truncate text-sm ${blk.title ? 'font-medium text-text-1' : 'text-text-3'}`}>
-                            {blk.title || '\u672a\u547d\u540d\u6761\u76ee'}</span>
-                          {blk.time && <span className="shrink-0 text-[11px] text-text-3" style={{ fontVariantNumeric: 'tabular-nums' }}>{blk.time}</span>}
-                          <span className="shrink-0 text-[10px] text-text-3 transition" style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }}>{'\u25be'}</span>
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateRows: isOpen ? '1fr' : '0fr', transition: 'grid-template-rows .28s ease' }}>
-                          <div className="min-h-0 overflow-hidden">
-                            <div className="space-y-2.5 px-3 pb-3 pt-1">
-                              <div className="flex gap-2">
-                                <input className={detailInput} style={inputStyle} placeholder={'\u6807\u9898\uff08\u5355\u4f4d/\u9879\u76ee/\u6280\u80fd\u540d\uff09'}
-                                  value={blk.title} onChange={(e) => updateBlock(si, bi, { title: e.target.value })} />
-                                <input className="w-32 shrink-0 rounded-lg bg-bg-card px-3 py-2 text-sm text-text-1 focus:outline-none" style={inputStyle}
-                                  placeholder={'\u65f6\u95f4'} value={blk.time} onChange={(e) => updateBlock(si, bi, { time: e.target.value })} />
-                              </div>
-                              <textarea className={`${detailInput} leading-relaxed`} style={{ ...inputStyle, minHeight: 120 }}
-                                placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')}
-                                onChange={(e) => updateBlock(si, bi, { bullets: e.target.value.split('\n') })} />
-                              <input className="w-full rounded bg-bg-card px-2.5 py-1.5 text-xs text-text-2 focus:outline-none" style={inputStyle}
-                                placeholder={summaryHint} value={blk.summary}
-                                onChange={(e) => updateBlock(si, bi, { summary: e.target.value })} />
-                              <div className="flex items-center gap-1 pt-0.5">
-                                <button type="button" onClick={() => moveBlock(si, bi, -1)} disabled={bi === 0}
-                                  className="rounded px-2 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2191 \u4e0a\u79fb'}</button>
-                                <button type="button" onClick={() => moveBlock(si, bi, 1)} disabled={bi === sec.blocks.length - 1}
-                                  className="rounded px-2 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2193 \u4e0b\u79fb'}</button>
-                                <button type="button" onClick={() => removeBlock(si, bi)}
-                                  className="ml-auto rounded px-2 py-1 text-[11px] text-signal-red transition hover:brightness-125">{'\u5220\u9664\u6761\u76ee'}</button>
+                        <div className="overflow-hidden rounded-[10px] transition"
+                          style={{
+                            background: isOpen ? 'rgba(255,255,255,0.055)' : 'rgba(255,255,255,0.035)',
+                            border: isOpen ? '1px solid rgba(10,132,255,0.4)' : '1px solid rgba(255,255,255,0.07)',
+                            opacity: draggingBlock(dragItem, si, bi) ? 0.35 : 1,
+                          }}>
+                          <div draggable={!isOpen} onDragStart={blkDragStart(si, bi)} onDragEnd={clearDrag}
+                            onClick={() => setOpen(isOpen ? null : k)}
+                            className={`group flex select-none items-center gap-2 px-2.5 py-2 ${isOpen ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'}`}>
+                            <span className="text-[13px] leading-none text-text-3 opacity-50 transition group-hover:opacity-100">{'\u2af6'}</span>
+                            <span className={`min-w-0 flex-1 truncate text-[13px] ${blk.title ? 'font-medium text-text-1' : 'text-text-3'}`}>
+                              {blk.title || '\u672a\u547d\u540d\u6761\u76ee'}</span>
+                            {blk.time && <span className="shrink-0 text-[10px] text-text-3" style={{ fontVariantNumeric: 'tabular-nums' }}>{blk.time}</span>}
+                            {onQuickAdd && (
+                              <button type="button" title={'\u52a0\u5165\u5f53\u524d\u7b80\u5386'}
+                                onClick={(e) => { e.stopPropagation(); onQuickAdd(si, bi) }}
+                                className="shrink-0 rounded px-1 text-[11px] text-signal-bright opacity-0 transition group-hover:opacity-100 hover:bg-signal-blue/10">{'\u2192'}</button>
+                            )}
+                            <span className="shrink-0 text-[9px] text-text-3 transition" style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }}>{'\u25be'}</span>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateRows: isOpen ? '1fr' : '0fr', transition: 'grid-template-rows .28s ease' }}>
+                            <div className="min-h-0 overflow-hidden">
+                              <div className="space-y-2 px-2.5 pb-2.5 pt-1">
+                                <div className="flex gap-1.5">
+                                  <input className={detailInput} style={inputStyle} placeholder={'\u6807\u9898'}
+                                    value={blk.title} onChange={(e) => updateBlock(si, bi, { title: e.target.value })} />
+                                  <input className="w-28 shrink-0 rounded-lg bg-bg-card px-2 py-2 text-sm text-text-1 focus:outline-none" style={inputStyle}
+                                    placeholder={'\u65f6\u95f4'} value={blk.time} onChange={(e) => updateBlock(si, bi, { time: e.target.value })} />
+                                </div>
+                                <textarea className={`${detailInput} leading-relaxed`} style={{ ...inputStyle, minHeight: compact ? 96 : 120 }}
+                                  placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')}
+                                  onChange={(e) => updateBlock(si, bi, { bullets: e.target.value.split('\n') })} />
+                                <input className="w-full rounded bg-bg-card px-2 py-1.5 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
+                                  placeholder={summaryHint} value={blk.summary}
+                                  onChange={(e) => updateBlock(si, bi, { summary: e.target.value })} />
+                                <div className="flex items-center gap-1">
+                                  <button type="button" onClick={() => moveBlock(si, bi, -1)} disabled={bi === 0}
+                                    className="rounded px-1.5 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2191'}</button>
+                                  <button type="button" onClick={() => moveBlock(si, bi, 1)} disabled={bi === sec.blocks.length - 1}
+                                    className="rounded px-1.5 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2193'}</button>
+                                  <button type="button" onClick={() => removeBlock(si, bi)}
+                                    className="ml-auto rounded px-2 py-1 text-[11px] text-signal-red transition hover:brightness-125">{'\u5220\u9664'}</button>
+                                </div>
                               </div>
                             </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        )
-      })}
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })}
 
-      <div className="flex flex-wrap items-center gap-1.5 border-t pt-3" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
-        <span className="mr-1 text-[11px] text-text-3">{'\u6dfb\u52a0\u5206\u533a\uff1a'}</span>
-        {SECTION_PRESETS.filter((p) => !sections.some((s) => s.name === p)).map((p) => (
-          <button key={p} type="button" onClick={() => addSection(p)}
-            className="rounded-lg px-2.5 py-1 text-[11px] text-text-2 transition hover:text-text-1"
-            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>{p}</button>
-        ))}
-        <button type="button" onClick={() => addSection('\u65b0\u5206\u533a')}
-          className="rounded-lg px-2.5 py-1 text-[11px] text-signal-bright transition hover:bg-signal-blue/10">{'+ \u81ea\u5b9a\u4e49'}</button>
+        <div className="flex flex-wrap items-center gap-1 border-t pt-2.5" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          <span className="mr-0.5 text-[10px] text-text-3">{'\u52a0\u5206\u533a'}</span>
+          {SECTION_PRESETS.filter((p) => !sections.some((s) => s.name === p)).map((p) => (
+            <button key={p} type="button" onClick={() => addSection(p)}
+              className="rounded px-1.5 py-0.5 text-[10px] text-text-2 transition hover:text-text-1"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>{p}</button>
+          ))}
+          <button type="button" onClick={() => addSection('\u65b0\u5206\u533a')}
+            className="rounded px-1.5 py-0.5 text-[10px] text-signal-bright transition hover:bg-signal-blue/10">{'+ \u81ea\u5b9a\u4e49'}</button>
+        </div>
       </div>
     </div>
   )
 }
 
-function BasicInfoCard({ doc, onChange }: { doc: ResumeBlocks; onChange: (d: ResumeBlocks) => void }) {
+function BasicInfoCard({ doc, onChange, dev }: { doc: ResumeBlocks; onChange: (d: ResumeBlocks) => void; dev: string }) {
   return (
-    <Card title={'\u57fa\u672c\u4fe1\u606f'} dev="ResumeBasic">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <Card title={'\u57fa\u672c\u4fe1\u606f'} dev={dev}>
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
         {BASIC_FIELDS.map(({ key, label }) => (
-          <label key={key} className="flex flex-col gap-1.5">
-            <span className="text-xs text-text-3">{label}</span>
+          <label key={key} className="flex flex-col gap-1">
+            <span className="text-[11px] text-text-3">{label}</span>
             <input className={inputCls} style={inputStyle} value={doc.basic_info[key] ?? ''}
               onChange={(e) => onChange({ ...doc, basic_info: { ...doc.basic_info, [key]: e.target.value } })} />
           </label>
@@ -475,28 +531,83 @@ function BasicInfoCard({ doc, onChange }: { doc: ResumeBlocks; onChange: (d: Res
   )
 }
 
-// \u2500\u2500 \u5b50\u9875 1\uff1a\u4fe1\u606f\u6c60 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-function PoolTab({ onErr }: { onErr: (m: string | null) => void }) {
+// \u2500\u2500 \u5206\u9875 1\uff1a\u7b80\u5386\u5de5\u4f5c\u53f0\uff08\u4fe1\u606f\u6c60 | \u5f53\u524d\u7b80\u5386 | \u9884\u89c8\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function Workbench({ onErr }: { onErr: (m: string | null) => void }) {
   const [pool, setPool] = useState<ResumeBlocks | null>(null)
+  const [doc, setDoc] = useState<ResumeBlocks | null>(null)
+  const [activeName, setActiveName] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [building, setBuilding] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { void API.getPool().then(setPool).catch((e) => onErr((e as Error).message)) }, [])
-  if (!pool) return <div className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</div>
-
-  const save = async () => {
-    setSaving(true); onErr(null); setSaved(false)
-    try { await API.savePool(pool); setSaved(true); window.setTimeout(() => setSaved(false), 3000) }
-    catch (e) { onErr((e as Error).message) } finally { setSaving(false) }
+  const loadAll = () => {
+    void API.getPool().then(setPool).catch((e) => onErr((e as Error).message))
+    void API.getResumeBlocks().then(setDoc).catch((e) => onErr((e as Error).message))
+    void API.getResumes().then((r) => setActiveName(r.items.find((i) => i.slug === r.active)?.name ?? '')).catch(() => {})
   }
-  const build = async () => {
-    if (!window.confirm('\u7528 LLM \u628a\u81ea\u6211\u63cf\u8ff0\u878d\u8fdb\u4fe1\u606f\u6c60\uff08\u4f1a\u91cd\u65b0\u6574\u7406\u5206\u533a\uff0c\u5df2\u6709\u5185\u5bb9\u4fdd\u7559\uff09\u3002\u7ee7\u7eed\uff1f')) return
-    setBuilding(true); onErr(null)
-    try { setPool(await API.buildPool(pool.self_description)) }
-    catch (e) { onErr((e as Error).message) } finally { setBuilding(false) }
+  useEffect(loadAll, [])
+
+  const html = useMemo(() => (doc ? buildResumeHtml(doc) : ''), [doc])
+  if (!pool || !doc) return <div className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</div>
+
+  // \u6c60 \u2192 \u7b80\u5386\uff1a\u590d\u5236\u5757\uff0c\u843d\u5230\u540c\u540d\u5206\u533a\uff08\u6ca1\u6709\u5c31\u6309\u6c60\u91cc\u7684\u5206\u533a\u540d\u65b0\u5efa\uff09
+  const copyBlockToResume = (poolSi: number, poolBi: number, target?: { si: number | null; slot: number }) => {
+    const src = pool.sections[poolSi]
+    const blk = src?.blocks[poolBi]
+    if (!blk) return
+    const sections = doc.sections.map((s) => ({ ...s, blocks: [...s.blocks] }))
+    let si = target && target.si !== null ? target.si : sections.findIndex((s) => s.name === src.name)
+    if (si < 0 || si >= sections.length) {
+      sections.push({ name: src.name, blocks: [] })
+      si = sections.length - 1
+    }
+    if (sections[si].blocks.some((b) => b.title === blk.title && b.time === blk.time)) return  // \u5df2\u5728\u7b80\u5386\u91cc\uff0c\u5ffd\u7565
+    const slot = target && target.si !== null ? Math.min(target.slot, sections[si].blocks.length) : sections[si].blocks.length
+    sections[si].blocks.splice(slot, 0, { ...blk, bullets: [...blk.bullets] })
+    setDoc({ ...doc, sections })
+  }
+  const copySectionToResume = (poolSi: number, slot?: number) => {
+    const src = pool.sections[poolSi]
+    if (!src) return
+    const sections = doc.sections.map((s) => ({ ...s, blocks: [...s.blocks] }))
+    const existing = sections.findIndex((s) => s.name === src.name)
+    const clone = src.blocks.map((b) => ({ ...b, bullets: [...b.bullets] }))
+    if (existing >= 0) {
+      const have = new Set(sections[existing].blocks.map((b) => `${b.title}|${b.time}`))
+      sections[existing].blocks.push(...clone.filter((b) => !have.has(`${b.title}|${b.time}`)))
+    } else {
+      sections.splice(slot ?? sections.length, 0, { name: src.name, blocks: clone })
+    }
+    setDoc({ ...doc, sections })
+  }
+  const onResumeExternalDrop = (it: DragItem, target: { si: number | null; slot: number }) => {
+    if (it.owner !== 'pool') return
+    if (it.kind === 'block') copyBlockToResume(it.si, it.bi, target)
+    else copySectionToResume(it.si, target.si === null ? target.slot : undefined)
+  }
+
+  const saveAll = async () => {
+    setSaving(true); onErr(null); setSaved(false)
+    try {
+      await API.savePool(pool)
+      await API.saveResumeBlocks(doc)
+      setSaved(true); window.setTimeout(() => setSaved(false), 3000)
+    } catch (e) { onErr((e as Error).message) } finally { setSaving(false) }
+  }
+  const exportPdf = async () => {
+    setExporting(true); onErr(null)
+    try {
+      const label = [doc.basic_info.name, activeName].filter(Boolean).join('_') || 'resume'
+      const blob = await API.printResumePdf(buildResumeHtml(doc), label)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `${label}.pdf`
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) { onErr((e as Error).message) } finally { setExporting(false) }
   }
   const upload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -506,236 +617,26 @@ function PoolTab({ onErr }: { onErr: (m: string | null) => void }) {
     catch (e2) { onErr((e2 as Error).message) }
     finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
   }
-
-  const blockCount = pool.sections.reduce((n, s) => n + s.blocks.length, 0)
-  return (
-    <div className="max-w-3xl space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <input ref={fileRef} type="file" accept=".pdf,.docx" onChange={upload} disabled={uploading} className="hidden" id="pool-upload-input" />
-        <label htmlFor="pool-upload-input"
-          className={`cursor-pointer rounded-full px-4 py-2 text-sm text-text-1 transition ${uploading ? 'cursor-not-allowed opacity-50' : 'hover:brightness-110'}`}
-          style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)' }}>
-          {uploading ? '\u89e3\u6790\u4e2d\u2026\uff08\u7ea6 1 \u5206\u949f\uff09' : '\u4e0a\u4f20\u7b80\u5386\u5165\u6c60'}</label>
-        <button type="button" onClick={() => void save()} disabled={saving}
-          className="rounded-full px-5 py-2 text-sm text-white transition hover:brightness-110 disabled:opacity-50"
-          style={{ background: '#0a84ff' }}>{saving ? '\u4fdd\u5b58\u4e2d\u2026' : '\u4fdd\u5b58\u4fe1\u606f\u6c60'}</button>
-        {saved && <span className="text-sm text-signal-green">{'\u2713 \u5df2\u4fdd\u5b58'}</span>}
-        <span className="ml-auto text-xs text-text-3">{`${pool.sections.length} \u4e2a\u5206\u533a \u00b7 ${blockCount} \u6761\u5185\u5bb9`}</span>
-      </div>
-
-      <div className="rounded-xl px-4 py-3 text-xs leading-relaxed text-text-2" style={{ background: 'rgba(10,132,255,0.08)', border: '1px solid rgba(10,132,255,0.2)' }}>
-        {'\u4fe1\u606f\u6c60\u5b58\u653e\u5173\u4e8e\u4f60\u7684\u5168\u90e8\u4fe1\u606f\uff0c\u662f\u6240\u6709\u7b80\u5386\u7684\u7d20\u6750\u6765\u6e90\u3002\u4e0a\u4f20\u7b80\u5386\u4f1a\u628a\u89e3\u6790\u7ed3\u679c\u5e76\u5165\u6c60\u4e2d\uff08\u540c\u540d\u6761\u76ee\u66f4\u65b0\u3001\u65b0\u6761\u76ee\u8ffd\u52a0\uff0c\u4e0d\u4f1a\u5220\u4e1c\u897f\uff09\u3002\u505a\u5b9a\u5236\u7b80\u5386\u65f6\uff0cAI \u4ece\u6c60\u91cc\u6311\u9009\u5408\u9002\u7684\u5185\u5bb9\u7ec4\u5408\u2014\u2014\u6c60\u8d8a\u5168\uff0c\u6311\u5f97\u8d8a\u51c6\u3002'}
-      </div>
-
-      <BasicInfoCard doc={pool} onChange={setPool} />
-
-      <Card title={'\u81ea\u6211\u63cf\u8ff0'} dev="PoolSelfDesc" action={
-        <button type="button" onClick={() => void build()} disabled={building}
-          className="rounded-lg px-3 py-1.5 text-xs text-text-1 transition disabled:opacity-40"
-          style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
-          {building ? '\u6574\u7406\u4e2d\u2026' : '\u878d\u5165\u4fe1\u606f\u6c60'}</button>
-      }>
-        <p className="mb-2 text-xs text-text-3">{'\u7b80\u5386\u91cc\u6ca1\u5199\u5168\u7684\u7ecf\u5386\u3001\u7279\u957f\u3001\u60f3\u5f3a\u8c03\u7684\u4e1c\u897f\uff0c\u5199\u5728\u8fd9\u91cc\uff1b\u70b9\u53f3\u4e0a\u8ba9 LLM \u6574\u7406\u8fdb\u4e0b\u65b9\u5206\u533a\u3002'}</p>
-        <textarea className={inputCls} style={{ ...inputStyle, minHeight: 110 }} value={pool.self_description}
-          onChange={(e) => setPool({ ...pool, self_description: e.target.value })} />
-      </Card>
-
-      <Card title={'\u5168\u90e8\u5185\u5bb9'} dev="PoolSections">
-        <p className="mb-4 text-[11px] text-text-3">{'\u5206\u533a\u540d\u53ef\u76f4\u63a5\u6539\uff08\u5982\u300c\u6e38\u620f\u7ecf\u5386\u300d\uff09\uff1b\u6761\u76ee\u70b9\u5f00\u7f16\u8f91\uff0c\u6761\u76ee\u548c\u5206\u533a\u90fd\u53ef\u62d6\u52a8\u6392\u5e8f\u3002'}</p>
-        <SectionEditor doc={pool} onChange={setPool}
-          summaryHint={'\u6982\u62ec\uff1a\u4e00\u53e5\u8bdd\u8bf4\u8fd9\u6761\u7ecf\u5386\u662f\u4ec0\u4e48\uff08\u4e0d\u4e0a\u7b80\u5386\uff1bAI \u6309\u5c97\u4f4d\u6311\u5185\u5bb9\u9760\u5b83\u2014\u2014\u5199\u5f97\u51c6\uff0c\u6311\u5f97\u51c6\uff09'} />
-      </Card>
-    </div>
-  )
-}
-
-// \u2500\u2500 \u5b50\u9875 2\uff1a\u7b80\u5386\u5236\u4f5c \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-function SidePanel({ resumes, exports, busy, onSwitch, onCreate, onDelete, onMeta, onDeleteExport, onCompose }: {
-  resumes: ResumeIndex | null
-  exports: ResumeExport[]
-  busy: boolean
-  onSwitch: (slug: string) => void
-  onCreate: (name: string, target: string) => void
-  onDelete: (slug: string) => void
-  onMeta: (slug: string, patch: { name?: string; target?: string }) => void
-  onDeleteExport: (fname: string) => void
-  onCompose: (jobTitle: string, jdText: string) => void
-}) {
-  const [newName, setNewName] = useState('')
-  const [newTarget, setNewTarget] = useState('')
-  const [jobTitle, setJobTitle] = useState('')
-  const [jdText, setJdText] = useState('')
-  const [composing, setComposing] = useState(false)
-  return (
-    <div className="w-full shrink-0 space-y-4 lg:w-64">
-      <Card title={'AI \u5b9a\u5236\u7b80\u5386'} dev="ResumeCompose">
-        <p className="mb-2.5 text-[11px] leading-relaxed text-text-3">{'\u586b\u76ee\u6807\u5c97\u4f4d\uff0cAI \u4ece\u4fe1\u606f\u6c60\u6311\u51fa\u5408\u9002\u5185\u5bb9\u7ec4\u5408\u6210\u4e00\u4efd\u65b0\u7b80\u5386\uff08\u81ea\u52a8\u5207\u6362\u8fc7\u53bb\u7f16\u8f91\uff09\u3002'}</p>
-        <div className="space-y-1.5">
-          <input className="w-full rounded bg-bg-card px-2 py-1.5 text-xs text-text-1 focus:outline-none" style={inputStyle}
-            placeholder={'\u76ee\u6807\u5c97\u4f4d\uff08\u5982 \u6e38\u620f\u7b56\u5212\uff09'} value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} />
-          <textarea className="w-full rounded bg-bg-card px-2 py-1.5 text-[11px] text-text-2 focus:outline-none" style={{ ...inputStyle, minHeight: 60 }}
-            placeholder={'JD \u6b63\u6587\uff08\u53ef\u9009\uff0c\u7c98\u4e0a\u66f4\u51c6\uff09'} value={jdText} onChange={(e) => setJdText(e.target.value)} />
-          <button type="button" disabled={busy || composing || !(jobTitle.trim() || jdText.trim())}
-            onClick={async () => { setComposing(true); try { await onCompose(jobTitle.trim(), jdText.trim()); setJobTitle(''); setJdText('') } finally { setComposing(false) } }}
-            className="w-full rounded-lg px-2 py-1.5 text-xs text-white transition hover:brightness-110 disabled:opacity-40"
-            style={{ background: '#0a84ff' }}>{composing ? '\u7ec4\u5408\u4e2d\u2026' : '\u6309\u5c97\u4f4d\u751f\u6210\u7b80\u5386'}</button>
-        </div>
-      </Card>
-
-      <Card title={'\u6211\u7684\u7b80\u5386'} dev="ResumeList">
-        <div className="space-y-2">
-          {(resumes?.items ?? []).map((it) => {
-            const isActive = it.slug === resumes?.active
-            return (
-              <div key={it.slug}
-                className={`rounded-xl p-3 transition ${isActive ? '' : 'cursor-pointer hover:brightness-110'}`}
-                style={{ background: isActive ? 'rgba(10,132,255,0.12)' : 'rgba(255,255,255,0.04)', border: isActive ? '1px solid rgba(10,132,255,0.45)' : '1px solid rgba(255,255,255,0.07)' }}
-                onClick={() => { if (!isActive && !busy) onSwitch(it.slug) }}>
-                {isActive ? (
-                  <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
-                    <input className="w-full rounded bg-bg-card px-2 py-1 text-xs font-medium text-text-1 focus:outline-none" style={inputStyle}
-                      value={it.name} onChange={(e) => onMeta(it.slug, { name: e.target.value })} />
-                    <input className="w-full rounded bg-bg-card px-2 py-1 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
-                      placeholder={'\u76ee\u6807\u5c97\u4f4d'} value={it.target} onChange={(e) => onMeta(it.slug, { target: e.target.value })} />
-                    <p className="text-[10px] text-signal-bright">{'\u25cf \u5f53\u524d\u7f16\u8f91'}</p>
-                  </div>
-                ) : (
-                  <div className="flex items-start justify-between gap-1">
-                    <div className="min-w-0">
-                      <p className="truncate text-xs font-medium text-text-1">{it.name}</p>
-                      {it.target && <p className="truncate text-[11px] text-text-3">{it.target}</p>}
-                    </div>
-                    <button type="button" title={'\u5220\u9664'} onClick={(e) => { e.stopPropagation(); onDelete(it.slug) }}
-                      className="shrink-0 px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-        <div className="mt-3 space-y-1.5 border-t pt-3" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
-          <input className="w-full rounded bg-bg-card px-2 py-1.5 text-xs text-text-1 focus:outline-none" style={inputStyle}
-            placeholder={'\u65b0\u7b80\u5386\u540d\u79f0'} value={newName} onChange={(e) => setNewName(e.target.value)} />
-          <input className="w-full rounded bg-bg-card px-2 py-1.5 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
-            placeholder={'\u76ee\u6807\u5c97\u4f4d\uff08\u53ef\u9009\uff09'} value={newTarget} onChange={(e) => setNewTarget(e.target.value)} />
-          <button type="button" disabled={busy || !newName.trim()}
-            onClick={() => { onCreate(newName.trim(), newTarget.trim()); setNewName(''); setNewTarget('') }}
-            className="w-full rounded-lg px-2 py-1.5 text-xs text-signal-bright transition hover:bg-signal-blue/10 disabled:opacity-40">
-            {'+ \u590d\u5236\u5f53\u524d\u4e3a\u65b0\u7b80\u5386'}</button>
-        </div>
-      </Card>
-
-      <Card title={'\u6700\u8fd1\u751f\u6210'} dev="ResumeExports">
-        {exports.length === 0 ? (
-          <p className="text-[11px] text-text-3">{'\u8fd8\u6ca1\u6709\u5bfc\u51fa\u8bb0\u5f55\uff1b\u70b9\u300c\u5bfc\u51fa PDF\u300d\u540e\u4f1a\u5b58\u6863\u5728\u8fd9\u91cc\u3002'}</p>
-        ) : (
-          <div className="space-y-1.5">
-            {exports.map((ex) => (
-              <div key={ex.file} className="flex items-center justify-between gap-1 rounded-lg px-2 py-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
-                <a href={`/api/resume/exports/${encodeURIComponent(ex.file)}`} target="_blank" rel="noreferrer"
-                  className="min-w-0 flex-1 truncate text-[11px] text-signal-bright transition hover:brightness-125" title={ex.file}>
-                  {ex.file.replace(/\.pdf$/, '')}
-                </a>
-                <span className="shrink-0 text-[10px] text-text-3">{Math.max(1, Math.round(ex.size / 1024))}{' KB'}</span>
-                <button type="button" title={'\u5220\u9664'} onClick={() => onDeleteExport(ex.file)}
-                  className="shrink-0 px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-    </div>
-  )
-}
-
-function ResumeTab({ onErr }: { onErr: (m: string | null) => void }) {
-  const [doc, setDoc] = useState<ResumeBlocks | null>(null)
-  const [resumes, setResumes] = useState<ResumeIndex | null>(null)
-  const [exportsList, setExportsList] = useState<ResumeExport[]>([])
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [exporting, setExporting] = useState(false)
-  const [switching, setSwitching] = useState(false)
-  const metaTimer = useRef<number | null>(null)
-
-  const refreshMeta = () => {
-    void API.getResumes().then(setResumes).catch(() => {})
-    void API.getResumeExports().then((r) => setExportsList(r.exports)).catch(() => {})
+  const buildPool = async () => {
+    if (!window.confirm('\u7528 LLM \u628a\u81ea\u6211\u63cf\u8ff0\u878d\u8fdb\u4fe1\u606f\u6c60\uff08\u91cd\u65b0\u6574\u7406\u5206\u533a\uff0c\u5df2\u6709\u5185\u5bb9\u4fdd\u7559\uff09\u3002\u7ee7\u7eed\uff1f')) return
+    setBuilding(true); onErr(null)
+    try { setPool(await API.buildPool(pool.self_description)) }
+    catch (e) { onErr((e as Error).message) } finally { setBuilding(false) }
   }
-  useEffect(() => {
-    void API.getResumeBlocks().then(setDoc).catch((e) => onErr((e as Error).message))
-    refreshMeta()
-  }, [])
 
-  const html = useMemo(() => (doc ? buildResumeHtml(doc) : ''), [doc])
-  if (!doc) return <div className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</div>
-
-  const activeMeta = resumes?.items.find((it) => it.slug === resumes.active)
-  const save = async () => {
-    setSaving(true); onErr(null); setSaved(false)
-    try { await API.saveResumeBlocks(doc); setSaved(true); window.setTimeout(() => setSaved(false), 3000); refreshMeta() }
-    catch (e) { onErr((e as Error).message) } finally { setSaving(false) }
-  }
-  const exportPdf = async () => {
-    setExporting(true); onErr(null)
-    try {
-      const label = [doc.basic_info.name, activeMeta?.name].filter(Boolean).join('_') || 'resume'
-      const blob = await API.printResumePdf(buildResumeHtml(doc), label)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = `${label}.pdf`
-      document.body.appendChild(a); a.click(); a.remove()
-      URL.revokeObjectURL(url)
-      refreshMeta()
-    } catch (e) { onErr((e as Error).message) } finally { setExporting(false) }
-  }
-  const switchResume = async (slug: string) => {
-    setSwitching(true); onErr(null)
-    try {
-      await API.saveResumeBlocks(doc)
-      await API.activateResume(slug)
-      setDoc(await API.getResumeBlocks())
-      refreshMeta()
-    } catch (e) { onErr((e as Error).message) } finally { setSwitching(false) }
-  }
-  const createResume = async (name: string, target: string) => {
-    setSwitching(true); onErr(null)
-    try {
-      await API.saveResumeBlocks(doc)
-      const item = await API.createResume(name, target, true)
-      await API.activateResume(item.slug)
-      setDoc(await API.getResumeBlocks())
-      refreshMeta()
-    } catch (e) { onErr((e as Error).message) } finally { setSwitching(false) }
-  }
-  const compose = async (jobTitle: string, jdText: string) => {
-    setSwitching(true); onErr(null)
-    try {
-      await API.saveResumeBlocks(doc)
-      await API.composeResume({ job_title: jobTitle, jd_text: jdText })
-      setDoc(await API.getResumeBlocks())
-      refreshMeta()
-    } catch (e) { onErr((e as Error).message) } finally { setSwitching(false) }
-  }
-  const deleteResume = async (slug: string) => {
-    if (!window.confirm('\u5220\u9664\u8fd9\u4efd\u7b80\u5386\uff1f\u4e0d\u53ef\u6062\u590d\u3002')) return
-    try { await API.deleteResume(slug); setDoc(await API.getResumeBlocks()); refreshMeta() }
-    catch (e) { onErr((e as Error).message) }
-  }
-  const updateMeta = (slug: string, patch: { name?: string; target?: string }) => {
-    setResumes((r) => (r ? { ...r, items: r.items.map((it) => (it.slug === slug ? { ...it, ...patch } : it)) } : r))
-    if (metaTimer.current) window.clearTimeout(metaTimer.current)
-    metaTimer.current = window.setTimeout(() => { void API.updateResumeMeta(slug, patch).catch(() => {}) }, 600)
-  }
-  const deleteExport = async (fname: string) => {
-    try { await API.deleteResumeExport(fname); setExportsList((l) => l.filter((x) => x.file !== fname)) }
-    catch (e) { onErr((e as Error).message) }
-  }
+  const poolCount = pool.sections.reduce((n, s) => n + s.blocks.length, 0)
+  const docCount = doc.sections.reduce((n, s) => n + s.blocks.length, 0)
+  const colHead = 'mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-3'
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => void save()} disabled={saving}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input ref={fileRef} type="file" accept=".pdf,.docx" onChange={upload} disabled={uploading} className="hidden" id="wb-upload" />
+        <label htmlFor="wb-upload"
+          className={`cursor-pointer rounded-full px-4 py-2 text-sm text-text-1 transition ${uploading ? 'cursor-not-allowed opacity-50' : 'hover:brightness-110'}`}
+          style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)' }}>
+          {uploading ? '\u89e3\u6790\u4e2d\u2026\uff08\u7ea6 1 \u5206\u949f\uff09' : '\u4e0a\u4f20\u7b80\u5386\u5165\u6c60'}</label>
+        <button type="button" onClick={() => void saveAll()} disabled={saving}
           className="rounded-full px-5 py-2 text-sm text-white transition hover:brightness-110 disabled:opacity-50"
           style={{ background: '#0a84ff' }}>{saving ? '\u4fdd\u5b58\u4e2d\u2026' : '\u4fdd\u5b58'}</button>
         <button type="button" onClick={() => void exportPdf()} disabled={exporting}
@@ -743,35 +644,225 @@ function ResumeTab({ onErr }: { onErr: (m: string | null) => void }) {
           style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)' }}>
           {exporting ? '\u5bfc\u51fa\u4e2d\u2026' : '\u5bfc\u51fa PDF'}</button>
         {saved && <span className="text-sm text-signal-green">{'\u2713 \u5df2\u4fdd\u5b58'}</span>}
-        {switching && <span className="text-sm text-text-3">{'\u5904\u7406\u4e2d\u2026'}</span>}
-        <span className="ml-auto text-xs text-text-3">{'\u8fd9\u4efd\u7b80\u5386\u7684\u5185\u5bb9\u6539\u52a8\u4e0d\u5f71\u54cd\u4fe1\u606f\u6c60'}</span>
+        <span className="ml-auto text-xs text-text-3">{'\u4ece\u4fe1\u606f\u6c60\u62d6\u5185\u5bb9\u5230\u4e2d\u95f4\uff0c\u6216\u70b9\u6761\u76ee\u7684 \u2192'}</span>
       </div>
 
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
-        <SidePanel resumes={resumes} exports={exportsList} busy={switching}
-          onSwitch={(s) => void switchResume(s)} onCreate={(n, t) => void createResume(n, t)}
-          onDelete={(s) => void deleteResume(s)} onMeta={updateMeta} onDeleteExport={(f) => void deleteExport(f)}
-          onCompose={compose} />
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+        {/* \u2460 \u4fe1\u606f\u6c60 */}
+        <div className="min-w-0 flex-1 xl:max-w-[26rem]">
+          <div className={colHead}>{'\u4fe1\u606f\u6c60'}<DevLabel name="PoolColumn" />
+            <span className="font-normal normal-case text-text-3">{`${poolCount} \u6761`}</span></div>
+          <div className="space-y-3">
+            <Card title={'\u57fa\u672c\u4fe1\u606f'} dev="PoolBasic">
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                {BASIC_FIELDS.map(({ key, label }) => (
+                  <label key={key} className="flex flex-col gap-1">
+                    <span className="text-[11px] text-text-3">{label}</span>
+                    <input className={inputCls} style={inputStyle} value={pool.basic_info[key] ?? ''}
+                      onChange={(e) => {
+                        const bi = { ...pool.basic_info, [key]: e.target.value }
+                        setPool({ ...pool, basic_info: bi })
+                        setDoc({ ...doc, basic_info: bi })    // \u57fa\u672c\u4fe1\u606f\u968f\u6c60\u540c\u6b65\u8fdb\u5f53\u524d\u7b80\u5386
+                      }} />
+                  </label>
+                ))}
+              </div>
+            </Card>
+            <Card title={'\u81ea\u6211\u63cf\u8ff0'} dev="PoolSelfDesc" action={
+              <button type="button" onClick={() => void buildPool()} disabled={building}
+                className="rounded-lg px-2.5 py-1 text-[11px] text-text-1 transition disabled:opacity-40"
+                style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                {building ? '\u6574\u7406\u4e2d\u2026' : '\u878d\u5165\u4fe1\u606f\u6c60'}</button>
+            }>
+              <textarea className={inputCls} style={{ ...inputStyle, minHeight: 70 }} value={pool.self_description}
+                placeholder={'\u7b80\u5386\u6ca1\u5199\u5168\u7684\u7ecf\u5386/\u7279\u957f\uff0c\u5199\u8fd9\u91cc\u518d\u70b9\u300c\u878d\u5165\u4fe1\u606f\u6c60\u300d'}
+                onChange={(e) => setPool({ ...pool, self_description: e.target.value })} />
+            </Card>
+            <Card title={'\u5168\u90e8\u7d20\u6750'} dev="PoolSections">
+              <p className="mb-3 text-[10px] leading-relaxed text-text-3">{'\u8fd9\u91cc\u662f\u4f60\u7684\u5168\u90e8\u4fe1\u606f\uff0c\u6295\u4ec0\u4e48\u5c97\u90fd\u4ece\u8fd9\u91cc\u6311\u3002\u62d6\u6761\u76ee\u5230\u4e2d\u95f4\u6216\u70b9 \u2192 \u52a0\u5165\u5f53\u524d\u7b80\u5386\uff08\u6c60\u91cc\u4ecd\u4fdd\u7559\uff09\u3002'}</p>
+              <SectionEditor doc={pool} onChange={setPool} owner="pool" compact
+                onQuickAdd={(si, bi) => copyBlockToResume(si, bi)}
+                onQuickAddSection={(si) => copySectionToResume(si)}
+                summaryHint={'\u6982\u62ec\uff08\u4e0d\u4e0a\u7b80\u5386\uff0cAI \u6311\u5757\u7d22\u5f15\uff09'} />
+            </Card>
+          </div>
+        </div>
 
-        <div className="min-w-0 flex-1 space-y-4 lg:max-w-[500px]">
-          <BasicInfoCard doc={doc} onChange={setDoc} />
+        {/* \u2461 \u5f53\u524d\u7b80\u5386 */}
+        <div className="min-w-0 flex-1 xl:max-w-[26rem]">
+          <div className={colHead}>{'\u5f53\u524d\u7b80\u5386'}<DevLabel name="ResumeColumn" />
+            <span className="font-normal normal-case text-text-3">{activeName ? `${activeName} \u00b7 ${docCount} \u6761` : `${docCount} \u6761`}</span></div>
           <Card title={'\u7b80\u5386\u5185\u5bb9'} dev="ResumeSections">
-            <p className="mb-4 text-[11px] text-text-3">{'\u70b9\u6761\u76ee\u5c55\u5f00\u7f16\u8f91\uff1b\u6761\u76ee\u548c\u5206\u533a\u90fd\u53ef\u6309\u4f4f\u62d6\u52a8\u6392\u5e8f\uff0c\u84dd\u7ebf\u662f\u843d\u70b9\u3002'}</p>
-            <SectionEditor doc={doc} onChange={setDoc}
-              summaryHint={'\u6982\u62ec\uff08\u4e0d\u4e0a\u7b80\u5386\uff0c\u4ec5\u4f5c AI \u6311\u5757\u7d22\u5f15\uff09'} />
+            <p className="mb-3 text-[10px] leading-relaxed text-text-3">{'\u8fd9\u4efd\u7b80\u5386\u5b9e\u9645\u5305\u542b\u7684\u5185\u5bb9\u3002\u6539\u5b83\u4e0d\u5f71\u54cd\u4fe1\u606f\u6c60\uff1b\u5220\u6761\u76ee\u53ea\u4ece\u8fd9\u4efd\u7b80\u5386\u79fb\u9664\u3002'}</p>
+            <SectionEditor doc={doc} onChange={setDoc} owner="resume" compact
+              onExternalDrop={onResumeExternalDrop}
+              summaryHint={'\u6982\u62ec\uff08\u4e0d\u4e0a\u7b80\u5386\uff09'} />
           </Card>
         </div>
 
+        {/* \u2462 \u9884\u89c8 */}
         <div className="min-w-0 flex-1">
-          <div className="sticky top-4">
-            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-3">{'\u5b9e\u65f6\u9884\u89c8\uff08A4\uff09'}<DevLabel name="ResumePreview" /></div>
-            <A4Preview html={html} />
-          </div>
+          <div className={colHead}>{'\u9884\u89c8\uff08A4\uff09'}<DevLabel name="ResumePreview" /></div>
+          <div className="sticky top-4"><A4Preview html={html} /></div>
         </div>
       </div>
+    </div>
+  )
+}
 
-      <details className="mt-6">
-        <summary className="cursor-pointer select-none text-sm text-text-3 transition hover:text-text-1">{'\u5c97\u4f4d\u5b9a\u5236\uff08\u8fdb\u9636\uff09\uff1a\u9884\u5236\u6a21\u677f / \u6309\u5df2\u6295\u5c97\u4f4d\u751f\u6210\u65b9\u6848\u4e0e\u62db\u547c\u8bed'}</summary>
+// \u2500\u2500 \u5206\u9875 2\uff1a\u5df2\u4fdd\u5b58\u7b80\u5386\uff08\u591a\u4efd\u7ba1\u7406 + \u6700\u8fd1\u751f\u6210 + AI \u81ea\u52a8\u5b9a\u5236\u5f00\u5173\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function SavedTab({ onErr }: { onErr: (m: string | null) => void }) {
+  const [resumes, setResumes] = useState<ResumeIndex | null>(null)
+  const [exportsList, setExportsList] = useState<ResumeExport[]>([])
+  const [busy, setBusy] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newTarget, setNewTarget] = useState('')
+  const [aiOn, setAiOn] = useState(() => window.localStorage.getItem('resume.aiCompose') === 'on')
+  const [jobTitle, setJobTitle] = useState('')
+  const [jdText, setJdText] = useState('')
+  const [composing, setComposing] = useState(false)
+  const metaTimer = useRef<number | null>(null)
+
+  const refresh = () => {
+    void API.getResumes().then(setResumes).catch((e) => onErr((e as Error).message))
+    void API.getResumeExports().then((r) => setExportsList(r.exports)).catch(() => {})
+  }
+  useEffect(refresh, [])
+
+  const activate = async (slug: string) => {
+    setBusy(true); onErr(null)
+    try { await API.activateResume(slug); refresh() }
+    catch (e) { onErr((e as Error).message) } finally { setBusy(false) }
+  }
+  const create = async () => {
+    setBusy(true); onErr(null)
+    try {
+      const item = await API.createResume(newName.trim(), newTarget.trim(), true)
+      await API.activateResume(item.slug)
+      setNewName(''); setNewTarget(''); refresh()
+    } catch (e) { onErr((e as Error).message) } finally { setBusy(false) }
+  }
+  const remove = async (slug: string) => {
+    if (!window.confirm('\u5220\u9664\u8fd9\u4efd\u7b80\u5386\uff1f\u4e0d\u53ef\u6062\u590d\u3002')) return
+    try { await API.deleteResume(slug); refresh() } catch (e) { onErr((e as Error).message) }
+  }
+  const updateMeta = (slug: string, patch: { name?: string; target?: string }) => {
+    setResumes((r) => (r ? { ...r, items: r.items.map((it) => (it.slug === slug ? { ...it, ...patch } : it)) } : r))
+    if (metaTimer.current) window.clearTimeout(metaTimer.current)
+    metaTimer.current = window.setTimeout(() => { void API.updateResumeMeta(slug, patch).catch(() => {}) }, 600)
+  }
+  const compose = async () => {
+    setComposing(true); onErr(null)
+    try { await API.composeResume({ job_title: jobTitle.trim(), jd_text: jdText.trim() }); setJobTitle(''); setJdText(''); refresh() }
+    catch (e) { onErr((e as Error).message) } finally { setComposing(false) }
+  }
+  const toggleAi = () => {
+    const next = !aiOn
+    setAiOn(next)
+    window.localStorage.setItem('resume.aiCompose', next ? 'on' : 'off')
+  }
+
+  return (
+    <div className="max-w-4xl space-y-4">
+      <Card title={'\u6211\u7684\u7b80\u5386'} dev="ResumeList">
+        <p className="mb-3 text-[11px] leading-relaxed text-text-3">{'\u7ed9\u4e0d\u540c\u5c97\u4f4d\u5404\u5b58\u4e00\u4efd\uff1b\u9009\u4e2d\u7684\u90a3\u4efd\u4f1a\u5728\u300c\u7b80\u5386\u5de5\u4f5c\u53f0\u300d\u91cc\u7f16\u8f91\u3002\u6295\u9012\u65f6\u6309\u5c97\u4f4d\u9009\u7528\u5bf9\u5e94\u7248\u672c\u3002'}</p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {(resumes?.items ?? []).map((it) => {
+            const isActive = it.slug === resumes?.active
+            return (
+              <div key={it.slug}
+                className={`rounded-xl p-3 transition ${isActive ? '' : 'cursor-pointer hover:brightness-110'}`}
+                style={{ background: isActive ? 'rgba(10,132,255,0.12)' : 'rgba(255,255,255,0.04)', border: isActive ? '1px solid rgba(10,132,255,0.45)' : '1px solid rgba(255,255,255,0.07)' }}
+                onClick={() => { if (!isActive && !busy) void activate(it.slug) }}>
+                <div className="space-y-1.5" onClick={(e) => { if (isActive) e.stopPropagation() }}>
+                  {isActive ? (
+                    <>
+                      <input className="w-full rounded bg-bg-card px-2 py-1 text-xs font-medium text-text-1 focus:outline-none" style={inputStyle}
+                        value={it.name} onChange={(e) => updateMeta(it.slug, { name: e.target.value })} />
+                      <input className="w-full rounded bg-bg-card px-2 py-1 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
+                        placeholder={'\u76ee\u6807\u5c97\u4f4d'} value={it.target} onChange={(e) => updateMeta(it.slug, { target: e.target.value })} />
+                      <p className="text-[10px] text-signal-bright">{'\u25cf \u6b63\u5728\u7f16\u8f91'}</p>
+                    </>
+                  ) : (
+                    <div className="flex items-start justify-between gap-1">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-medium text-text-1">{it.name}</p>
+                        <p className="truncate text-[11px] text-text-3">{it.target || '\u672a\u8bbe\u76ee\u6807\u5c97\u4f4d'}</p>
+                      </div>
+                      <button type="button" title={'\u5220\u9664'} onClick={(e) => { e.stopPropagation(); void remove(it.slug) }}
+                        className="shrink-0 px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          <input className="w-40 rounded bg-bg-card px-2 py-1.5 text-xs text-text-1 focus:outline-none" style={inputStyle}
+            placeholder={'\u65b0\u7b80\u5386\u540d\u79f0'} value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <input className="w-40 rounded bg-bg-card px-2 py-1.5 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
+            placeholder={'\u76ee\u6807\u5c97\u4f4d\uff08\u53ef\u9009\uff09'} value={newTarget} onChange={(e) => setNewTarget(e.target.value)} />
+          <button type="button" disabled={busy || !newName.trim()} onClick={() => void create()}
+            className="rounded-lg px-3 py-1.5 text-xs text-signal-bright transition hover:bg-signal-blue/10 disabled:opacity-40">
+            {'+ \u590d\u5236\u5f53\u524d\u4e3a\u65b0\u7b80\u5386'}</button>
+        </div>
+      </Card>
+
+      <Card title={'\u6700\u8fd1\u751f\u6210'} dev="ResumeExports">
+        {exportsList.length === 0 ? (
+          <p className="text-[11px] text-text-3">{'\u8fd8\u6ca1\u6709\u5bfc\u51fa\u8bb0\u5f55\uff1b\u5728\u5de5\u4f5c\u53f0\u70b9\u300c\u5bfc\u51fa PDF\u300d\u540e\u4f1a\u5b58\u6863\u5728\u8fd9\u91cc\u3002'}</p>
+        ) : (
+          <div className="space-y-1.5">
+            {exportsList.map((ex) => (
+              <div key={ex.file} className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <a href={`/api/resume/exports/${encodeURIComponent(ex.file)}`} target="_blank" rel="noreferrer"
+                  className="min-w-0 flex-1 truncate text-[11px] text-signal-bright transition hover:brightness-125">{ex.file.replace(/\.pdf$/, '')}</a>
+                <span className="shrink-0 text-[10px] text-text-3">{ex.mtime}</span>
+                <span className="shrink-0 text-[10px] text-text-3">{Math.max(1, Math.round(ex.size / 1024))}{' KB'}</span>
+                <button type="button" title={'\u5220\u9664'}
+                  onClick={() => { void API.deleteResumeExport(ex.file).then(() => setExportsList((l) => l.filter((x) => x.file !== ex.file))).catch((e) => onErr((e as Error).message)) }}
+                  className="shrink-0 px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card title={'AI \u81ea\u52a8\u5b9a\u5236\uff08\u5b9e\u9a8c\uff09'} dev="ResumeCompose" action={
+        <button type="button" onClick={toggleAi}
+          className="flex items-center gap-2 rounded-full px-1 py-1 text-[11px] text-text-3 transition hover:text-text-1">
+          <span className="relative inline-block h-4 w-7 rounded-full transition"
+            style={{ background: aiOn ? '#0a84ff' : 'rgba(255,255,255,0.15)' }}>
+            <span className="absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all" style={{ left: aiOn ? 14 : 2 }} />
+          </span>
+          {aiOn ? '\u5df2\u5f00\u542f' : '\u5df2\u5173\u95ed'}
+        </button>
+      }>
+        <p className="text-[11px] leading-relaxed text-text-3">
+          {'\u9ed8\u8ba4\u5173\u95ed\uff1a\u7b80\u5386\u5185\u5bb9\u7531\u4f60\u81ea\u5df1\u6311\u9009\u7ec4\u5408\uff0cAI \u53ea\u8d1f\u8d23\u6295\u9012\u65f6\u5224\u65ad\u8be5\u53d1\u54ea\u4e00\u4efd\u3002\u5f00\u542f\u540e\uff0c\u53ef\u4ee5\u8ba9 AI \u76f4\u63a5\u6309\u5c97\u4f4d JD \u4ece\u4fe1\u606f\u6c60\u6311\u5185\u5bb9\u3001\u751f\u6210\u4e00\u6574\u4efd\u65b0\u7b80\u5386\uff08\u5b83\u53ea\u6311\u9009\u4e0e\u6392\u5e8f\uff0c\u4e0d\u6539\u5199\u4f60\u7684\u539f\u6587\uff09\u3002'}
+        </p>
+        {aiOn && (
+          <div className="mt-3 flex flex-wrap items-end gap-2 border-t pt-3" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] text-text-3">{'\u76ee\u6807\u5c97\u4f4d'}</span>
+              <input className="w-44 rounded bg-bg-card px-2 py-1.5 text-xs text-text-1 focus:outline-none" style={inputStyle}
+                placeholder={'\u5982 \u6e38\u620f\u7b56\u5212'} value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} />
+            </label>
+            <label className="flex min-w-[16rem] flex-1 flex-col gap-1">
+              <span className="text-[11px] text-text-3">{'JD \u6b63\u6587\uff08\u53ef\u9009\uff0c\u7c98\u4e0a\u66f4\u51c6\uff09'}</span>
+              <textarea className="w-full rounded bg-bg-card px-2 py-1.5 text-[11px] text-text-2 focus:outline-none" style={{ ...inputStyle, minHeight: 52 }}
+                value={jdText} onChange={(e) => setJdText(e.target.value)} />
+            </label>
+            <button type="button" disabled={composing || !(jobTitle.trim() || jdText.trim())} onClick={() => void compose()}
+              className="rounded-lg px-4 py-2 text-xs text-white transition hover:brightness-110 disabled:opacity-40"
+              style={{ background: '#0a84ff' }}>{composing ? '\u7ec4\u5408\u4e2d\u2026' : '\u751f\u6210\u65b0\u7b80\u5386'}</button>
+          </div>
+        )}
+      </Card>
+
+      <details>
+        <summary className="cursor-pointer select-none text-sm text-text-3 transition hover:text-text-1">{'\u8fdb\u9636\uff1a\u9884\u5236\u6a21\u677f / \u6309\u5df2\u6295\u5c97\u4f4d\u751f\u6210\u65b9\u6848\u4e0e\u62db\u547c\u8bed'}</summary>
         <div className="mt-4 space-y-5">
           <TemplatesCard />
           <TailorCard />
@@ -782,23 +873,23 @@ function ResumeTab({ onErr }: { onErr: (m: string | null) => void }) {
 }
 
 export default function Resume() {
-  const [tab, setTab] = useState<'resume' | 'pool'>(() =>
-    (window.localStorage.getItem('resume.tab') as 'resume' | 'pool') || 'resume')
+  const [tab, setTab] = useState<'workbench' | 'saved'>(() =>
+    (window.localStorage.getItem('resume.tab2') as 'workbench' | 'saved') || 'workbench')
   const [err, setErr] = useState<string | null>(null)
-  const switchTab = (t: 'resume' | 'pool') => { setTab(t); setErr(null); window.localStorage.setItem('resume.tab', t) }
+  const switchTab = (t: 'workbench' | 'saved') => { setTab(t); setErr(null); window.localStorage.setItem('resume.tab2', t) }
 
   return (
     <div className="relative">
       <DevLabel name="ResumePage" float />
-      <div className="mb-4 inline-flex gap-1 rounded-xl bg-bg-card2 p-1" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
-        {([['resume', '\u7b80\u5386\u5236\u4f5c'], ['pool', '\u4fe1\u606f\u6c60']] as const).map(([k, label]) => (
+      <div className="mb-3 inline-flex gap-1 rounded-xl bg-bg-card2 p-1" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+        {([['workbench', '\u7b80\u5386\u5de5\u4f5c\u53f0'], ['saved', '\u5df2\u4fdd\u5b58\u7b80\u5386']] as const).map(([k, label]) => (
           <button key={k} type="button" onClick={() => switchTab(k)}
             className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${tab === k ? 'text-white' : 'text-text-3 hover:text-text-1'}`}
             style={tab === k ? { background: '#0a84ff' } : undefined}>{label}</button>
         ))}
       </div>
-      {err && <div className="mb-4 rounded-lg bg-signal-red/10 px-4 py-2 text-xs text-signal-red">{err}</div>}
-      {tab === 'resume' ? <ResumeTab onErr={setErr} /> : <PoolTab onErr={setErr} />}
+      {err && <div className="mb-3 rounded-lg bg-signal-red/10 px-4 py-2 text-xs text-signal-red">{err}</div>}
+      {tab === 'workbench' ? <Workbench onErr={setErr} /> : <SavedTab onErr={setErr} />}
     </div>
   )
 }
