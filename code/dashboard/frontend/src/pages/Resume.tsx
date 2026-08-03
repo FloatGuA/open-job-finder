@@ -597,7 +597,7 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
     if (!window.confirm(CONFIRM_BUILD)) return
     setBuilding(true); onErr(null); setBuildNote(null)
     try {
-      if (poolDirty) await savePool()          // 先落盘，避免 LLM 结果覆盖掉未保存的手改
+      if (poolDirty) await savePool()          // \u5148\u843d\u76d8\uff0c\u907f\u514d LLM \u7ed3\u679c\u8986\u76d6\u6389\u672a\u4fdd\u5b58\u7684\u624b\u6539
       const r = await API.buildPool(pool.self_description)
       setPool(r)
       const st = r._stats
@@ -630,7 +630,9 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
   const NOTE_OK_A = '\u6574\u7406\u5b8c\u6210\uff08'
   const NOTE_OK_B = ' \u6761\uff09\u3002\u6838\u5bf9\u65e0\u8bef\u540e\u8bb0\u5f97\u4fdd\u5b58\u3002'
   const LABEL_HISTORY = '\u5386\u53f2\u7248\u672c'
-  const HINT_HISTORY = '\u6bcf\u6b21\u4fdd\u5b58\u4fe1\u606f\u6c60\u524d\u90fd\u4f1a\u81ea\u52a8\u7559\u6863\uff0c\u53ef\u56de\u6eda\u5230\u4efb\u4e00\u7248\u672c\uff08\u56de\u6eda\u672c\u8eab\u4e5f\u4f1a\u7559\u6863\uff09\u3002'
+  const HINT_HISTORY = '\u6bcf\u6b21\u4fdd\u5b58\u524d\u81ea\u52a8\u7559\u6863\u3002\u4fdd\u7559\u6700\u8fd1 10 \u4e2a\u7248\u672c\uff0c\u5916\u52a0\u6700\u8fd1 14 \u5929\u91cc\u6bcf\u5929\u6700\u65e9\u7684\u90a3\u4e2a\uff08\u7eff\u6807\u300c\u6bcf\u65e5\u300d\uff09\u2014\u2014\u4e00\u5929\u5185\u53cd\u590d\u4fdd\u5b58\u4e0d\u4f1a\u628a\u524d\u51e0\u5929\u7684\u5b8c\u597d\u7248\u672c\u6324\u6389\u3002'
+  const LABEL_DAILY = '\u6bcf\u65e5'
+  const LABEL_DAILY_TIP = '\u5f53\u5929\u6700\u65e9\u7684\u5b58\u6863\uff0c\u4e0d\u4f1a\u88ab\u540e\u7eed\u4fdd\u5b58\u6324\u6389'
   const HINT_NO_HISTORY = '\u8fd8\u6ca1\u6709\u5386\u53f2\u7248\u672c\uff1b\u4fdd\u5b58\u4e00\u6b21\u4fe1\u606f\u6c60\u540e\u5c31\u4f1a\u6709\u4e86\u3002'
   const LABEL_SEC = ' \u5206\u533a \u00b7 '
   const LABEL_BLK = ' \u6761'
@@ -720,6 +722,10 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
                       {snaps.map((sn) => (
                         <div key={sn.file} className="flex items-center gap-2 rounded px-2 py-1" style={{ background: 'rgba(255,255,255,0.04)' }}>
                           <span className="flex-1 truncate text-[11px] text-text-2">{sn.saved_at}</span>
+                          {sn.daily && (
+                            <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px]" title={LABEL_DAILY_TIP}
+                              style={{ background: 'rgba(48,209,88,0.14)', color: '#30d158' }}>{LABEL_DAILY}</span>
+                          )}
                           <span className="shrink-0 text-[11px] text-text-3">{sn.sections}{LABEL_SEC}{sn.blocks}{LABEL_BLK}</span>
                           <button type="button" onClick={() => void restoreSnap(sn.file)}
                             className="shrink-0 rounded px-2 py-0.5 text-[11px] font-medium text-signal-bright transition hover:bg-signal-blue/15">{LABEL_RESTORE}</button>

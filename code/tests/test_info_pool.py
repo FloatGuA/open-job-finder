@@ -100,9 +100,53 @@ def test_snapshot_rejects_path_traversal(tmp_path):
         info_pool.restore_snapshot("../../secret.yaml", p)
 
 
-def test_snapshots_pruned_to_limit(tmp_path, monkeypatch):
-    monkeypatch.setattr(info_pool, "SNAPSHOT_KEEP", 3)
+def test_snapshots_keep_recent_n(tmp_path, monkeypatch):
+    """同一天里连续保存：只保留最近 N 个 + 当天最早那个。"""
+    monkeypatch.setattr(info_pool, "SNAPSHOT_KEEP_RECENT", 3)
     p = str(tmp_path / "info_pool.yaml")
-    for i in range(6):
+    for i in range(8):
         info_pool.save_pool(_doc(name=f"v{i}"), p)      # 同秒也各留一档（加序号）
-    assert len(info_pool.list_snapshots(p)) == 3
+    snaps = info_pool.list_snapshots(p)
+    assert len(snaps) == 4                              # 最近 3 个 + 当天最早 1 个
+    assert sum(1 for s in snaps if s["daily"]) == 1
+    assert snaps[-1]["daily"] is True                   # 最早那个被标为每日存档
+
+
+def test_daily_keeper_survives_flood_of_new_saves(tmp_path, monkeypatch):
+    """核心诉求：一天内狂点保存，也不能把前几天那个「内容完好」的版本挤掉。"""
+    import os
+    monkeypatch.setattr(info_pool, "SNAPSHOT_KEEP_RECENT", 2)
+    d = tmp_path / "pool_snapshots"
+    d.mkdir()
+    p = str(tmp_path / "info_pool.yaml")
+    # 伪造三天前的一份存档（内容完好，8 条）
+    old_doc = _doc(sections=[{"name": "教育经历", "blocks": [
+        {"title": f"经历{i}", "time": "", "bullets": [], "summary": ""} for i in range(8)]}])
+    rb.save_blocks(old_doc, str(d / "20260101_090000.yaml"))
+
+    rb.save_blocks(_doc(), p)
+    for i in range(6):                                   # 今天狂点 6 次保存
+        info_pool.save_pool(_doc(name=f"v{i}"), p)
+
+    files = os.listdir(str(d))
+    assert "20260101_090000.yaml" in files, "跨天的每日存档被今天的琐碎保存挤掉了"
+    old_snap = next(s for s in info_pool.list_snapshots(p) if s["file"] == "20260101_090000.yaml")
+    assert old_snap["blocks"] == 8 and old_snap["daily"] is True
+    # 仍可回滚到它
+    assert sum(len(x["blocks"]) for x in info_pool.restore_snapshot(old_snap["file"], p)["sections"]) == 8
+
+
+def test_daily_keepers_limited_to_recent_days(tmp_path, monkeypatch):
+    """每日存档也不是无限攒——只留最近 N 天。"""
+    import os
+    monkeypatch.setattr(info_pool, "SNAPSHOT_KEEP_RECENT", 1)
+    monkeypatch.setattr(info_pool, "SNAPSHOT_KEEP_DAYS", 3)
+    d = tmp_path / "pool_snapshots"
+    d.mkdir()
+    p = str(tmp_path / "info_pool.yaml")
+    for day in range(1, 7):                              # 6 天各一份
+        rb.save_blocks(_doc(), str(d / f"2026010{day}_090000.yaml"))
+    rb.save_blocks(_doc(), p)
+    info_pool.save_pool(_doc(), p)                       # 触发一次修剪
+    days = {f[:8] for f in os.listdir(str(d))}
+    assert len(days) <= 4                                # 最近 3 天 + 今天

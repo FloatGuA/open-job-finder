@@ -419,6 +419,7 @@ export interface PoolSnapshot {
   saved_at: string
   blocks: number
   sections: number
+  daily: boolean      // \u5f53\u5929\u6700\u65e9\u7684\u5b58\u6863\uff1a\u4e0d\u4f1a\u88ab\u540e\u7eed\u4fdd\u5b58\u6324\u6389
 }
 
 export interface ResumeTemplate {
