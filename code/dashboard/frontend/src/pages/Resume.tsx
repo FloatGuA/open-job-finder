@@ -173,7 +173,9 @@ function buildResumeHtml(doc: ResumeBlocks): string {
   const contact = [bi.email, bi.phone, bi.city].filter(Boolean).map(escHtml).join('<span class="sep">\u00b7</span>')
   const secs = (doc.sections || []).map((sec) => {
     const list = (sec.blocks || []).filter((b) => b.title || b.bullets.some((x) => x.trim()))
-    if (!list.length) return ''
+    // 只要分区有名字就渲染标题：所见即所得，新建分区/清空条目后预览要立刻有反馈；
+    // 不想要的空分区删掉即可。名字与内容都空才整块跳过。
+    if (!sec.name.trim() && !list.length) return ''
     const entries = list.map((b) => {
       const bullets = b.bullets.filter((x) => x.trim()).map((x) => `<li>${escHtml(x)}</li>`).join('')
       const head = `<div class="e-head"><span class="e-title">${escHtml(b.title)}</span>${b.time ? `<span class="e-date">${escHtml(b.time)}</span>` : ''}</div>`
