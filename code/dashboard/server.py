@@ -756,8 +756,13 @@ async def build_pool_endpoint(body: dict[str, Any] | None = None) -> JSONRespons
 # ── 信息池快照（每次保存前留档，可回滚）────────────────────────────────────────
 @app.get("/api/pool/snapshots")
 async def list_pool_snapshots() -> JSONResponse:
+    """历史版本 + 当前版本（前端把当前也列进去并打绿灯，避免盲跳回滚）。"""
     from services import info_pool
-    return JSONResponse({"snapshots": info_pool.list_snapshots(str(DATA_DIR / "info_pool.yaml"))})
+    p = str(DATA_DIR / "info_pool.yaml")
+    return JSONResponse({
+        "snapshots": info_pool.list_snapshots(p),
+        "current": info_pool.current_summary(p),
+    })
 
 
 @app.post("/api/pool/snapshots/{fname}/restore")

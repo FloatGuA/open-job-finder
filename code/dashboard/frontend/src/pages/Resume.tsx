@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
-import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type PoolSnapshot, type Job } from '@/api'
+import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type PoolSnapshot, type PoolCurrent, type Job } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
 
 // v2.16\uff1a\u5206\u533a\u4e0d\u518d\u56fa\u5b9a\uff0c\u540d\u79f0\u81ea\u5b9a\u4e49\uff08\u5982\u300c\u6e38\u620f\u7ecf\u5386\u300d\u300cAgent \u7ecf\u5386\u300d\uff09\u3002\u8fd9\u4e9b\u53ea\u662f\u65b0\u5efa\u65f6\u7684\u5feb\u6377\u5019\u9009\u3002
@@ -517,12 +517,13 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
   const [building, setBuilding] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [snaps, setSnaps] = useState<PoolSnapshot[]>([])
+  const [snapCur, setSnapCur] = useState<PoolCurrent | null>(null)
   const [showSnaps, setShowSnaps] = useState(false)
   const [buildNote, setBuildNote] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const html = useMemo(() => buildResumeHtml(doc), [doc])
-  const loadSnaps = () => { void API.getPoolSnapshots().then((r) => setSnaps(r.snapshots)).catch(() => {}) }
+  const loadSnaps = () => { void API.getPoolSnapshots().then((r) => { setSnaps(r.snapshots); setSnapCur(r.current) }).catch(() => {}) }
 
   // \u6c60 \u2192 \u7b80\u5386\uff1a\u590d\u5236\u5757\uff0c\u843d\u5230\u540c\u540d\u5206\u533a\uff08\u6ca1\u6709\u5c31\u6309\u6c60\u91cc\u7684\u5206\u533a\u540d\u65b0\u5efa\uff09
   const copyBlockToResume = (poolSi: number, poolBi: number, target?: { si: number | null; slot: number }) => {
@@ -630,13 +631,16 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
   const NOTE_OK_A = '\u6574\u7406\u5b8c\u6210\uff08'
   const NOTE_OK_B = ' \u6761\uff09\u3002\u6838\u5bf9\u65e0\u8bef\u540e\u8bb0\u5f97\u4fdd\u5b58\u3002'
   const LABEL_HISTORY = '\u5386\u53f2\u7248\u672c'
-  const HINT_HISTORY = '\u6bcf\u6b21\u4fdd\u5b58\u524d\u81ea\u52a8\u7559\u6863\u3002\u4fdd\u7559\u6700\u8fd1 10 \u4e2a\u7248\u672c\uff0c\u5916\u52a0\u6700\u8fd1 14 \u5929\u91cc\u6bcf\u5929\u6700\u65e9\u7684\u90a3\u4e2a\uff08\u7eff\u6807\u300c\u6bcf\u65e5\u300d\uff09\u2014\u2014\u4e00\u5929\u5185\u53cd\u590d\u4fdd\u5b58\u4e0d\u4f1a\u628a\u524d\u51e0\u5929\u7684\u5b8c\u597d\u7248\u672c\u6324\u6389\u3002'
+  const HINT_HISTORY = '\u6bcf\u6b21\u4fdd\u5b58\u524d\u81ea\u52a8\u7559\u6863\u3002\u4fdd\u7559\u6700\u8fd1 10 \u4e2a\u7248\u672c\uff0c\u5916\u52a0\u6700\u8fd1 14 \u5929\u91cc\u6bcf\u5929\u6700\u65e9\u7684\u90a3\u4e2a\uff08\u7eff\u6807\u300c\u6bcf\u65e5\u300d\uff09\u2014\u2014\u4e00\u5929\u5185\u53cd\u590d\u4fdd\u5b58\u4e0d\u4f1a\u628a\u524d\u51e0\u5929\u7684\u5b8c\u597d\u7248\u672c\u6324\u6389\u3002\u7eff\u706f = \u5f53\u524d\u6b63\u5728\u7528\u7684\u90a3\u4e00\u7248\u3002'
   const LABEL_DAILY = '\u6bcf\u65e5'
   const LABEL_DAILY_TIP = '\u5f53\u5929\u6700\u65e9\u7684\u5b58\u6863\uff0c\u4e0d\u4f1a\u88ab\u540e\u7eed\u4fdd\u5b58\u6324\u6389'
   const HINT_NO_HISTORY = '\u8fd8\u6ca1\u6709\u5386\u53f2\u7248\u672c\uff1b\u4fdd\u5b58\u4e00\u6b21\u4fe1\u606f\u6c60\u540e\u5c31\u4f1a\u6709\u4e86\u3002'
   const LABEL_SEC = ' \u5206\u533a \u00b7 '
   const LABEL_BLK = ' \u6761'
   const LABEL_RESTORE = '\u56de\u6eda'
+  const LABEL_CURRENT = '\u5f53\u524d\u7248\u672c\uff08\u6b63\u5728\u4f7f\u7528\uff09'
+  const LABEL_IN_USE = '\u4f7f\u7528\u4e2d'
+  const LABEL_SAME_TIP = '\u8fd9\u4e00\u7248\u5c31\u662f\u5f53\u524d\u6b63\u5728\u7528\u7684\u5185\u5bb9'
   const dirtyDot = <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#f5a623' }} />
 
   return (
@@ -717,22 +721,38 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
               {showSnaps && (
                 <div className="mb-3 rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }}>
                   <p className="mb-2 text-[11px] text-text-3">{HINT_HISTORY}</p>
-                  {snaps.length === 0 ? <p className="text-[11px] text-text-3">{HINT_NO_HISTORY}</p> : (
-                    <div className="space-y-1">
-                      {snaps.map((sn) => (
-                        <div key={sn.file} className="flex items-center gap-2 rounded px-2 py-1" style={{ background: 'rgba(255,255,255,0.04)' }}>
-                          <span className="flex-1 truncate text-[11px] text-text-2">{sn.saved_at}</span>
-                          {sn.daily && (
-                            <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px]" title={LABEL_DAILY_TIP}
-                              style={{ background: 'rgba(48,209,88,0.14)', color: '#30d158' }}>{LABEL_DAILY}</span>
-                          )}
-                          <span className="shrink-0 text-[11px] text-text-3">{sn.sections}{LABEL_SEC}{sn.blocks}{LABEL_BLK}</span>
-                          <button type="button" onClick={() => void restoreSnap(sn.file)}
-                            className="shrink-0 rounded px-2 py-0.5 text-[11px] font-medium text-signal-bright transition hover:bg-signal-blue/15">{LABEL_RESTORE}</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <div className="space-y-1">
+                    {/* \u5f53\u524d\u7248\u672c\u4e5f\u5217\u8fdb\u6765\uff0c\u770b\u6e05\u81ea\u5df1\u5728\u54ea\u91cc\u518d\u56de\u6eda */}
+                    {snapCur && (
+                      <div className="flex items-center gap-2 rounded px-2 py-1.5"
+                        style={{ background: 'rgba(48,209,88,0.1)', border: '1px solid rgba(48,209,88,0.35)' }}>
+                        <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: '#30d158' }} />
+                        <span className="flex-1 truncate text-[11px] font-medium" style={{ color: '#30d158' }}>
+                          {LABEL_CURRENT}{snapCur.saved_at ? ` \u00b7 ${snapCur.saved_at}` : ''}</span>
+                        <span className="shrink-0 text-[11px] text-text-3">{snapCur.sections}{LABEL_SEC}{snapCur.blocks}{LABEL_BLK}</span>
+                      </div>
+                    )}
+                    {snaps.length === 0 ? <p className="pt-1 text-[11px] text-text-3">{HINT_NO_HISTORY}</p> : snaps.map((sn) => (
+                      <div key={sn.file} className="flex items-center gap-2 rounded px-2 py-1"
+                        style={sn.is_current
+                          ? { background: 'rgba(48,209,88,0.08)', border: '1px solid rgba(48,209,88,0.25)' }
+                          : { background: 'rgba(255,255,255,0.04)', border: '1px solid transparent' }}>
+                        {sn.is_current
+                          ? <span className="inline-block h-2 w-2 shrink-0 rounded-full" title={LABEL_SAME_TIP} style={{ background: '#30d158' }} />
+                          : <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: 'rgba(255,255,255,0.16)' }} />}
+                        <span className="flex-1 truncate text-[11px] text-text-2">{sn.saved_at}</span>
+                        {sn.daily && (
+                          <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px]" title={LABEL_DAILY_TIP}
+                            style={{ background: 'rgba(48,209,88,0.14)', color: '#30d158' }}>{LABEL_DAILY}</span>
+                        )}
+                        <span className="shrink-0 text-[11px] text-text-3">{sn.sections}{LABEL_SEC}{sn.blocks}{LABEL_BLK}</span>
+                        {sn.is_current
+                          ? <span className="shrink-0 px-2 py-0.5 text-[11px]" style={{ color: '#30d158' }}>{LABEL_IN_USE}</span>
+                          : <button type="button" onClick={() => void restoreSnap(sn.file)}
+                              className="shrink-0 rounded px-2 py-0.5 text-[11px] font-medium text-signal-bright transition hover:bg-signal-blue/15">{LABEL_RESTORE}</button>}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
               <p className="mb-3 text-[11px] leading-relaxed text-text-3">{'\u8fd9\u91cc\u662f\u4f60\u7684\u5168\u90e8\u4fe1\u606f\uff0c\u6295\u4ec0\u4e48\u5c97\u90fd\u4ece\u8fd9\u91cc\u6311\u3002\u62d6\u6761\u76ee\u5230\u4e2d\u95f4\u6216\u70b9 \u2192 \u52a0\u5165\u5f53\u524d\u7b80\u5386\uff08\u6c60\u91cc\u4ecd\u4fdd\u7559\uff09\u3002\u6539\u5b8c\u8bb0\u5f97\u70b9\u300c\u4fdd\u5b58\u300d\u3002'}</p>

@@ -6,11 +6,22 @@
 - 简历 = 从池中挑块的**复制**组合（每份独立，改简历不回写池）。
 - 首次使用自动迁移：把当前激活简历的内容收编为池的初始内容。
 """
+import hashlib
+import json
 import os
 import shutil
 import time
 
 from services import resume_blocks as rb
+
+
+def _fingerprint(doc: dict) -> str:
+    """内容指纹：用来判断某个快照是不是「当前正在用的这一版」。"""
+    payload = json.dumps(
+        {"basic_info": doc.get("basic_info"), "sections": doc.get("sections")},
+        ensure_ascii=False, sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 POOL_PATH = "data/info_pool.yaml"
 # 分层保留：既能撤销刚才的误操作，也能回到几天前的状态。
@@ -69,6 +80,7 @@ def list_snapshots(path: str = POOL_PATH) -> list:
         return []
     files = sorted([f for f in os.listdir(d) if f.endswith(".yaml")], reverse=True)
     keepers = _daily_keepers(files)
+    cur = _fingerprint(rb.load_blocks(path)) if os.path.exists(path) else ""
     out = []
     for fn in files:
         p = os.path.join(d, fn)
@@ -79,8 +91,21 @@ def list_snapshots(path: str = POOL_PATH) -> list:
             "blocks": sum(len(s["blocks"]) for s in doc["sections"]),
             "sections": len(doc["sections"]),
             "daily": fn in keepers,        # 当天最早的存档：不会被后续保存挤掉
+            "is_current": _fingerprint(doc) == cur,   # 内容与当前一致 → UI 打绿灯
         })
     return out
+
+
+def current_summary(path: str = POOL_PATH) -> dict:
+    """当前正在用的这一版（放进历史列表首位，让用户看清自己在哪，别盲跳）。"""
+    if not os.path.exists(path):
+        return {"blocks": 0, "sections": 0, "saved_at": ""}
+    doc = rb.load_blocks(path)
+    return {
+        "blocks": sum(len(s["blocks"]) for s in doc["sections"]),
+        "sections": len(doc["sections"]),
+        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(path))),
+    }
 
 
 def restore_snapshot(fname: str, path: str = POOL_PATH) -> dict:

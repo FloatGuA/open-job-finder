@@ -419,7 +419,13 @@ export interface PoolSnapshot {
   saved_at: string
   blocks: number
   sections: number
-  daily: boolean      // \u5f53\u5929\u6700\u65e9\u7684\u5b58\u6863\uff1a\u4e0d\u4f1a\u88ab\u540e\u7eed\u4fdd\u5b58\u6324\u6389
+  daily: boolean       // \u5f53\u5929\u6700\u65e9\u7684\u5b58\u6863\uff1a\u4e0d\u4f1a\u88ab\u540e\u7eed\u4fdd\u5b58\u6324\u6389
+  is_current: boolean  // \u5185\u5bb9\u4e0e\u5f53\u524d\u4e00\u81f4 \u2192 \u6253\u7eff\u706f
+}
+export interface PoolCurrent {
+  blocks: number
+  sections: number
+  saved_at: string
 }
 
 export interface ResumeTemplate {
@@ -555,7 +561,7 @@ export const API = {
       body: JSON.stringify({ self_description }),
     }),
   // 信息池快照（每次保存前自动留档，可回滚）
-  getPoolSnapshots: (): Promise<{ snapshots: PoolSnapshot[] }> => requestJson('/api/pool/snapshots'),
+  getPoolSnapshots: (): Promise<{ snapshots: PoolSnapshot[]; current: PoolCurrent }> => requestJson('/api/pool/snapshots'),
   restorePoolSnapshot: (fname: string): Promise<ResumeBlocks> =>
     requestJson(`/api/pool/snapshots/${encodeURIComponent(fname)}/restore`, { method: 'POST' }),
   composeResume: (body: { job_title?: string; jd_text?: string; name?: string }): Promise<{ resume: ResumeMeta; sections: string[] }> =>

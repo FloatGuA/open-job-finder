@@ -150,3 +150,35 @@ def test_daily_keepers_limited_to_recent_days(tmp_path, monkeypatch):
     info_pool.save_pool(_doc(), p)                       # 触发一次修剪
     days = {f[:8] for f in os.listdir(str(d))}
     assert len(days) <= 4                                # 最近 3 天 + 今天
+
+
+# ── 「我现在在哪个版本」：当前版本标记，防盲跳回滚 ──────────────────────────
+def test_is_current_marks_the_version_in_use(tmp_path):
+    p = str(tmp_path / "info_pool.yaml")
+    v1 = _doc(sections=[{"name": "教育经历", "blocks": [
+        {"title": "A", "time": "", "bullets": [], "summary": ""}]}])
+    v2 = _doc(sections=[{"name": "教育经历", "blocks": [
+        {"title": "B", "time": "", "bullets": [], "summary": ""}]}])
+    info_pool.save_pool(v1, p)
+    info_pool.save_pool(v2, p)          # 现在用的是 v2；快照里存着 v1
+
+    snaps = info_pool.list_snapshots(p)
+    assert [s["is_current"] for s in snaps] == [False]      # v1 快照 ≠ 当前
+    assert info_pool.current_summary(p)["blocks"] == 1
+
+    # 回滚到 v1 后，那个快照应被标为「当前」
+    info_pool.restore_snapshot(snaps[0]["file"], p)
+    snaps2 = info_pool.list_snapshots(p)
+    cur = [s for s in snaps2 if s["is_current"]]
+    assert cur, "回滚后应有快照被标记为当前"
+    assert all(s["blocks"] == 1 for s in cur)
+
+
+def test_current_summary_reports_live_pool(tmp_path):
+    p = str(tmp_path / "info_pool.yaml")
+    info_pool.save_pool(_doc(sections=[
+        {"name": "教育经历", "blocks": [{"title": "A", "time": "", "bullets": [], "summary": ""}]},
+        {"name": "项目经历", "blocks": [{"title": "P", "time": "", "bullets": [], "summary": ""}]},
+    ]), p)
+    cur = info_pool.current_summary(p)
+    assert cur["sections"] == 2 and cur["blocks"] == 2 and cur["saved_at"]
