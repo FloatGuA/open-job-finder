@@ -420,15 +420,15 @@ function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQu
                 <input value={sec.name} onChange={(e) => patchSection(si, { name: e.target.value })}
                   className="min-w-0 flex-1 rounded-lg bg-transparent px-1.5 py-1 text-[15px] font-bold tracking-wide text-text-1 transition hover:bg-bg-card2 focus:bg-bg-card2 focus:outline-none focus:ring-1 focus:ring-signal-blue"
                   placeholder={'\u5206\u533a\u540d'} />
-                <span className="shrink-0 rounded-full px-1.5 text-[10px] text-text-3" style={{ background: 'rgba(255,255,255,0.06)' }}>{sec.blocks.length}</span>
+                <span className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium text-text-3" style={{ background: 'rgba(255,255,255,0.06)' }}>{sec.blocks.length}</span>
                 {onQuickAddSection && sec.blocks.length > 0 && (
                   <button type="button" title={'\u6574\u4e2a\u5206\u533a\u52a0\u5165\u5f53\u524d\u7b80\u5386'} onClick={() => onQuickAddSection(si)}
-                    className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-signal-bright transition hover:bg-signal-blue/10">{'\u21d2'}</button>
+                    className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-signal-bright transition hover:bg-signal-blue/15">{'\u21d2 \u5168\u90e8'}</button>
                 )}
-                <button type="button" title={'\u65b0\u589e\u6761\u76ee'} onClick={() => addBlock(si)}
-                  className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-text-3 transition hover:text-text-1">{'+'}</button>
+                <button type="button" title={'\u65b0\u589e\u4e00\u6761'} onClick={() => addBlock(si)}
+                  className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-text-2 transition hover:bg-bg-card2 hover:text-text-1">{'+ \u65b0\u589e'}</button>
                 <button type="button" title={'\u5220\u9664\u5206\u533a'} onClick={() => removeSection(si)}
-                  className="shrink-0 px-1 text-[11px] text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
+                  className="shrink-0 rounded-md px-1.5 py-1 text-[12px] text-text-3 transition hover:bg-signal-red/10 hover:text-signal-red">{'\u2715'}</button>
               </div>
 
               {sec.blocks.length === 0 ? (
@@ -462,13 +462,13 @@ function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQu
                             <span className="rounded px-1 py-0.5 text-[14px] leading-none text-text-3 opacity-55 transition group-hover:bg-bg-card2 group-hover:opacity-100">{'\u283f'}</span>
                             <span className={`min-w-0 flex-1 truncate text-[13px] ${blk.title ? 'font-medium text-text-1' : 'text-text-3'}`}>
                               {blk.title || '\u672a\u547d\u540d\u6761\u76ee'}</span>
-                            {blk.time && <span className="shrink-0 text-[10px] text-text-3" style={{ fontVariantNumeric: 'tabular-nums' }}>{blk.time}</span>}
+                            {blk.time && <span className="shrink-0 text-[11px] text-text-3" style={{ fontVariantNumeric: 'tabular-nums' }}>{blk.time}</span>}
                             {onQuickAdd && (
                               <button type="button" title={'\u52a0\u5165\u5f53\u524d\u7b80\u5386'}
                                 onClick={(e) => { e.stopPropagation(); onQuickAdd(si, bi) }}
                                 className="shrink-0 rounded px-1 text-[11px] text-signal-bright opacity-0 transition group-hover:opacity-100 hover:bg-signal-blue/10">{'\u2192'}</button>
                             )}
-                            <span className="shrink-0 text-[9px] text-text-3 transition" style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }}>{'\u25be'}</span>
+                            <span className="shrink-0 text-[11px] text-text-3 transition" style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }}>{'\u25be'}</span>
                           </div>
                           <div style={{ display: 'grid', gridTemplateRows: isOpen ? '1fr' : '0fr', transition: 'grid-template-rows .28s ease' }}>
                             <div className="min-h-0 overflow-hidden">
@@ -482,16 +482,16 @@ function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQu
                                 <textarea className={`${detailInput} leading-relaxed`} style={{ ...inputStyle, minHeight: compact ? 96 : 120 }}
                                   placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')}
                                   onChange={(e) => updateBlock(si, bi, { bullets: e.target.value.split('\n') })} />
-                                <input className="w-full rounded bg-bg-card px-2 py-1.5 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
+                                <input className="w-full rounded bg-bg-card px-2.5 py-2 text-[12px] text-text-2 focus:outline-none" style={inputStyle}
                                   placeholder={summaryHint} value={blk.summary}
                                   onChange={(e) => updateBlock(si, bi, { summary: e.target.value })} />
                                 <div className="flex items-center gap-1">
                                   <button type="button" onClick={() => moveBlock(si, bi, -1)} disabled={bi === 0}
-                                    className="rounded px-1.5 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2191'}</button>
+                                    className="rounded px-2 py-1 text-[12px] text-text-3 transition hover:bg-bg-card2 hover:text-text-1 disabled:opacity-30">{'\u2191'}</button>
                                   <button type="button" onClick={() => moveBlock(si, bi, 1)} disabled={bi === sec.blocks.length - 1}
                                     className="rounded px-1.5 py-1 text-[11px] text-text-3 transition hover:text-text-1 disabled:opacity-30">{'\u2193'}</button>
                                   <button type="button" onClick={() => removeBlock(si, bi)}
-                                    className="ml-auto rounded px-2 py-1 text-[11px] text-signal-red transition hover:brightness-125">{'\u5220\u9664'}</button>
+                                    className="ml-auto rounded px-2 py-1 text-[12px] text-signal-red transition hover:bg-signal-red/10">{'\u5220\u9664'}</button>
                                 </div>
                               </div>
                             </div>
@@ -507,14 +507,14 @@ function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQu
         })}
 
         <div className="flex flex-wrap items-center gap-1 border-t pt-2.5" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
-          <span className="mr-0.5 text-[10px] text-text-3">{'\u52a0\u5206\u533a'}</span>
+          <span className="mr-1 text-[11px] text-text-3">{'\u52a0\u5206\u533a'}</span>
           {SECTION_PRESETS.filter((p) => !sections.some((s) => s.name === p)).map((p) => (
             <button key={p} type="button" onClick={() => addSection(p)}
-              className="rounded px-1.5 py-0.5 text-[10px] text-text-2 transition hover:text-text-1"
+              className="rounded-md px-2 py-1 text-[11px] text-text-2 transition hover:bg-bg-card2 hover:text-text-1"
               style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>{p}</button>
           ))}
           <button type="button" onClick={() => addSection('\u65b0\u5206\u533a')}
-            className="rounded px-1.5 py-0.5 text-[10px] text-signal-bright transition hover:bg-signal-blue/10">{'+ \u81ea\u5b9a\u4e49'}</button>
+            className="rounded-md px-2 py-1 text-[11px] font-medium text-signal-bright transition hover:bg-signal-blue/15">{'+ \u81ea\u5b9a\u4e49'}</button>
         </div>
       </div>
     </div>
@@ -641,7 +641,10 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
   const poolCount = pool.sections.reduce((n, x) => n + x.blocks.length, 0)
   const docCount = doc.sections.reduce((n, x) => n + x.blocks.length, 0)
   const colHead = 'mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-3'
-  const saveBtn = 'rounded-lg px-3 py-1 text-[11px] font-medium transition disabled:opacity-40'
+  const saveBtn = 'rounded-lg px-4 py-1.5 text-[13px] font-semibold transition disabled:cursor-default'
+  const esc_saving = '\u4fdd\u5b58\u4e2d\u2026'
+  const esc_save = '\u4fdd\u5b58'
+  const esc_saved = '\u2713 \u5df2\u4fdd\u5b58'
   const dirtyDot = <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#f5a623' }} />
 
   return (
@@ -668,7 +671,10 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
             <span className="font-normal normal-case text-text-3">{`${poolCount} \u6761`}</span>
             {poolDirty && dirtyDot}
             <button type="button" onClick={() => void doSavePool()} disabled={savingPool || !poolDirty}
-              className={`${saveBtn} ml-auto text-white`} style={{ background: poolDirty ? '#0a84ff' : 'rgba(255,255,255,0.08)' }}>
+              className={`${saveBtn} ml-auto`}
+              style={poolDirty
+                ? { background: '#0a84ff', color: '#fff', boxShadow: '0 0 0 3px rgba(10,132,255,0.22)' }
+                : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.45)', border: '1px solid rgba(255,255,255,0.12)' }}>
               {savingPool ? '\u4fdd\u5b58\u4e2d\u2026' : poolDirty ? '\u4fdd\u5b58\u4fe1\u606f\u6c60' : '\u2713 \u5df2\u4fdd\u5b58'}</button>
           </div>
           <div className="space-y-3">
@@ -699,10 +705,13 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
             </Card>
             <Card title={'\u5168\u90e8\u7d20\u6750'} dev="PoolSections" action={
               <button type="button" onClick={() => void doSavePool()} disabled={savingPool || !poolDirty}
-                className={saveBtn} style={{ background: poolDirty ? '#0a84ff' : 'rgba(255,255,255,0.08)', color: '#fff' }}>
-                {savingPool ? '\u4fdd\u5b58\u4e2d\u2026' : poolDirty ? '\u4fdd\u5b58' : '\u2713'}</button>
+                className={saveBtn}
+                style={poolDirty
+                  ? { background: '#0a84ff', color: '#fff', boxShadow: '0 0 0 3px rgba(10,132,255,0.22)' }
+                  : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.45)', border: '1px solid rgba(255,255,255,0.12)' }}>
+                {savingPool ? esc_saving : poolDirty ? esc_save : esc_saved}</button>
             }>
-              <p className="mb-3 text-[10px] leading-relaxed text-text-3">{'\u8fd9\u91cc\u662f\u4f60\u7684\u5168\u90e8\u4fe1\u606f\uff0c\u6295\u4ec0\u4e48\u5c97\u90fd\u4ece\u8fd9\u91cc\u6311\u3002\u62d6\u6761\u76ee\u5230\u4e2d\u95f4\u6216\u70b9 \u2192 \u52a0\u5165\u5f53\u524d\u7b80\u5386\uff08\u6c60\u91cc\u4ecd\u4fdd\u7559\uff09\u3002\u6539\u5b8c\u8bb0\u5f97\u70b9\u300c\u4fdd\u5b58\u300d\u3002'}</p>
+              <p className="mb-3 text-[11px] leading-relaxed text-text-3">{'\u8fd9\u91cc\u662f\u4f60\u7684\u5168\u90e8\u4fe1\u606f\uff0c\u6295\u4ec0\u4e48\u5c97\u90fd\u4ece\u8fd9\u91cc\u6311\u3002\u62d6\u6761\u76ee\u5230\u4e2d\u95f4\u6216\u70b9 \u2192 \u52a0\u5165\u5f53\u524d\u7b80\u5386\uff08\u6c60\u91cc\u4ecd\u4fdd\u7559\uff09\u3002\u6539\u5b8c\u8bb0\u5f97\u70b9\u300c\u4fdd\u5b58\u300d\u3002'}</p>
               <SectionEditor doc={pool} onChange={setPool} owner="pool" compact
                 onQuickAdd={(si, bi) => copyBlockToResume(si, bi)}
                 onQuickAddSection={(si) => copySectionToResume(si)}
@@ -718,7 +727,10 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
             <span className="font-normal normal-case text-text-3">{activeName ? `${activeName} \u00b7 ${docCount} \u6761` : `${docCount} \u6761`}</span>
             {docDirty && dirtyDot}
             <button type="button" onClick={() => void doSaveDoc()} disabled={savingDoc || !docDirty}
-              className={`${saveBtn} ml-auto text-white`} style={{ background: docDirty ? '#0a84ff' : 'rgba(255,255,255,0.08)' }}>
+              className={`${saveBtn} ml-auto`}
+              style={docDirty
+                ? { background: '#0a84ff', color: '#fff', boxShadow: '0 0 0 3px rgba(10,132,255,0.22)' }
+                : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.45)', border: '1px solid rgba(255,255,255,0.12)' }}>
               {savingDoc ? '\u4fdd\u5b58\u4e2d\u2026' : docDirty ? '\u4fdd\u5b58\u7b80\u5386' : '\u2713 \u5df2\u4fdd\u5b58'}</button>
           </div>
           <Card title={'\u7b80\u5386\u5185\u5bb9'} dev="ResumeSections">
@@ -836,7 +848,7 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
                         value={it.name} onChange={(e) => updateMeta(it.slug, { name: e.target.value })} />
                       <input className="w-full rounded bg-bg-card px-2 py-1 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
                         placeholder={'\u76ee\u6807\u5c97\u4f4d'} value={it.target} onChange={(e) => updateMeta(it.slug, { target: e.target.value })} />
-                      <p className="text-[10px] text-signal-bright">{'\u25cf \u6b63\u5728\u7f16\u8f91'}</p>
+                      <p className="text-[11px] text-signal-bright">{'\u25cf \u6b63\u5728\u7f16\u8f91'}</p>
                     </>
                   ) : (
                     <div className="flex items-start justify-between gap-1">
@@ -847,7 +859,7 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
                       <div className="flex shrink-0 items-center gap-1">
                         <button type="button" title={'\u5207\u6362\u4e3a\u7f16\u8f91\u8fd9\u4efd'} disabled={busy}
                           onClick={(e) => { e.stopPropagation(); void activate(it.slug) }}
-                          className="rounded px-1.5 py-0.5 text-[10px] text-signal-bright transition hover:bg-signal-blue/10 disabled:opacity-40">{'\u7f16\u8f91'}</button>
+                          className="rounded-md px-2 py-1 text-[11px] font-medium text-signal-bright transition hover:bg-signal-blue/15 disabled:opacity-40">{'\u7f16\u8f91'}</button>
                         <button type="button" title={'\u5220\u9664'} onClick={(e) => { e.stopPropagation(); void remove(it.slug) }}
                           className="px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
                       </div>
@@ -878,7 +890,7 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
               <div key={ex.file} className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
                 <a href={`/api/resume/exports/${encodeURIComponent(ex.file)}`} target="_blank" rel="noreferrer"
                   className="min-w-0 flex-1 truncate text-[11px] text-signal-bright transition hover:brightness-125">{ex.file.replace(/\.pdf$/, '')}</a>
-                <span className="shrink-0 text-[10px] text-text-3">{ex.mtime}</span>
+                <span className="shrink-0 text-[11px] text-text-3">{ex.mtime}</span>
                 <span className="shrink-0 text-[10px] text-text-3">{Math.max(1, Math.round(ex.size / 1024))}{' KB'}</span>
                 <button type="button" title={'\u5220\u9664'}
                   onClick={() => { void API.deleteResumeExport(ex.file).then(() => setExportsList((l) => l.filter((x) => x.file !== ex.file))).catch((e) => onErr((e as Error).message)) }}
