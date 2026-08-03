@@ -538,39 +538,40 @@ function BasicInfoCard({ doc, onChange, dev }: { doc: ResumeBlocks; onChange: (d
 }
 
 // \u2500\u2500 \u5206\u9875 1\uff1a\u7b80\u5386\u5de5\u4f5c\u53f0\uff08\u4fe1\u606f\u6c60 | \u5f53\u524d\u7b80\u5386 | \u9884\u89c8\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-function Workbench({ onErr }: { onErr: (m: string | null) => void }) {
-  const [pool, setPool] = useState<ResumeBlocks | null>(null)
-  const [doc, setDoc] = useState<ResumeBlocks | null>(null)
-  const [activeName, setActiveName] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, activeName, savePool, saveDoc, reloadPool }: {
+  onErr: (m: string | null) => void
+  pool: ResumeBlocks
+  setPool: (p: ResumeBlocks) => void
+  doc: ResumeBlocks
+  setDoc: (d: ResumeBlocks) => void
+  poolDirty: boolean
+  docDirty: boolean
+  activeName: string
+  savePool: () => Promise<void>
+  saveDoc: () => Promise<void>
+  reloadPool: () => Promise<void>
+}) {
+  const [savingPool, setSavingPool] = useState(false)
+  const [savingDoc, setSavingDoc] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [building, setBuilding] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const loadAll = () => {
-    void API.getPool().then(setPool).catch((e) => onErr((e as Error).message))
-    void API.getResumeBlocks().then(setDoc).catch((e) => onErr((e as Error).message))
-    void API.getResumes().then((r) => setActiveName(r.items.find((i) => i.slug === r.active)?.name ?? '')).catch(() => {})
-  }
-  useEffect(loadAll, [])
-
-  const html = useMemo(() => (doc ? buildResumeHtml(doc) : ''), [doc])
-  if (!pool || !doc) return <div className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</div>
+  const html = useMemo(() => buildResumeHtml(doc), [doc])
 
   // \u6c60 \u2192 \u7b80\u5386\uff1a\u590d\u5236\u5757\uff0c\u843d\u5230\u540c\u540d\u5206\u533a\uff08\u6ca1\u6709\u5c31\u6309\u6c60\u91cc\u7684\u5206\u533a\u540d\u65b0\u5efa\uff09
   const copyBlockToResume = (poolSi: number, poolBi: number, target?: { si: number | null; slot: number }) => {
     const src = pool.sections[poolSi]
     const blk = src?.blocks[poolBi]
     if (!blk) return
-    const sections = doc.sections.map((s) => ({ ...s, blocks: [...s.blocks] }))
-    let si = target && target.si !== null ? target.si : sections.findIndex((s) => s.name === src.name)
+    const sections = doc.sections.map((x) => ({ ...x, blocks: [...x.blocks] }))
+    let si = target && target.si !== null ? target.si : sections.findIndex((x) => x.name === src.name)
     if (si < 0 || si >= sections.length) {
       sections.push({ name: src.name, blocks: [] })
       si = sections.length - 1
     }
-    if (sections[si].blocks.some((b) => b.title === blk.title && b.time === blk.time)) return  // \u5df2\u5728\u7b80\u5386\u91cc\uff0c\u5ffd\u7565
+    if (sections[si].blocks.some((b) => b.title === blk.title && b.time === blk.time)) return
     const slot = target && target.si !== null ? Math.min(target.slot, sections[si].blocks.length) : sections[si].blocks.length
     sections[si].blocks.splice(slot, 0, { ...blk, bullets: [...blk.bullets] })
     setDoc({ ...doc, sections })
@@ -578,8 +579,8 @@ function Workbench({ onErr }: { onErr: (m: string | null) => void }) {
   const copySectionToResume = (poolSi: number, slot?: number) => {
     const src = pool.sections[poolSi]
     if (!src) return
-    const sections = doc.sections.map((s) => ({ ...s, blocks: [...s.blocks] }))
-    const existing = sections.findIndex((s) => s.name === src.name)
+    const sections = doc.sections.map((x) => ({ ...x, blocks: [...x.blocks] }))
+    const existing = sections.findIndex((x) => x.name === src.name)
     const clone = src.blocks.map((b) => ({ ...b, bullets: [...b.bullets] }))
     if (existing >= 0) {
       const have = new Set(sections[existing].blocks.map((b) => `${b.title}|${b.time}`))
@@ -595,17 +596,18 @@ function Workbench({ onErr }: { onErr: (m: string | null) => void }) {
     else copySectionToResume(it.si, target.si === null ? target.slot : undefined)
   }
 
-  const saveAll = async () => {
-    setSaving(true); onErr(null); setSaved(false)
-    try {
-      await API.savePool(pool)
-      await API.saveResumeBlocks(doc)
-      setSaved(true); window.setTimeout(() => setSaved(false), 3000)
-    } catch (e) { onErr((e as Error).message) } finally { setSaving(false) }
+  const doSavePool = async () => {
+    setSavingPool(true); onErr(null)
+    try { await savePool() } catch (e) { onErr((e as Error).message) } finally { setSavingPool(false) }
+  }
+  const doSaveDoc = async () => {
+    setSavingDoc(true); onErr(null)
+    try { await saveDoc() } catch (e) { onErr((e as Error).message) } finally { setSavingDoc(false) }
   }
   const exportPdf = async () => {
     setExporting(true); onErr(null)
     try {
+      if (docDirty) await saveDoc()
       const label = [doc.basic_info.name, activeName].filter(Boolean).join('_') || 'resume'
       const blob = await API.printResumePdf(buildResumeHtml(doc), label)
       const url = URL.createObjectURL(blob)
@@ -618,21 +620,29 @@ function Workbench({ onErr }: { onErr: (m: string | null) => void }) {
   const upload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (poolDirty && !window.confirm('\u4fe1\u606f\u6c60\u6709\u672a\u4fdd\u5b58\u7684\u4fee\u6539\uff0c\u4e0a\u4f20\u89e3\u6790\u540e\u4f1a\u4ee5\u670d\u52a1\u5668\u4e0a\u7684\u5185\u5bb9\u4e3a\u51c6\u3002\u8981\u5148\u653e\u5f03\u8fd9\u4e9b\u4fee\u6539\u5417\uff1f')) {
+      if (fileRef.current) fileRef.current.value = ''
+      return
+    }
     setUploading(true); onErr(null)
-    try { await API.uploadResume(file); setPool(await API.getPool()) }
+    try { await API.uploadResume(file); await reloadPool() }
     catch (e2) { onErr((e2 as Error).message) }
     finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
   }
   const buildPool = async () => {
     if (!window.confirm('\u7528 LLM \u628a\u81ea\u6211\u63cf\u8ff0\u878d\u8fdb\u4fe1\u606f\u6c60\uff08\u91cd\u65b0\u6574\u7406\u5206\u533a\uff0c\u5df2\u6709\u5185\u5bb9\u4fdd\u7559\uff09\u3002\u7ee7\u7eed\uff1f')) return
     setBuilding(true); onErr(null)
-    try { setPool(await API.buildPool(pool.self_description)) }
-    catch (e) { onErr((e as Error).message) } finally { setBuilding(false) }
+    try {
+      if (poolDirty) await savePool()          // \u5148\u843d\u76d8\uff0c\u907f\u514d LLM \u7ed3\u679c\u8986\u76d6\u6389\u672a\u4fdd\u5b58\u7684\u624b\u6539
+      setPool(await API.buildPool(pool.self_description))
+    } catch (e) { onErr((e as Error).message) } finally { setBuilding(false) }
   }
 
-  const poolCount = pool.sections.reduce((n, s) => n + s.blocks.length, 0)
-  const docCount = doc.sections.reduce((n, s) => n + s.blocks.length, 0)
+  const poolCount = pool.sections.reduce((n, x) => n + x.blocks.length, 0)
+  const docCount = doc.sections.reduce((n, x) => n + x.blocks.length, 0)
   const colHead = 'mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-3'
+  const saveBtn = 'rounded-lg px-3 py-1 text-[11px] font-medium transition disabled:opacity-40'
+  const dirtyDot = <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#f5a623' }} />
 
   return (
     <div>
@@ -642,22 +652,25 @@ function Workbench({ onErr }: { onErr: (m: string | null) => void }) {
           className={`cursor-pointer rounded-full px-4 py-2 text-sm text-text-1 transition ${uploading ? 'cursor-not-allowed opacity-50' : 'hover:brightness-110'}`}
           style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)' }}>
           {uploading ? '\u89e3\u6790\u4e2d\u2026\uff08\u7ea6 1 \u5206\u949f\uff09' : '\u4e0a\u4f20\u7b80\u5386\u5165\u6c60'}</label>
-        <button type="button" onClick={() => void saveAll()} disabled={saving}
-          className="rounded-full px-5 py-2 text-sm text-white transition hover:brightness-110 disabled:opacity-50"
-          style={{ background: '#0a84ff' }}>{saving ? '\u4fdd\u5b58\u4e2d\u2026' : '\u4fdd\u5b58'}</button>
         <button type="button" onClick={() => void exportPdf()} disabled={exporting}
           className="rounded-full px-5 py-2 text-sm text-text-1 transition hover:brightness-110 disabled:opacity-50"
           style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)' }}>
           {exporting ? '\u5bfc\u51fa\u4e2d\u2026' : '\u5bfc\u51fa PDF'}</button>
-        {saved && <span className="text-sm text-signal-green">{'\u2713 \u5df2\u4fdd\u5b58'}</span>}
-        <span className="ml-auto text-xs text-text-3">{'\u4ece\u4fe1\u606f\u6c60\u62d6\u5185\u5bb9\u5230\u4e2d\u95f4\uff0c\u6216\u70b9\u6761\u76ee\u7684 \u2192'}</span>
+        <span className="ml-auto text-xs text-text-3">
+          {poolDirty || docDirty ? '\u6709\u672a\u4fdd\u5b58\u7684\u4fee\u6539\uff0c\u8bb0\u5f97\u70b9\u5404\u680f\u7684\u300c\u4fdd\u5b58\u300d' : '\u6539\u52a8\u5df2\u5168\u90e8\u4fdd\u5b58'}</span>
       </div>
 
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
         {/* \u2460 \u4fe1\u606f\u6c60 */}
         <div className="min-w-0 flex-1 xl:max-w-[26rem]">
-          <div className={colHead}>{'\u4fe1\u606f\u6c60'}<DevLabel name="PoolColumn" />
-            <span className="font-normal normal-case text-text-3">{`${poolCount} \u6761`}</span></div>
+          <div className={colHead}>
+            {'\u4fe1\u606f\u6c60'}<DevLabel name="PoolColumn" />
+            <span className="font-normal normal-case text-text-3">{`${poolCount} \u6761`}</span>
+            {poolDirty && dirtyDot}
+            <button type="button" onClick={() => void doSavePool()} disabled={savingPool || !poolDirty}
+              className={`${saveBtn} ml-auto text-white`} style={{ background: poolDirty ? '#0a84ff' : 'rgba(255,255,255,0.08)' }}>
+              {savingPool ? '\u4fdd\u5b58\u4e2d\u2026' : poolDirty ? '\u4fdd\u5b58\u4fe1\u606f\u6c60' : '\u2713 \u5df2\u4fdd\u5b58'}</button>
+          </div>
           <div className="space-y-3">
             <Card title={'\u57fa\u672c\u4fe1\u606f'} dev="PoolBasic">
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
@@ -668,7 +681,7 @@ function Workbench({ onErr }: { onErr: (m: string | null) => void }) {
                       onChange={(e) => {
                         const bi = { ...pool.basic_info, [key]: e.target.value }
                         setPool({ ...pool, basic_info: bi })
-                        setDoc({ ...doc, basic_info: bi })    // \u57fa\u672c\u4fe1\u606f\u968f\u6c60\u540c\u6b65\u8fdb\u5f53\u524d\u7b80\u5386
+                        setDoc({ ...doc, basic_info: bi })
                       }} />
                   </label>
                 ))}
@@ -684,8 +697,12 @@ function Workbench({ onErr }: { onErr: (m: string | null) => void }) {
                 placeholder={'\u7b80\u5386\u6ca1\u5199\u5168\u7684\u7ecf\u5386/\u7279\u957f\uff0c\u5199\u8fd9\u91cc\u518d\u70b9\u300c\u878d\u5165\u4fe1\u606f\u6c60\u300d'}
                 onChange={(e) => setPool({ ...pool, self_description: e.target.value })} />
             </Card>
-            <Card title={'\u5168\u90e8\u7d20\u6750'} dev="PoolSections">
-              <p className="mb-3 text-[10px] leading-relaxed text-text-3">{'\u8fd9\u91cc\u662f\u4f60\u7684\u5168\u90e8\u4fe1\u606f\uff0c\u6295\u4ec0\u4e48\u5c97\u90fd\u4ece\u8fd9\u91cc\u6311\u3002\u62d6\u6761\u76ee\u5230\u4e2d\u95f4\u6216\u70b9 \u2192 \u52a0\u5165\u5f53\u524d\u7b80\u5386\uff08\u6c60\u91cc\u4ecd\u4fdd\u7559\uff09\u3002'}</p>
+            <Card title={'\u5168\u90e8\u7d20\u6750'} dev="PoolSections" action={
+              <button type="button" onClick={() => void doSavePool()} disabled={savingPool || !poolDirty}
+                className={saveBtn} style={{ background: poolDirty ? '#0a84ff' : 'rgba(255,255,255,0.08)', color: '#fff' }}>
+                {savingPool ? '\u4fdd\u5b58\u4e2d\u2026' : poolDirty ? '\u4fdd\u5b58' : '\u2713'}</button>
+            }>
+              <p className="mb-3 text-[10px] leading-relaxed text-text-3">{'\u8fd9\u91cc\u662f\u4f60\u7684\u5168\u90e8\u4fe1\u606f\uff0c\u6295\u4ec0\u4e48\u5c97\u90fd\u4ece\u8fd9\u91cc\u6311\u3002\u62d6\u6761\u76ee\u5230\u4e2d\u95f4\u6216\u70b9 \u2192 \u52a0\u5165\u5f53\u524d\u7b80\u5386\uff08\u6c60\u91cc\u4ecd\u4fdd\u7559\uff09\u3002\u6539\u5b8c\u8bb0\u5f97\u70b9\u300c\u4fdd\u5b58\u300d\u3002'}</p>
               <SectionEditor doc={pool} onChange={setPool} owner="pool" compact
                 onQuickAdd={(si, bi) => copyBlockToResume(si, bi)}
                 onQuickAddSection={(si) => copySectionToResume(si)}
@@ -696,8 +713,14 @@ function Workbench({ onErr }: { onErr: (m: string | null) => void }) {
 
         {/* \u2461 \u5f53\u524d\u7b80\u5386 */}
         <div className="min-w-0 flex-1 xl:max-w-[26rem]">
-          <div className={colHead}>{'\u5f53\u524d\u7b80\u5386'}<DevLabel name="ResumeColumn" />
-            <span className="font-normal normal-case text-text-3">{activeName ? `${activeName} \u00b7 ${docCount} \u6761` : `${docCount} \u6761`}</span></div>
+          <div className={colHead}>
+            {'\u5f53\u524d\u7b80\u5386'}<DevLabel name="ResumeColumn" />
+            <span className="font-normal normal-case text-text-3">{activeName ? `${activeName} \u00b7 ${docCount} \u6761` : `${docCount} \u6761`}</span>
+            {docDirty && dirtyDot}
+            <button type="button" onClick={() => void doSaveDoc()} disabled={savingDoc || !docDirty}
+              className={`${saveBtn} ml-auto text-white`} style={{ background: docDirty ? '#0a84ff' : 'rgba(255,255,255,0.08)' }}>
+              {savingDoc ? '\u4fdd\u5b58\u4e2d\u2026' : docDirty ? '\u4fdd\u5b58\u7b80\u5386' : '\u2713 \u5df2\u4fdd\u5b58'}</button>
+          </div>
           <Card title={'\u7b80\u5386\u5185\u5bb9'} dev="ResumeSections">
             <p className="mb-3 text-[10px] leading-relaxed text-text-3">{'\u8fd9\u4efd\u7b80\u5386\u5b9e\u9645\u5305\u542b\u7684\u5185\u5bb9\u3002\u6539\u5b83\u4e0d\u5f71\u54cd\u4fe1\u606f\u6c60\uff1b\u5220\u6761\u76ee\u53ea\u4ece\u8fd9\u4efd\u7b80\u5386\u79fb\u9664\u3002'}</p>
             <SectionEditor doc={doc} onChange={setDoc} owner="resume" compact
@@ -717,7 +740,11 @@ function Workbench({ onErr }: { onErr: (m: string | null) => void }) {
 }
 
 // \u2500\u2500 \u5206\u9875 2\uff1a\u5df2\u4fdd\u5b58\u7b80\u5386\uff08\u591a\u4efd\u7ba1\u7406 + \u6700\u8fd1\u751f\u6210 + AI \u81ea\u52a8\u5b9a\u5236\u5f00\u5173\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-function SavedTab({ onErr }: { onErr: (m: string | null) => void }) {
+function SavedTab({ onErr, onActiveChanged, flushEdits }: {
+  onErr: (m: string | null) => void
+  onActiveChanged: () => Promise<void>
+  flushEdits: () => Promise<void>
+}) {
   const [resumes, setResumes] = useState<ResumeIndex | null>(null)
   const [exportsList, setExportsList] = useState<ResumeExport[]>([])
   const [busy, setBusy] = useState(false)
@@ -747,20 +774,23 @@ function SavedTab({ onErr }: { onErr: (m: string | null) => void }) {
 
   const activate = async (slug: string) => {
     setBusy(true); onErr(null)
-    try { await API.activateResume(slug); refresh() }
+    try { await flushEdits(); await API.activateResume(slug); await onActiveChanged(); refresh() }
     catch (e) { onErr((e as Error).message) } finally { setBusy(false) }
   }
   const create = async () => {
     setBusy(true); onErr(null)
     try {
+      await flushEdits()
       const item = await API.createResume(newName.trim(), newTarget.trim(), true)
       await API.activateResume(item.slug)
-      setNewName(''); setNewTarget(''); refresh()
+      await onActiveChanged()
+      setNewName(''); setNewTarget(''); refresh(); showPreview(item.slug)
     } catch (e) { onErr((e as Error).message) } finally { setBusy(false) }
   }
   const remove = async (slug: string) => {
     if (!window.confirm('\u5220\u9664\u8fd9\u4efd\u7b80\u5386\uff1f\u4e0d\u53ef\u6062\u590d\u3002')) return
-    try { await API.deleteResume(slug); refresh() } catch (e) { onErr((e as Error).message) }
+    try { await API.deleteResume(slug); await onActiveChanged(); setPreviewSlug(''); refresh() }
+    catch (e) { onErr((e as Error).message) }
   }
   const updateMeta = (slug: string, patch: { name?: string; target?: string }) => {
     setResumes((r) => (r ? { ...r, items: r.items.map((it) => (it.slug === slug ? { ...it, ...patch } : it)) } : r))
@@ -769,8 +799,12 @@ function SavedTab({ onErr }: { onErr: (m: string | null) => void }) {
   }
   const compose = async () => {
     setComposing(true); onErr(null)
-    try { await API.composeResume({ job_title: jobTitle.trim(), jd_text: jdText.trim() }); setJobTitle(''); setJdText(''); refresh() }
-    catch (e) { onErr((e as Error).message) } finally { setComposing(false) }
+    try {
+      await flushEdits()
+      const r = await API.composeResume({ job_title: jobTitle.trim(), jd_text: jdText.trim() })
+      await onActiveChanged()
+      setJobTitle(''); setJdText(''); refresh(); showPreview(r.resume.slug)
+    } catch (e) { onErr((e as Error).message) } finally { setComposing(false) }
   }
   const toggleAi = () => {
     const next = !aiOn
@@ -782,13 +816,13 @@ function SavedTab({ onErr }: { onErr: (m: string | null) => void }) {
     <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
       <div className="min-w-0 flex-1 space-y-4">
       <Card title={'\u6211\u7684\u7b80\u5386'} dev="ResumeList">
-        <p className="mb-3 text-[11px] leading-relaxed text-text-3">{'\u7ed9\u4e0d\u540c\u5c97\u4f4d\u5404\u5b58\u4e00\u4efd\uff1b\u9009\u4e2d\u7684\u90a3\u4efd\u4f1a\u5728\u300c\u7b80\u5386\u5de5\u4f5c\u53f0\u300d\u91cc\u7f16\u8f91\u3002\u6295\u9012\u65f6\u6309\u5c97\u4f4d\u9009\u7528\u5bf9\u5e94\u7248\u672c\u3002'}</p>
+        <p className="mb-3 text-[11px] leading-relaxed text-text-3">{'\u70b9\u5361\u7247\u770b\u9884\u89c8\uff1b\u70b9\u300c\u7f16\u8f91\u300d\u628a\u90a3\u4efd\u5207\u5230\u300c\u7b80\u5386\u5de5\u4f5c\u53f0\u300d\u91cc\u6539\u3002\u6295\u9012\u65f6\u6309\u5c97\u4f4d\u9009\u7528\u5bf9\u5e94\u7248\u672c\u3002'}</p>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {(resumes?.items ?? []).map((it) => {
             const isActive = it.slug === resumes?.active
             return (
               <div key={it.slug}
-                className={`rounded-xl p-3 transition ${isActive ? '' : 'cursor-pointer hover:brightness-110'}`}
+                className={`cursor-pointer rounded-xl p-3 transition hover:brightness-110`}
                 style={{
                   background: isActive ? 'rgba(10,132,255,0.12)' : 'rgba(255,255,255,0.04)',
                   border: isActive ? '1px solid rgba(10,132,255,0.45)' : '1px solid rgba(255,255,255,0.07)',
@@ -914,20 +948,67 @@ export default function Resume() {
   const [tab, setTab] = useState<'workbench' | 'saved'>(() =>
     (window.localStorage.getItem('resume.tab2') as 'workbench' | 'saved') || 'workbench')
   const [err, setErr] = useState<string | null>(null)
+  // \u7f16\u8f91\u72b6\u6001\u653e\u5728\u9875\u9762\u7ea7\uff1a\u5207\u5230\u300c\u5df2\u4fdd\u5b58\u7b80\u5386\u300d\u518d\u5207\u56de\u6765\uff0c\u672a\u4fdd\u5b58\u7684\u4fee\u6539\u4ecd\u5728
+  const [pool, setPoolState] = useState<ResumeBlocks | null>(null)
+  const [doc, setDocState] = useState<ResumeBlocks | null>(null)
+  const [poolDirty, setPoolDirty] = useState(false)
+  const [docDirty, setDocDirty] = useState(false)
+  const [activeName, setActiveName] = useState('')
+
+  const setPool = (p: ResumeBlocks) => { setPoolState(p); setPoolDirty(true) }
+  const setDoc = (d: ResumeBlocks) => { setDocState(d); setDocDirty(true) }
+  const reloadPool = async () => { setPoolState(await API.getPool()); setPoolDirty(false) }
+  const reloadDoc = async () => { setDocState(await API.getResumeBlocks()); setDocDirty(false) }
+  const reloadMeta = async () => {
+    const r = await API.getResumes()
+    setActiveName(r.items.find((i) => i.slug === r.active)?.name ?? '')
+  }
+  useEffect(() => {
+    void reloadPool().catch((e) => setErr((e as Error).message))
+    void reloadDoc().catch((e) => setErr((e as Error).message))
+    void reloadMeta().catch(() => {})
+  }, [])
+
+  // \u5173\u6807\u7b7e\u9875/\u5237\u65b0\u524d\uff0c\u6d4f\u89c8\u5668\u62e6\u4e00\u4e0b\u672a\u4fdd\u5b58\u7684\u4fee\u6539
+  useEffect(() => {
+    const h = (e: BeforeUnloadEvent) => { if (poolDirty || docDirty) { e.preventDefault(); e.returnValue = '' } }
+    window.addEventListener('beforeunload', h)
+    return () => window.removeEventListener('beforeunload', h)
+  }, [poolDirty, docDirty])
+
+  const savePool = async () => { if (pool) { await API.savePool(pool); setPoolDirty(false) } }
+  const saveDoc = async () => { if (doc) { await API.saveResumeBlocks(doc); setDocDirty(false) } }
+  // \u5207\u6362/\u65b0\u5efa/\u751f\u6210\u7b80\u5386\u524d\u5148\u628a\u672a\u4fdd\u5b58\u7684\u6539\u52a8\u843d\u76d8\uff0c\u907f\u514d\u88ab\u670d\u52a1\u7aef\u5185\u5bb9\u8986\u76d6
+  const flushEdits = async () => { if (poolDirty) await savePool(); if (docDirty) await saveDoc() }
+
   const switchTab = (t: 'workbench' | 'saved') => { setTab(t); setErr(null); window.localStorage.setItem('resume.tab2', t) }
 
   return (
     <div className="relative">
       <DevLabel name="ResumePage" float />
-      <div className="mb-3 inline-flex gap-1 rounded-xl bg-bg-card2 p-1" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
-        {([['workbench', '\u7b80\u5386\u5de5\u4f5c\u53f0'], ['saved', '\u5df2\u4fdd\u5b58\u7b80\u5386']] as const).map(([k, label]) => (
-          <button key={k} type="button" onClick={() => switchTab(k)}
-            className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${tab === k ? 'text-white' : 'text-text-3 hover:text-text-1'}`}
-            style={tab === k ? { background: '#0a84ff' } : undefined}>{label}</button>
-        ))}
+      <div className="mb-3 flex items-center gap-3">
+        <div className="inline-flex gap-1 rounded-xl bg-bg-card2 p-1" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+          {([['workbench', '\u7b80\u5386\u5de5\u4f5c\u53f0'], ['saved', '\u5df2\u4fdd\u5b58\u7b80\u5386']] as const).map(([k, label]) => (
+            <button key={k} type="button" onClick={() => switchTab(k)}
+              className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${tab === k ? 'text-white' : 'text-text-3 hover:text-text-1'}`}
+              style={tab === k ? { background: '#0a84ff' } : undefined}>{label}</button>
+          ))}
+        </div>
+        {(poolDirty || docDirty) && (
+          <span className="flex items-center gap-1.5 text-[11px]" style={{ color: '#f5a623' }}>
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#f5a623' }} />
+            {'\u6709\u672a\u4fdd\u5b58\u7684\u4fee\u6539'}
+          </span>
+        )}
       </div>
       {err && <div className="mb-3 rounded-lg bg-signal-red/10 px-4 py-2 text-xs text-signal-red">{err}</div>}
-      {tab === 'workbench' ? <Workbench onErr={setErr} /> : <SavedTab onErr={setErr} />}
+      {!pool || !doc ? <div className="text-sm text-text-3">{'\u52a0\u8f7d\u4e2d\u2026'}</div>
+        : tab === 'workbench'
+          ? <Workbench onErr={setErr} pool={pool} setPool={setPool} doc={doc} setDoc={setDoc}
+              poolDirty={poolDirty} docDirty={docDirty} activeName={activeName}
+              savePool={savePool} saveDoc={saveDoc} reloadPool={reloadPool} />
+          : <SavedTab onErr={setErr} flushEdits={flushEdits}
+              onActiveChanged={async () => { await reloadDoc(); await reloadMeta() }} />}
     </div>
   )
 }
