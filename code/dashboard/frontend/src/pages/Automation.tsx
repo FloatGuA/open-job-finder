@@ -352,6 +352,7 @@ const CHECK_PARAMS: ParamSpec[] = [
   { key: 'max_conversations', label: '\u6700\u591a\u626b\u63cf\u4f1a\u8bdd', type: 'number', min: 1, max: 10000 },
   { key: 'no_response_days',  label: '\u65e0\u56de\u5e94\u5929\u6570',   type: 'number', min: 1, max: 90,  hint: '\u8d85\u8fc7\u5219\u6807\u8bb0/\u62d2\u7edd' },
   { key: 'stale_conv_days',   label: '\u9648\u65e7\u5173\u95ed\u5929\u6570', type: 'number', min: 1, max: 180, hint: '\u8d85\u8fc7\u5219\u81ea\u52a8\u5173\u95ed' },
+  { key: 'auto_send_adapted_resume', label: '\u81ea\u52a8\u53d1\u9002\u914d\u7b80\u5386', type: 'boolean', hint: '\u6309\u5c97\u4f4d\u53d1\u5339\u914d\u90a3\u4efd\u7684\u5df2\u5bfc\u51fa PDF\uff1b\u6ca1\u5bfc\u51fa/\u5931\u8d25\u81ea\u52a8\u56de\u9000\u7ad9\u5185\u7b80\u5386' },
   { key: 'dry_run',           label: '\u6a21\u62df\u8fd0\u884c',     type: 'boolean',             hint: '\u4e0d\u5b9e\u9645\u53d1\u9001' },
   { key: 'headless',          label: '\u65e0\u5934\u6a21\u5f0f',     type: 'boolean',             hint: '\u6d4f\u89c8\u5668\u540e\u53f0\u8fd0\u884c' },
 ]
@@ -374,7 +375,7 @@ function ScheduleCard() {
     times: [],
     interval_enabled: false,
     interval_minutes: 0,
-    params: { max_conversations: 200, no_response_days: 14, stale_conv_days: 30, dry_run: false, headless: true },
+    params: { max_conversations: 200, no_response_days: 14, stale_conv_days: 30, auto_send_adapted_resume: false, dry_run: false, headless: true },
   })
   const [nextRuns, setNextRuns] = useState<Record<string, string | null>>({})
   const [nextIntervalRuns, setNextIntervalRuns] = useState<Record<string, string | null>>({})

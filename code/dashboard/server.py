@@ -87,6 +87,7 @@ _SCHEDULE_DEFAULTS = {
             "max_conversations": 200,
             "no_response_days": 14,
             "stale_conv_days": 30,
+            "auto_send_adapted_resume": False,
             "dry_run": False,
             "headless": True,
         },
