@@ -903,7 +903,7 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
         </div>
 
         {/* \u2461 \u5f53\u524d\u7b80\u5386 */}
-        <div className="min-w-0 flex-1 xl:max-w-[52rem]">
+        <div className="min-w-0 flex-1 xl:min-w-[40rem] xl:max-w-[52rem]">
           <div className={colHead}>
             {'\u5f53\u524d\u7b80\u5386'}<DevLabel name="ResumeColumn" />
             <span className="font-normal normal-case text-text-3">{activeName ? `${activeName} \u00b7 ${docCount} \u6761` : `${docCount} \u6761`}</span>

@@ -37,9 +37,10 @@ export function buildResumeHtml(doc: ResumeBlocks): string {
 * { box-sizing:border-box; }
 html,body { margin:0; padding:0; }
 body { width:794px; min-height:1123px; padding:46px 56px; background:#fff; color:#1a1a1a;
-  font-family: "Microsoft YaHei", "\u5fae\u8f6f\u96c5\u9ed1", "PingFang SC", sans-serif; font-size:14px; line-height:1.52; }
+  font-family: Arial, Helvetica, "Microsoft YaHei", "\u5fae\u8f6f\u96c5\u9ed1", "PingFang SC", sans-serif; font-size:14px; line-height:1.52; }
 /* \u6807\u9898\u7c7b\u7edf\u4e00\u9ed1\u4f53\u3001\u6b63\u6587\u5fae\u8f6f\u96c5\u9ed1\uff08\u7528\u6237 2026-08-04 \u5b9a\uff09 */
-.s-title, .e-title { font-family: SimHei, "\u9ed1\u4f53", "Microsoft YaHei", sans-serif; }
+/* \u82f1\u6587\u8d70\u57fa\u7840\u6b3e Arial\uff0c\u4e2d\u6587\u56de\u843d\u9ed1\u4f53\u2014\u2014\u5b57\u4f53\u6808\u91cc Latin \u5b57\u4f53\u5728\u524d\u5373\u53ef\u5206\u5de5 */
+.s-title, .e-title { font-family: Arial, Helvetica, SimHei, "\u9ed1\u4f53", "Microsoft YaHei", sans-serif; }
 /* \u59d3\u540d\u5355\u72ec\u7528\u8bb2\u7a76\u4e9b\u7684\u886c\u7ebf\u5b57\u4f53\uff0c\u548c\u6b63\u6587\u9ed1\u4f53\u62c9\u5f00\u5c42\u6b21\uff1b\u672b\u4f4d serif \u515c\u5e95\uff0c\u786e\u4fdd\u6ca1\u88c5\u67d0\u6b3e\u5b57\u4f53\u65f6\u4e0d\u6389\u56de\u65e0\u886c\u7ebf */
 .name { text-align:center; font-size:33px; font-weight:700; letter-spacing:6px; margin:0 0 12px;
   font-family: "STZhongsong", "\u534e\u6587\u4e2d\u5b8b", "Songti SC", "\u5b8b\u4f53", Georgia, serif; }
