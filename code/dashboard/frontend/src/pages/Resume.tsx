@@ -797,9 +797,9 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
         <span className="text-[11px] text-text-3">{'\u4f1a\u628a\u5f53\u524d\u7f16\u8f91\u5185\u5bb9\u53e6\u5b58\u4e00\u4efd\uff0c\u4e4b\u540e\u7f16\u8f91\u65b0\u7684\u90a3\u4efd'}</span>
       </div>
 
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-center">
         {/* \u2460 \u4fe1\u606f\u6c60 */}
-        <div className="min-w-0 flex-1 xl:w-[21rem] xl:flex-none">
+        <div className="min-w-0 xl:w-[21rem] xl:shrink-0">
           <div className={colHead}>
             {'\u4fe1\u606f\u6c60'}<DevLabel name="PoolColumn" />
             <span className="font-normal normal-case text-text-3">{`${poolCount} \u6761`}</span>
@@ -903,7 +903,7 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
         </div>
 
         {/* \u2461 \u5f53\u524d\u7b80\u5386 */}
-        <div className="min-w-0 flex-1 xl:max-w-[44rem]">
+        <div className="min-w-0 flex-1 xl:max-w-[52rem]">
           <div className={colHead}>
             {'\u5f53\u524d\u7b80\u5386'}<DevLabel name="ResumeColumn" />
             <span className="font-normal normal-case text-text-3">{activeName ? `${activeName} \u00b7 ${docCount} \u6761` : `${docCount} \u6761`}</span>
@@ -924,7 +924,7 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
         </div>
 
         {/* \u2462 \u9884\u89c8 */}
-        <div className="min-w-0 shrink-0 xl:w-[34rem]">
+        <div className="min-w-0 flex-1 xl:max-w-[50rem]">
           <div className={colHead}>{'\u9884\u89c8\uff08A4\uff09'}<DevLabel name="ResumePreview" /></div>
           <div className="sticky top-4"><A4Preview html={html} /></div>
         </div>

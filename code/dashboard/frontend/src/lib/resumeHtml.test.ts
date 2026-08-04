@@ -66,8 +66,8 @@ describe('buildResumeHtml', () => {
   it('\u6807\u9898\u7528\u9ed1\u4f53\u3001\u6b63\u6587\u7528\u5fae\u8f6f\u96c5\u9ed1', () => {
     const html = buildResumeHtml(doc([{ name: 'S', blocks: [blk('T', ['b'])] }]))
     expect(html).toContain('font-family: "Microsoft YaHei"')          // body \u6b63\u6587
-    expect(html).toMatch(/\.name, \.s-title, \.e-title \{ font-family: SimHei/)  // \u6807\u9898\u7c7b
-    expect(html).not.toContain('Georgia')                              // \u65e7\u8845\u7ebf\u5df2\u79fb\u9664
+    expect(html).toMatch(/\.s-title, \.e-title \{ font-family: SimHei/)   // \u5206\u533a/\u6761\u76ee\u6807\u9898\u9ed1\u4f53
+    expect(html).toMatch(/\.name \{[^}]*font-family: "STZhongsong"/)      // \u59d3\u540d\u5355\u72ec\u7528\u8845\u7ebf
   })
 
   it('\u5b57\u6bb5\u7ea7\u7c97/\u659c/\u4e0b\u5212\u7ebf\u53ea\u4f5c\u7528\u4e8e\u6307\u5b9a\u5b57\u6bb5', () => {
