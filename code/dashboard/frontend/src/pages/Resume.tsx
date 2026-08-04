@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
-import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type PoolSnapshot, type PoolCurrent, type Job } from '@/api'
+import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type PoolSnapshot, type FieldMarks, type PoolCurrent, type Job } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
 
 // v2.16\uff1a\u5206\u533a\u4e0d\u518d\u56fa\u5b9a\uff0c\u540d\u79f0\u81ea\u5b9a\u4e49\uff08\u5982\u300c\u6e38\u620f\u7ecf\u5386\u300d\u300cAgent \u7ecf\u5386\u300d\uff09\u3002\u8fd9\u4e9b\u53ea\u662f\u65b0\u5efa\u65f6\u7684\u5feb\u6377\u5019\u9009\u3002
@@ -167,34 +167,60 @@ function TailorCard() {
 // -- \u5b9e\u65f6\u9884\u89c8\uff1a\u7531\u5757\u5e93\u5ba2\u6237\u7aef\u6e32\u67d3\u6210\u7b80\u5386 HTML\uff08\u9884\u89c8 iframe \u4e0e\u5bfc\u51fa PDF \u540c\u6e90\uff0c\u907f\u514d\u4e24\u5957\u6392\u7248\u6f02\u79fb\uff09--
 import { buildResumeHtml } from '@/lib/resumeHtml'
 
+const PAGE_W = 794          // A4 @96dpi
+const PAGE_H = 1123
+
+// Word \u5f0f\u5206\u9875\u9884\u89c8\uff1a\u540c\u4e00\u4efd HTML \u6e32\u67d3 N \u904d\uff0c\u6bcf\u9875\u53ea\u9732\u51fa\u81ea\u5df1\u90a3\u4e00\u6bb5
+// \uff08\u8d1f\u504f\u79fb + \u88c1\u5207\uff09\u3002\u5207\u7247\u800c\u975e\u4e00\u6761\u957f\u9875\uff0c\u624d\u80fd\u5982\u5b9e\u770b\u5230\u65ad\u9875\u4f4d\u7f6e\u3002
 function A4Preview({ html }: { html: string }) {
   const boxRef = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(0.6)
-  const [pageH, setPageH] = useState(1123)
+  const [pages, setPages] = useState(1)
+  const [docH, setDocH] = useState(PAGE_H)
+
   useEffect(() => {
     const el = boxRef.current
     if (!el) return
-    const update = () => { const w = el.clientWidth; if (w) setScale(Math.min(1, w / 794)) }
+    const update = () => { const w = el.clientWidth; if (w) setScale(Math.min(1, w / PAGE_W)) }
     update()
     const ro = new ResizeObserver(update)
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
   const onLoad = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
     const d = e.currentTarget.contentDocument
-    if (d && d.body) setPageH(Math.max(1123, d.body.scrollHeight + 2))
+    if (!d || !d.body) return
+    const h = Math.max(PAGE_H, d.body.scrollHeight)
+    setDocH(h)
+    setPages(Math.max(1, Math.ceil((h - 8) / PAGE_H)))
   }
+
   return (
     <div ref={boxRef} className="w-full overflow-auto" style={{ maxHeight: 'calc(100vh - 150px)' }}>
-      <div style={{ width: 794 * scale, height: pageH * scale, margin: '0 auto' }}>
-        <iframe title="resume-preview" srcDoc={html} onLoad={onLoad} className="bg-white shadow-card"
-          style={{ width: 794, height: pageH, border: 0, transformOrigin: 'top left', transform: `scale(${scale})` }} />
+      <div className="mx-auto space-y-4" style={{ width: PAGE_W * scale }}>
+        {Array.from({ length: pages }).map((_, i) => (
+          <div key={i} className="relative overflow-hidden bg-white shadow-card"
+            style={{ width: PAGE_W * scale, height: PAGE_H * scale }}>
+            <iframe title={`resume-preview-${i}`} srcDoc={html} onLoad={i === 0 ? onLoad : undefined}
+              scrolling="no"
+              style={{
+                width: PAGE_W, height: docH, border: 0, position: 'absolute', left: 0,
+                top: -i * PAGE_H * scale,
+                transform: `scale(${scale})`, transformOrigin: 'top left', pointerEvents: 'none',
+              }} />
+            {pages > 1 && (
+              <span className="absolute bottom-1 right-2 text-[10px]" style={{ color: '#b8b8b8' }}>
+                {i + 1}{' / '}{pages}
+              </span>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   )
 }
 
-// \u2500\u2500 \u62d6\u62fd\u8f7d\u8377\uff08\u6a21\u5757\u7ea7\uff1adragover \u9636\u6bb5\u8bfb\u4e0d\u5230 dataTransfer\uff0c\u6545\u7528\u6a21\u5757\u53d8\u91cf\u5171\u4eab\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 // \u65b0\u5efa\u7b80\u5386\u7684\u9ed8\u8ba4\u540d\uff1a\u65e5\u671f_\u59d3\u540d_\u76ee\u6807\u5c97\u4f4d\uff08\u6ca1\u586b\u76ee\u6807\u5c97\u4f4d\u5c31\u9000\u6210\u300c\u7b80\u5386\u300d\uff09
 export function defaultResumeName(person: string, target: string): string {
   const d = new Date()
@@ -222,6 +248,32 @@ function toggleMark(style: ResumeBlock['style'], field: StyleField, mark: StyleM
   if (Object.keys(cur).length) next[field] = cur
   else delete next[field]
   return next
+}
+
+// \u5b57\u6bb5\u65c1\u7684\u5185\u8054 B/I/U\uff08\u6bd4\u5355\u72ec\u4e00\u6761\u5de5\u5177\u680f\u66f4\u76f4\u63a5\uff1a\u6539\u54ea\u4e2a\u6846\u5c31\u70b9\u65c1\u8fb9\u90a3\u7ec4\uff09
+function MarkButtons({ marks, onToggle }: {
+  marks?: FieldMarks
+  onToggle: (m: StyleMark) => void
+}) {
+  return (
+    <span className="flex shrink-0 items-center gap-0.5">
+      {STYLE_MARKS.map(({ mark, glyph, title }) => {
+        const on = !!marks?.[mark]
+        return (
+          <button key={mark} type="button" title={title} onClick={() => onToggle(mark)}
+            className="h-7 w-7 rounded-md text-[12px] leading-none transition"
+            style={{
+              background: on ? 'rgba(10,132,255,0.2)' : 'rgba(255,255,255,0.05)',
+              color: on ? '#4aa3ff' : 'rgba(255,255,255,0.45)',
+              border: on ? '1px solid rgba(10,132,255,0.5)' : '1px solid rgba(255,255,255,0.08)',
+              fontWeight: mark === 'bold' ? 700 : 400,
+              fontStyle: mark === 'italic' ? 'italic' : 'normal',
+              textDecoration: mark === 'underline' ? 'underline' : 'none',
+            }}>{glyph}</button>
+        )
+      })}
+    </span>
+  )
 }
 
 type Owner = 'pool' | 'resume'
@@ -463,45 +515,32 @@ export function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDro
                           <div style={{ display: 'grid', gridTemplateRows: isOpen ? '1fr' : '0fr', transition: 'grid-template-rows .28s ease' }}>
                             <div className="min-h-0 overflow-hidden">
                               <div className="space-y-2 px-2.5 pb-2.5 pt-1">
-                                <div className="flex gap-1.5">
+                                <div className="flex items-center gap-1.5">
                                   <input className={detailInput} style={inputStyle} placeholder={'\u6807\u9898'}
                                     value={blk.title} onChange={(e) => updateBlock(si, bi, { title: e.target.value })} />
-                                  <input className="w-28 shrink-0 rounded-lg bg-bg-card px-2 py-2 text-sm text-text-1 focus:outline-none" style={inputStyle}
-                                    placeholder={'\u65f6\u95f4'} value={blk.time} onChange={(e) => updateBlock(si, bi, { time: e.target.value })} />
+                                  {showStyle && <MarkButtons marks={blk.style?.title}
+                                    onToggle={(m) => updateBlock(si, bi, { style: toggleMark(blk.style, 'title', m) })} />}
                                 </div>
-                                <textarea className={`${detailInput} leading-relaxed`} style={{ ...inputStyle, minHeight: compact ? 96 : 120 }}
-                                  placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')}
-                                  onChange={(e) => updateBlock(si, bi, { bullets: e.target.value.split('\n') })} />
+                                <div className="flex items-center gap-1.5">
+                                  <input className="w-32 shrink-0 rounded-lg bg-bg-card px-2 py-2 text-sm text-text-1 focus:outline-none" style={inputStyle}
+                                    placeholder={'\u65f6\u95f4'} value={blk.time} onChange={(e) => updateBlock(si, bi, { time: e.target.value })} />
+                                  {showStyle && <MarkButtons marks={blk.style?.time}
+                                    onToggle={(m) => updateBlock(si, bi, { style: toggleMark(blk.style, 'time', m) })} />}
+                                </div>
+                                <div className="flex items-start gap-1.5">
+                                  <textarea className={`${detailInput} leading-relaxed`} style={{ ...inputStyle, minHeight: compact ? 96 : 120 }}
+                                    placeholder={'\u8981\u70b9\uff0c\u6bcf\u884c\u4e00\u6761'} value={blk.bullets.join('\n')}
+                                    onChange={(e) => updateBlock(si, bi, { bullets: e.target.value.split('\n') })} />
+                                  {showStyle && (
+                                    <span className="flex flex-col gap-0.5">
+                                      <MarkButtons marks={blk.style?.bullets}
+                                        onToggle={(m) => updateBlock(si, bi, { style: toggleMark(blk.style, 'bullets', m) })} />
+                                    </span>
+                                  )}
+                                </div>
                                 <input className="w-full rounded bg-bg-card px-2.5 py-2 text-[12px] text-text-2 focus:outline-none" style={inputStyle}
                                   placeholder={summaryHint} value={blk.summary}
                                   onChange={(e) => updateBlock(si, bi, { summary: e.target.value })} />
-                                {showStyle && (
-                                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg px-2 py-1.5"
-                                    style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                                    <span className="text-[11px] text-text-3">{'\u6392\u7248'}</span>
-                                    {STYLE_FIELDS.map(({ key: f, label }) => (
-                                      <span key={f} className="flex items-center gap-1">
-                                        <span className="text-[11px] text-text-3">{label}</span>
-                                        {STYLE_MARKS.map(({ mark, glyph, title }) => {
-                                          const on = !!blk.style?.[f]?.[mark]
-                                          return (
-                                            <button key={mark} type="button" title={title}
-                                              onClick={() => updateBlock(si, bi, { style: toggleMark(blk.style, f, mark) })}
-                                              className="h-6 w-6 rounded text-[12px] leading-none transition"
-                                              style={{
-                                                background: on ? 'rgba(10,132,255,0.2)' : 'rgba(255,255,255,0.05)',
-                                                color: on ? '#4aa3ff' : 'rgba(255,255,255,0.5)',
-                                                border: on ? '1px solid rgba(10,132,255,0.5)' : '1px solid transparent',
-                                                fontWeight: mark === 'bold' ? 700 : 400,
-                                                fontStyle: mark === 'italic' ? 'italic' : 'normal',
-                                                textDecoration: mark === 'underline' ? 'underline' : 'none',
-                                              }}>{glyph}</button>
-                                          )
-                                        })}
-                                      </span>
-                                    ))}
-                                  </div>
-                                )}
                                 <div className="flex items-center gap-1">
                                   <button type="button" onClick={() => moveBlock(si, bi, -1)} disabled={bi === 0}
                                     className="rounded px-2 py-1 text-[12px] text-text-3 transition hover:bg-bg-card2 hover:text-text-1 disabled:opacity-30">{'\u2191'}</button>
@@ -760,7 +799,7 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
 
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
         {/* \u2460 \u4fe1\u606f\u6c60 */}
-        <div className="min-w-0 flex-1 xl:max-w-[26rem]">
+        <div className="min-w-0 flex-1 xl:w-[21rem] xl:flex-none">
           <div className={colHead}>
             {'\u4fe1\u606f\u6c60'}<DevLabel name="PoolColumn" />
             <span className="font-normal normal-case text-text-3">{`${poolCount} \u6761`}</span>
@@ -864,7 +903,7 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
         </div>
 
         {/* \u2461 \u5f53\u524d\u7b80\u5386 */}
-        <div className="min-w-0 flex-1 xl:max-w-[26rem]">
+        <div className="min-w-0 flex-1 xl:max-w-[44rem]">
           <div className={colHead}>
             {'\u5f53\u524d\u7b80\u5386'}<DevLabel name="ResumeColumn" />
             <span className="font-normal normal-case text-text-3">{activeName ? `${activeName} \u00b7 ${docCount} \u6761` : `${docCount} \u6761`}</span>
@@ -885,7 +924,7 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
         </div>
 
         {/* \u2462 \u9884\u89c8 */}
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 shrink-0 xl:w-[34rem]">
           <div className={colHead}>{'\u9884\u89c8\uff08A4\uff09'}<DevLabel name="ResumePreview" /></div>
           <div className="sticky top-4"><A4Preview html={html} /></div>
         </div>
