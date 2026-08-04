@@ -9,7 +9,6 @@ const BASIC_FIELDS: Array<{ key: keyof ResumeBasicInfo; label: string }> = [
   { key: 'phone', label: '\u7535\u8bdd' },
   { key: 'email', label: '\u90ae\u7bb1' },
   { key: 'city', label: '\u57ce\u5e02' },
-  { key: 'degree', label: '\u5b66\u5386' },
   { key: 'target_title', label: '\u671f\u671b\u5c97\u4f4d' },
 ]
 
@@ -611,7 +610,6 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
   const [savingPool, setSavingPool] = useState(false)
   const [savingDoc, setSavingDoc] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [building, setBuilding] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [savingAs, setSavingAs] = useState(false)
   const [newName, setNewName] = useState('')
@@ -694,22 +692,6 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
     try { await API.uploadResume(file); await reloadPool() }
     catch (e2) { onErr((e2 as Error).message) }
     finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
-  }
-  const buildPool = async () => {
-    if (!window.confirm(CONFIRM_BUILD)) return
-    setBuilding(true); onErr(null); setBuildNote(null)
-    try {
-      if (poolDirty) await savePool()          // \u5148\u843d\u76d8\uff0c\u907f\u514d LLM \u7ed3\u679c\u8986\u76d6\u6389\u672a\u4fdd\u5b58\u7684\u624b\u6539
-      const r = await API.buildPool(pool.self_description)
-      setPool(r)
-      const st = r._stats
-      if (st && st.after < st.before) {
-        setBuildNote(`${NOTE_SHRINK_A}${st.before} \u2192 ${st.after}${NOTE_SHRINK_B}`)
-        loadSnaps()
-      } else if (st) {
-        setBuildNote(`${NOTE_OK_A}${st.before} \u2192 ${st.after}${NOTE_OK_B}`)
-      }
-    } catch (e) { onErr((e as Error).message) } finally { setBuilding(false) }
   }
   const restoreSnap = async (fname: string) => {
     if (!window.confirm(CONFIRM_RESTORE)) return
@@ -799,7 +781,8 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
 
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-center">
         {/* \u2460 \u4fe1\u606f\u6c60 */}
-        <div className="min-w-0 xl:w-[21rem] xl:shrink-0">
+        {/* \u4e09\u5217\u5747\u53c2\u4e0e\u62c9\u4f38\uff0c\u5404\u81ea\u5c01\u9876\uff1a\u4fe1\u606f\u6c60 44rem < \u5f53\u524d\u7b80\u5386 52rem\uff08\u53ea\u7a0d\u5bbd\uff0c\u591a\u51fa\u6765\u7684\u4f4d\u7f6e\u7ed9 B/I/U\uff09 */}
+        <div className="min-w-0 flex-1 xl:max-w-[44rem]">
           <div className={colHead}>
             {'\u4fe1\u606f\u6c60'}<DevLabel name="PoolColumn" />
             <span className="font-normal normal-case text-text-3">{`${poolCount} \u6761`}</span>
@@ -826,16 +809,6 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
                   </label>
                 ))}
               </div>
-            </Card>
-            <Card title={'\u81ea\u6211\u63cf\u8ff0'} dev="PoolSelfDesc" action={
-              <button type="button" onClick={() => void buildPool()} disabled={building}
-                className="rounded-lg px-2.5 py-1 text-[11px] text-text-1 transition disabled:opacity-40"
-                style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
-                {building ? '\u6574\u7406\u4e2d\u2026' : '\u878d\u5165\u4fe1\u606f\u6c60'}</button>
-            }>
-              <textarea className={inputCls} style={{ ...inputStyle, minHeight: 70 }} value={pool.self_description}
-                placeholder={'\u7b80\u5386\u6ca1\u5199\u5168\u7684\u7ecf\u5386/\u7279\u957f\uff0c\u5199\u8fd9\u91cc\u518d\u70b9\u300c\u878d\u5165\u4fe1\u606f\u6c60\u300d'}
-                onChange={(e) => setPool({ ...pool, self_description: e.target.value })} />
             </Card>
             <Card title={'\u5168\u90e8\u7d20\u6750'} dev="PoolSections" action={
               <div className="flex items-center gap-2">
@@ -903,7 +876,7 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
         </div>
 
         {/* \u2461 \u5f53\u524d\u7b80\u5386 */}
-        <div className="min-w-0 flex-1 xl:min-w-[40rem] xl:max-w-[52rem]">
+        <div className="min-w-0 flex-1 xl:grow-[1.15] xl:max-w-[52rem]">
           <div className={colHead}>
             {'\u5f53\u524d\u7b80\u5386'}<DevLabel name="ResumeColumn" />
             <span className="font-normal normal-case text-text-3">{activeName ? `${activeName} \u00b7 ${docCount} \u6761` : `${docCount} \u6761`}</span>
@@ -924,7 +897,7 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
         </div>
 
         {/* \u2462 \u9884\u89c8 */}
-        <div className="min-w-0 flex-1 xl:max-w-[50rem]">
+        <div className="min-w-0 xl:basis-[50rem] xl:grow-0">
           <div className={colHead}>{'\u9884\u89c8\uff08A4\uff09'}<DevLabel name="ResumePreview" /></div>
           <div className="sticky top-4"><A4Preview html={html} /></div>
         </div>
