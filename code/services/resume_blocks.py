@@ -28,6 +28,28 @@ def empty_blocks() -> dict:
     return {"basic_info": {k: "" for k in _BASIC_FIELDS}, "self_description": "", "sections": []}
 
 
+# 字段级富文本开关：每个块的 title / time / bullets 各自可设 粗/斜/下划线。
+# 空 dict = 用模板预设（分区标题粗体带下划线、条目标题粗体、日期灰色），所以老数据
+# 不带 style 时行为完全不变；AI 组合出来的简历同样走预设。
+_STYLE_FIELDS = ("title", "time", "bullets")
+_STYLE_MARKS = ("bold", "italic", "underline")
+
+
+def clean_style(raw) -> dict:
+    """归一化字段级样式：{field: {bold/italic/underline: bool}}，只留 True 的键。"""
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for f in _STYLE_FIELDS:
+        marks = raw.get(f)
+        if not isinstance(marks, dict):
+            continue
+        on = {m: True for m in _STYLE_MARKS if marks.get(m)}
+        if on:
+            out[f] = on
+    return out
+
+
 def _clean_block(it) -> Optional[dict]:
     if not isinstance(it, dict):
         return None
@@ -36,6 +58,7 @@ def _clean_block(it) -> Optional[dict]:
         "time": str(it.get("time", "")),
         "bullets": [str(b) for b in (it.get("bullets") or []) if str(b).strip()],
         "summary": str(it.get("summary", "")),
+        "style": clean_style(it.get("style")),
     }
 
 

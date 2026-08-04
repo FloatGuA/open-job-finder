@@ -195,6 +195,35 @@ function A4Preview({ html }: { html: string }) {
 }
 
 // \u2500\u2500 \u62d6\u62fd\u8f7d\u8377\uff08\u6a21\u5757\u7ea7\uff1adragover \u9636\u6bb5\u8bfb\u4e0d\u5230 dataTransfer\uff0c\u6545\u7528\u6a21\u5757\u53d8\u91cf\u5171\u4eab\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// \u65b0\u5efa\u7b80\u5386\u7684\u9ed8\u8ba4\u540d\uff1a\u65e5\u671f_\u59d3\u540d_\u76ee\u6807\u5c97\u4f4d\uff08\u6ca1\u586b\u76ee\u6807\u5c97\u4f4d\u5c31\u9000\u6210\u300c\u7b80\u5386\u300d\uff09
+export function defaultResumeName(person: string, target: string): string {
+  const d = new Date()
+  const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+  return [ymd, person.trim(), target.trim() || '\u7b80\u5386'].filter(Boolean).join('_')
+}
+
+type StyleField = 'title' | 'time' | 'bullets'
+type StyleMark = 'bold' | 'italic' | 'underline'
+const STYLE_FIELDS: Array<{ key: StyleField; label: string }> = [
+  { key: 'title', label: '\u6807\u9898' },
+  { key: 'time', label: '\u65f6\u95f4' },
+  { key: 'bullets', label: '\u8981\u70b9' },
+]
+const STYLE_MARKS: Array<{ mark: StyleMark; glyph: string; title: string }> = [
+  { mark: 'bold', glyph: 'B', title: '\u52a0\u7c97' },
+  { mark: 'italic', glyph: 'I', title: '\u659c\u4f53' },
+  { mark: 'underline', glyph: 'U', title: '\u4e0b\u5212\u7ebf' },
+]
+function toggleMark(style: ResumeBlock['style'], field: StyleField, mark: StyleMark): ResumeBlock['style'] {
+  const next = { ...(style || {}) }
+  const cur = { ...(next[field] || {}) }
+  if (cur[mark]) delete cur[mark]
+  else cur[mark] = true
+  if (Object.keys(cur).length) next[field] = cur
+  else delete next[field]
+  return next
+}
+
 type Owner = 'pool' | 'resume'
 type DragItem =
   | { kind: 'block'; owner: Owner; si: number; bi: number }
@@ -202,7 +231,7 @@ type DragItem =
 let dragItem: DragItem | null = null
 
 // \u2500\u2500 \u5171\u7528\u5206\u533a\u7f16\u8f91\u5668\uff08\u4fe1\u606f\u6c60\u4e0e\u5f53\u524d\u7b80\u5386\u540c\u6784\uff1a\u540c\u4e00\u5c55\u793a\u3001\u540c\u4e00\u4ea4\u4e92\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-export function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQuickAdd, onQuickAddSection, compact }: {
+export function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDrop, onQuickAdd, onQuickAddSection, compact, showStyle }: {
   doc: ResumeBlocks
   onChange: (next: ResumeBlocks) => void
   owner: Owner
@@ -211,6 +240,7 @@ export function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDro
   onQuickAdd?: (si: number, bi: number) => void                            // \u6c60 \u2192 \u7b80\u5386 \u5355\u6761\u5feb\u6377\u590d\u5236
   onQuickAddSection?: (si: number) => void                                 // \u6c60 \u2192 \u7b80\u5386 \u6574\u5206\u533a\u590d\u5236
   compact?: boolean
+  showStyle?: boolean          // \u5b57\u6bb5\u7ea7 \u7c97/\u659c/\u4e0b\u5212\u7ebf \u5f00\u5173\uff08\u53ea\u5728\u300c\u5f53\u524d\u7b80\u5386\u300d\u5217\u7528\uff0c\u4fe1\u606f\u6c60\u4e0d\u6392\u7248\uff09
 }) {
   const [open, setOpen] = useState<string | null>(null)
   const [, force] = useState(0)
@@ -445,6 +475,33 @@ export function SectionEditor({ doc, onChange, owner, summaryHint, onExternalDro
                                 <input className="w-full rounded bg-bg-card px-2.5 py-2 text-[12px] text-text-2 focus:outline-none" style={inputStyle}
                                   placeholder={summaryHint} value={blk.summary}
                                   onChange={(e) => updateBlock(si, bi, { summary: e.target.value })} />
+                                {showStyle && (
+                                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg px-2 py-1.5"
+                                    style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                                    <span className="text-[11px] text-text-3">{'\u6392\u7248'}</span>
+                                    {STYLE_FIELDS.map(({ key: f, label }) => (
+                                      <span key={f} className="flex items-center gap-1">
+                                        <span className="text-[11px] text-text-3">{label}</span>
+                                        {STYLE_MARKS.map(({ mark, glyph, title }) => {
+                                          const on = !!blk.style?.[f]?.[mark]
+                                          return (
+                                            <button key={mark} type="button" title={title}
+                                              onClick={() => updateBlock(si, bi, { style: toggleMark(blk.style, f, mark) })}
+                                              className="h-6 w-6 rounded text-[12px] leading-none transition"
+                                              style={{
+                                                background: on ? 'rgba(10,132,255,0.2)' : 'rgba(255,255,255,0.05)',
+                                                color: on ? '#4aa3ff' : 'rgba(255,255,255,0.5)',
+                                                border: on ? '1px solid rgba(10,132,255,0.5)' : '1px solid transparent',
+                                                fontWeight: mark === 'bold' ? 700 : 400,
+                                                fontStyle: mark === 'italic' ? 'italic' : 'normal',
+                                                textDecoration: mark === 'underline' ? 'underline' : 'none',
+                                              }}>{glyph}</button>
+                                          )
+                                        })}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
                                 <div className="flex items-center gap-1">
                                   <button type="button" onClick={() => moveBlock(si, bi, -1)} disabled={bi === 0}
                                     className="rounded px-2 py-1 text-[12px] text-text-3 transition hover:bg-bg-card2 hover:text-text-1 disabled:opacity-30">{'\u2191'}</button>
@@ -498,7 +555,7 @@ function BasicInfoCard({ doc, onChange, dev }: { doc: ResumeBlocks; onChange: (d
 }
 
 // \u2500\u2500 \u5206\u9875 1\uff1a\u7b80\u5386\u5de5\u4f5c\u53f0\uff08\u4fe1\u606f\u6c60 | \u5f53\u524d\u7b80\u5386 | \u9884\u89c8\uff09\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, activeName, savePool, saveDoc, reloadPool }: {
+function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, activeName, savePool, saveDoc, reloadPool, onActiveChanged }: {
   onErr: (m: string | null) => void
   pool: ResumeBlocks
   setPool: (p: ResumeBlocks) => void
@@ -510,12 +567,17 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
   savePool: () => Promise<void>
   saveDoc: () => Promise<void>
   reloadPool: () => Promise<void>
+  onActiveChanged: () => Promise<void>
 }) {
   const [savingPool, setSavingPool] = useState(false)
   const [savingDoc, setSavingDoc] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [building, setBuilding] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [savingAs, setSavingAs] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newTarget, setNewTarget] = useState('')
+  const [nameTouched, setNameTouched] = useState(false)   // \u7528\u6237\u6539\u8fc7\u540d\u5b57\u5c31\u522b\u518d\u81ea\u52a8\u8986\u76d6
   const [snaps, setSnaps] = useState<PoolSnapshot[]>([])
   const [snapCur, setSnapCur] = useState<PoolCurrent | null>(null)
   const [showSnaps, setShowSnaps] = useState(false)
@@ -617,6 +679,20 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
     catch (e) { onErr((e as Error).message) }
   }
 
+  // \u628a\u5f53\u524d\u6b63\u5728\u7f16\u8f91\u7684\u8fd9\u4e00\u7248\u5b58\u6210\u4e00\u4efd\u65b0\u7684\u300c\u5df2\u4fdd\u5b58\u7b80\u5386\u300d\uff08\u76f8\u5f53\u4e8e\u53e6\u5b58\u4e3a\uff0c\u4e4b\u540e\u7f16\u8f91\u65b0\u7684\u90a3\u4efd\uff09
+  const saveAsNew = async () => {
+    const person = doc.basic_info.name || ''
+    const name = (newName.trim() || defaultResumeName(person, newTarget))
+    setSavingAs(true); onErr(null)
+    try {
+      await saveDoc()                                  // \u5148\u628a\u5f53\u524d\u7f16\u8f91\u843d\u5230\u6fc0\u6d3b\u4efd\uff0c\u65b0\u5efa\u624d\u590d\u5236\u5f97\u5230\u6700\u65b0\u5185\u5bb9
+      const item = await API.createResume(name, newTarget.trim(), true)
+      await API.activateResume(item.slug)
+      await onActiveChanged()
+      setNewName(''); setNewTarget(''); setNameTouched(false)
+    } catch (e) { onErr((e as Error).message) } finally { setSavingAs(false) }
+  }
+
   const poolCount = pool.sections.reduce((n, x) => n + x.blocks.length, 0)
   const docCount = doc.sections.reduce((n, x) => n + x.blocks.length, 0)
   const colHead = 'mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-3'
@@ -650,13 +726,36 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
         <label htmlFor="wb-upload"
           className={`cursor-pointer rounded-full px-4 py-2 text-sm text-text-1 transition ${uploading ? 'cursor-not-allowed opacity-50' : 'hover:brightness-110'}`}
           style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)' }}>
-          {uploading ? '\u89e3\u6790\u4e2d\u2026\uff08\u7ea6 1 \u5206\u949f\uff09' : '\u4e0a\u4f20\u7b80\u5386\u5165\u6c60'}</label>
+          {uploading ? '\u89e3\u6790\u4e2d\u2026\uff08\u7ea6 1 \u5206\u949f\uff09' : '\u4e0a\u4f20\u672c\u5730\u7b80\u5386\u5165\u6c60'}</label>
         <button type="button" onClick={() => void exportPdf()} disabled={exporting}
           className="rounded-full px-5 py-2 text-sm text-text-1 transition hover:brightness-110 disabled:opacity-50"
           style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)' }}>
-          {exporting ? '\u5bfc\u51fa\u4e2d\u2026' : '\u5bfc\u51fa PDF'}</button>
+          {exporting ? '\u5bfc\u51fa\u4e2d\u2026' : '\u5bfc\u51fa\u5f53\u524d\u7b80\u5386 PDF'}</button>
         <span className="ml-auto text-xs text-text-3">
           {poolDirty || docDirty ? '\u6709\u672a\u4fdd\u5b58\u7684\u4fee\u6539\uff0c\u8bb0\u5f97\u70b9\u5404\u680f\u7684\u300c\u4fdd\u5b58\u300d' : '\u6539\u52a8\u5df2\u5168\u90e8\u4fdd\u5b58'}</span>
+      </div>
+
+      {/* \u628a\u5f53\u524d\u8fd9\u4e00\u7248\u5b58\u6210\u65b0\u7684\u300c\u5df2\u4fdd\u5b58\u7b80\u5386\u300d\u2014\u2014\u65b0\u5efa\u7b80\u5386\u7684\u552f\u4e00\u5165\u53e3\uff08\u539f\u5728\u5df2\u4fdd\u5b58\u7b80\u5386\u9875\uff0c\u4e0e\u300c\u5f53\u524d\u7b80\u5386\u300d\u6982\u5ff5\u51b2\u7a81\uff09 */}
+      <div className="mb-4 flex flex-wrap items-end gap-2 rounded-xl px-3 py-2.5"
+        style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <span className="pb-1.5 text-[12px] font-medium text-text-2">{'\u5b58\u4e3a\u65b0\u7b80\u5386'}</span>
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] text-text-3">{'\u76ee\u6807\u5c97\u4f4d'}</span>
+          <input className="w-40 rounded bg-bg-card px-2 py-1.5 text-xs text-text-1 focus:outline-none" style={inputStyle}
+            placeholder={'\u5982 \u6e38\u620f\u7b56\u5212'} value={newTarget}
+            onChange={(e) => setNewTarget(e.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] text-text-3">{'\u7b80\u5386\u540d\uff08\u53ef\u6539\uff09'}</span>
+          <input className="w-56 rounded bg-bg-card px-2 py-1.5 text-xs text-text-1 focus:outline-none" style={inputStyle}
+            placeholder={defaultResumeName(doc.basic_info.name || '', newTarget)}
+            value={nameTouched ? newName : ''}
+            onChange={(e) => { setNewName(e.target.value); setNameTouched(true) }} />
+        </label>
+        <button type="button" onClick={() => void saveAsNew()} disabled={savingAs}
+          className="rounded-lg px-4 py-1.5 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
+          style={{ background: '#0a84ff' }}>{savingAs ? '\u4fdd\u5b58\u4e2d\u2026' : '\u5b58\u4e3a\u65b0\u7b80\u5386'}</button>
+        <span className="text-[11px] text-text-3">{'\u4f1a\u628a\u5f53\u524d\u7f16\u8f91\u5185\u5bb9\u53e6\u5b58\u4e00\u4efd\uff0c\u4e4b\u540e\u7f16\u8f91\u65b0\u7684\u90a3\u4efd'}</span>
       </div>
 
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
@@ -779,7 +878,7 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
           </div>
           <Card title={'\u7b80\u5386\u5185\u5bb9'} dev="ResumeSections">
             <p className="mb-3 text-[10px] leading-relaxed text-text-3">{'\u8fd9\u4efd\u7b80\u5386\u5b9e\u9645\u5305\u542b\u7684\u5185\u5bb9\u3002\u6539\u5b83\u4e0d\u5f71\u54cd\u4fe1\u606f\u6c60\uff1b\u5220\u6761\u76ee\u53ea\u4ece\u8fd9\u4efd\u7b80\u5386\u79fb\u9664\u3002'}</p>
-            <SectionEditor doc={doc} onChange={setDoc} owner="resume" compact
+            <SectionEditor doc={doc} onChange={setDoc} owner="resume" compact showStyle
               onExternalDrop={onResumeExternalDrop}
               summaryHint={'\u6982\u62ec\uff08\u4e0d\u4e0a\u7b80\u5386\uff09'} />
           </Card>
@@ -804,8 +903,6 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
   const [resumes, setResumes] = useState<ResumeIndex | null>(null)
   const [exportsList, setExportsList] = useState<ResumeExport[]>([])
   const [busy, setBusy] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newTarget, setNewTarget] = useState('')
   const [aiOn, setAiOn] = useState(() => window.localStorage.getItem('resume.aiCompose') === 'on')
   const [jobTitle, setJobTitle] = useState('')
   const [jdText, setJdText] = useState('')
@@ -832,16 +929,6 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
     setBusy(true); onErr(null)
     try { await flushEdits(); await API.activateResume(slug); await onActiveChanged(); refresh() }
     catch (e) { onErr((e as Error).message) } finally { setBusy(false) }
-  }
-  const create = async () => {
-    setBusy(true); onErr(null)
-    try {
-      await flushEdits()
-      const item = await API.createResume(newName.trim(), newTarget.trim(), true)
-      await API.activateResume(item.slug)
-      await onActiveChanged()
-      setNewName(''); setNewTarget(''); refresh(); showPreview(item.slug)
-    } catch (e) { onErr((e as Error).message) } finally { setBusy(false) }
   }
   const remove = async (slug: string) => {
     if (!window.confirm('\u5220\u9664\u8fd9\u4efd\u7b80\u5386\uff1f\u4e0d\u53ef\u6062\u590d\u3002')) return
@@ -914,15 +1001,8 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
             )
           })}
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
-          <input className="w-40 rounded bg-bg-card px-2 py-1.5 text-xs text-text-1 focus:outline-none" style={inputStyle}
-            placeholder={'\u65b0\u7b80\u5386\u540d\u79f0'} value={newName} onChange={(e) => setNewName(e.target.value)} />
-          <input className="w-40 rounded bg-bg-card px-2 py-1.5 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
-            placeholder={'\u76ee\u6807\u5c97\u4f4d\uff08\u53ef\u9009\uff09'} value={newTarget} onChange={(e) => setNewTarget(e.target.value)} />
-          <button type="button" disabled={busy || !newName.trim()} onClick={() => void create()}
-            className="rounded-lg px-3 py-1.5 text-xs text-signal-bright transition hover:bg-signal-blue/10 disabled:opacity-40">
-            {'+ \u590d\u5236\u5f53\u524d\u4e3a\u65b0\u7b80\u5386'}</button>
-        </div>
+        <p className="mt-3 border-t pt-3 text-[11px] text-text-3" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          {'\u65b0\u5efa\u7b80\u5386\u8bf7\u5230\u300c\u7b80\u5386\u5de5\u4f5c\u53f0\u300d\u2014\u2014\u7f16\u8f91\u597d\u5185\u5bb9\u540e\u70b9\u300c\u5b58\u4e3a\u65b0\u7b80\u5386\u300d\u3002'}</p>
       </Card>
 
       <Card title={'\u6700\u8fd1\u751f\u6210'} dev="ResumeExports">
@@ -977,8 +1057,13 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
         )}
       </Card>
 
-      <details>
-        <summary className="cursor-pointer select-none text-sm text-text-3 transition hover:text-text-1">{'\u8fdb\u9636\uff1a\u9884\u5236\u6a21\u677f / \u6309\u5df2\u6295\u5c97\u4f4d\u751f\u6210\u65b9\u6848\u4e0e\u62db\u547c\u8bed'}</summary>
+      <details className="group">
+        <summary className="flex cursor-pointer select-none items-center gap-2.5 rounded-xl px-4 py-3 text-sm font-medium text-text-1 transition hover:brightness-125"
+          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)' }}>
+          <span className="text-[13px] text-text-3 transition group-open:rotate-90">{'\u25b6'}</span>
+          <span>{'\u8fdb\u9636\u529f\u80fd'}</span>
+          <span className="text-[11px] font-normal text-text-3">{'\u9884\u5236\u6a21\u677f \u00b7 \u6309\u5df2\u6295\u5c97\u4f4d\u751f\u6210\u65b9\u6848\u4e0e\u62db\u547c\u8bed'}</span>
+        </summary>
         <div className="mt-4 space-y-5">
           <TemplatesCard />
           <TailorCard />
@@ -1062,7 +1147,8 @@ export default function Resume() {
         : tab === 'workbench'
           ? <Workbench onErr={setErr} pool={pool} setPool={setPool} doc={doc} setDoc={setDoc}
               poolDirty={poolDirty} docDirty={docDirty} activeName={activeName}
-              savePool={savePool} saveDoc={saveDoc} reloadPool={reloadPool} />
+              savePool={savePool} saveDoc={saveDoc} reloadPool={reloadPool}
+              onActiveChanged={async () => { await reloadDoc(); await reloadMeta() }} />
           : <SavedTab onErr={setErr} flushEdits={flushEdits}
               onActiveChanged={async () => { await reloadDoc(); await reloadMeta() }} />}
     </div>

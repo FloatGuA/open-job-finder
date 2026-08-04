@@ -62,4 +62,27 @@ describe('buildResumeHtml', () => {
     expect(withTime).toContain('<span class="e-date">')
     expect(noTime).not.toContain('<span class="e-date">')
   })
+
+  it('\u6807\u9898\u7528\u9ed1\u4f53\u3001\u6b63\u6587\u7528\u5fae\u8f6f\u96c5\u9ed1', () => {
+    const html = buildResumeHtml(doc([{ name: 'S', blocks: [blk('T', ['b'])] }]))
+    expect(html).toContain('font-family: "Microsoft YaHei"')          // body \u6b63\u6587
+    expect(html).toMatch(/\.name, \.s-title, \.e-title \{ font-family: SimHei/)  // \u6807\u9898\u7c7b
+    expect(html).not.toContain('Georgia')                              // \u65e7\u8845\u7ebf\u5df2\u79fb\u9664
+  })
+
+  it('\u5b57\u6bb5\u7ea7\u7c97/\u659c/\u4e0b\u5212\u7ebf\u53ea\u4f5c\u7528\u4e8e\u6307\u5b9a\u5b57\u6bb5', () => {
+    const html = buildResumeHtml(doc([{ name: 'S', blocks: [{
+      ...blk('T', ['b1'], '2026'),
+      style: { title: { bold: true, underline: true }, bullets: { italic: true } },
+    }] }]))
+    expect(html).toContain('class="e-title" style="font-weight:700;text-decoration:underline"')
+    expect(html).toContain('<li style="font-style:italic">b1</li>')
+    expect(html).toContain('<span class="e-date">2026</span>')         // \u65f6\u95f4\u672a\u8bbe \u2192 \u4e0d\u5199 style
+  })
+
+  it('\u6ca1\u6709 style \u65f6\u4e0d\u8f93\u51fa inline \u6837\u5f0f\uff08\u8d70\u6a21\u677f\u9884\u8bbe\uff0c\u8001\u6570\u636e/AI \u751f\u6210\u884c\u4e3a\u4e0d\u53d8\uff09', () => {
+    const html = buildResumeHtml(doc([{ name: 'S', blocks: [blk('T', ['b'], '2026')] }]))
+    expect(html).toContain('<span class="e-title">T</span>')
+    expect(html).toContain('<li>b</li>')
+  })
 })

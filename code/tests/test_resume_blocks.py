@@ -87,3 +87,30 @@ def test_parse_resume_vision_uses_vision_chain(tmp_path, monkeypatch):
     assert kwargs["images"] == ["B64IMG"]
     assert out["basic_info"]["name"] == "王五"
     assert out["sections"][0]["name"] == "游戏经历"    # 自定义分区名原样保留
+
+
+# ── 字段级富文本（v2.19）：空样式 = 用模板预设，老数据行为不变 ──────────────
+def test_clean_style_keeps_only_true_marks():
+    raw = {"title": {"bold": True, "italic": False}, "bullets": {"underline": True},
+           "time": {}, "bogus_field": {"bold": True}, "junk": "x"}
+    assert rb.clean_style(raw) == {"title": {"bold": True}, "bullets": {"underline": True}}
+    assert rb.clean_style(None) == {}          # 缺省 → 空 → 走模板预设
+
+
+def test_block_style_roundtrips(tmp_path):
+    doc = rb.empty_blocks()
+    doc["sections"] = [{"name": "项目", "blocks": [
+        {"title": "P", "time": "2026", "bullets": ["a"], "summary": "",
+         "style": {"title": {"bold": True, "underline": True}}},
+    ]}]
+    p = str(tmp_path / "d.yaml")
+    rb.save_blocks(doc, p)
+    got = rb.load_blocks(p)["sections"][0]["blocks"][0]
+    assert got["style"] == {"title": {"bold": True, "underline": True}}
+
+
+def test_legacy_block_without_style_gets_empty(tmp_path):
+    """老数据没有 style 字段 → 补空 dict，渲染时走预设，行为与升级前一致。"""
+    out = rb.normalize_parsed_doc({"basic_info": {}, "sections": [
+        {"name": "S", "blocks": [{"title": "T", "bullets": ["b"]}]}]})
+    assert out["sections"][0]["blocks"][0]["style"] == {}

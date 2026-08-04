@@ -376,11 +376,18 @@ export interface SmokeReport {
   error?: string
 }
 
+export interface FieldMarks {
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+}
 export interface ResumeBlock {
   title: string
   time: string
   bullets: string[]
   summary: string
+  // 字段级富文本；缺省 = 用模板预设（标题粗体、日期灰色…）
+  style?: { title?: FieldMarks; time?: FieldMarks; bullets?: FieldMarks }
 }
 export interface ResumeBasicInfo {
   name: string
