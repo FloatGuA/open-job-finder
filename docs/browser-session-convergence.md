@@ -117,7 +117,7 @@ NavigateToConversation(browser=page).execute(conv_id, ...) # 与 W2 同一份导
 
 ## 5. 验证
 
-- 之前报 `500 SessionExpiredError` 的会话 `73b8fae63255`（跨越速运集团/曾紫霞），改后 `POST /open-in-browser` 返回 `{"ok": true}`。同一 session 状态、同一会话，唯一差别是代码路径。
+- 之前报 `500 SessionExpiredError` 的会话 `73b8fae63255`（某companies集团/某names），改后 `POST /open-in-browser` 返回 `{"ok": true}`。同一 session 状态、同一会话，唯一差别是代码路径。
 - pytest 全绿；前端 build 无 tsc 报错（v1.0.9.39）。
 
 ---

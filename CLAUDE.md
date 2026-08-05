@@ -143,12 +143,31 @@ code/
 1. **直接修改代码**，做最小可行改动（surgical change），不顺手重构无关代码。
 2. **先读懂再动手**：改某字段/配置/接口前，先 grep 它的消费方（谁读它、谁写它）。看到报错不要猜着绕过——先搞清楚根因。（教训：曾因 `ProfileLoader` 要求 `name` 报错就去填值绕过，实际投递根本不用 name，是残留校验。）
 3. **测试守门**：改完跑 `pytest`，绿了才算完成；涉及前端跑 `npm run build`（tsc 必须无悬空引用）。
-4. **改动留痕**：每次有代码改动 → 更新 `PROGRESS.md`（progress-writer skill）；重要决策/踩坑 → worklog + 项目记忆（project-memory skill）。
-5. **文档同步**：影响架构/接口的改动触发 `doc-sync`（TECHNICAL.md / README）。
-6. **版本号**：见下方"版本管理"。
-7. **大改动先给方案**：跨多文件的重构，先把方案/目标结构摆给用户确认，再动手。
+4. **改动留痕**：收尾走 `docs-update` skill（它按顺序分发到下方五个文档板，每块没内容就跳过）；有 commit 时继续走 `project-memory`。
+5. **版本号**：见下方"版本管理"。
+6. **大改动先给方案**：跨多文件的重构，先把方案/目标结构摆给用户确认，再动手。
 
 并遵守全局原则（`~/.claude/CLAUDE.md`）：simplicity first、fail fast（内部路径不写防御性 swallow）、models judge / code decides、暴露冲突而非兼容两套、约定优先于个人偏好。
+
+---
+
+## 文档地图（2026-08-05 重整）
+
+**五块板子，各有唯一职责——同一件事只进一块。** 一条内容如果两块都想收，说明判据没想清楚，重复登记等于制造分叉。
+
+| 文件 | 收什么 | 准入判据 | 维护 skill |
+|------|--------|----------|-----------|
+| `PROGRESS.md` | 下一步 / 在做 / 已做（**摘要**，带版本号锚点） | 状态变化 | `progress-board` |
+| `DECISION.md` | 为什么这么做，**以及为什么不那么做** | "有人会问为什么不直接 X，而 X 确实考虑过" | `decision-log` |
+| `PITFALLS.md` | 环境地雷、静默失败 | "**不知道的人会以完全合理的方式踩上去**" | `pitfalls-log` |
+| `TECHNICAL.md` | 稳定架构、数据流、状态机 | "半年后还成立 **且** 代码里读不出来" | `technical-board` |
+| `README.md` | 怎么装、怎么用 | "不知道这条就跑不起来" | `readme-board` |
+
+收尾统一走 `docs-update`（编排这五个，顺序＝**先写不可再生的**：坑 → 决策 → 进度 → 架构 → README）；接手/恢复上下文走 `docs-read`。
+
+**TECHNICAL.md 只在分层、跨模块数据流、状态机变了才动——多数会话都该跳过。** 加功能、改字段、修 bug、调 UI 都不是。
+它已被砍成**指路型**（749 → 219 行）：一切有代码权威源的结构（表结构、字段列表、配置项）**一律指路不复制**。
+> 2026-08-05 的教训：旧 TECHNICAL.md 93KB，`info_pool` / `resume_store` / `resume_matcher` 一次都没出现——整个简历模块（近 9 个会话的产出）在"技术文档"里不存在。**写得太细是它烂掉的直接原因**，而没有任何机制会发现它错了。
 
 ---
 
@@ -183,8 +202,9 @@ code/
 
 ## 踩坑记录
 
-- **改配置/字段前先查消费方**：本项目重构后残留大量死字段/断链配置（详见 `docs/configuration.md` 审计）。看到 `'X' is required` 之类报错，先 grep X 被谁消费，再决定是补值还是删校验，不要猜着填值绕过。
-- **登录态在 `data/browser_profile/`**，不是 `session.json`；判断是否登录唯一权威是跑 `VerifySessionStep`。
-- **React TSX/TS 中 CJK 必须 `\uXXXX`**：Windows GBK 工具链 + Prettier format-on-save 双重因素会将裸中文损坏；纯 ASCII escape 是唯一安全做法（JSX 文本节点用 `{'\uXXXX'}`，JS 字符串字面量直接转义）。
-- **JSX 属性双引号字符串不处理 `\uXXXX`**：`label="中文"` 会渲染为字面量乱码。必须改为 JS 表达式 `label={'\uXXXX'}`。受影响属性：`label=`、`title=`、`aria-label=`、`placeholder=`。原因：JSX 属性双引号串是 JSX 语法层，不走 JS 字符串转义；esbuild 只对 JSX 文本节点处理转义，属性字符串不处理。
-- 更多 DrissionPage / W2 相关踩坑见项目记忆（`~/.claude/projects/.../memory/`）。
+**全集在 `PITFALLS.md`。** 下面只留两条——它们约束的是**每一次编辑动作**，不是"遇到某场景才去查"，所以值得占用自动加载的上下文：
+
+- **JS/HTML/TSX 中 CJK 一律 `\uXXXX` escape**。Windows GBK 工具链 + Prettier format-on-save 会静默损坏裸中文（已发生两次事故）。**JSX 属性双引号串不处理转义**（`label="中文"` 渲染为乱码，必须改 `label={'\uXXXX'}`；受影响：`label` / `title` / `aria-label` / `placeholder`）。
+- **用 Edit 直接写 `\uXXXX` 会被 JSON 解码回中文**（已踩三次）——用脚本文件转 ASCII 再落盘，并校验 `nonascii == 0`。
+
+其余（DrissionPage / Boss DOM / 状态机反模式 / 验证陷阱 等）全部在 **`PITFALLS.md`**，动手前扫一遍标题。
