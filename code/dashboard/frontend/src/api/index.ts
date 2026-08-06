@@ -556,6 +556,7 @@ export const API = {
     }),
   // 信息池（v2.16：求职者全部信息主库；上传解析入池，简历从池组合）
   getPool: (): Promise<ResumeBlocks> => requestJson('/api/pool'),
+  getInterviewPrep: (): Promise<PrepDoc> => requestJson('/api/interview-prep'),
   savePool: (body: ResumeBlocks): Promise<{ ok: boolean }> =>
     requestJson('/api/pool', {
       method: 'PUT',
@@ -834,4 +835,21 @@ export async function handleJson<T>(res: Response): Promise<T> {
   }
 
   return payload as T
+}
+
+export interface PrepCard {
+  q: string
+  a: string
+  evidence: string[]
+  avoid: string
+}
+export interface PrepRole {
+  key: string
+  name: string
+  pitch: string
+  hook: string
+  cards: PrepCard[]
+}
+export interface PrepDoc {
+  roles: PrepRole[]
 }

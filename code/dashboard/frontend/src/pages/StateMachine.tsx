@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { API, type ArchitectureLive } from '@/api'
+import { API, type ArchitectureLive, type PrepCard, type PrepDoc } from '@/api'
 import { useAppContext } from '@/context/app-context'
 import DevLabel from '@/components/dev/DevLabel'
 
@@ -857,133 +857,103 @@ function DataTab({ live }: { live: ArchitectureLive | null }) {
 // source of truth; keep this in sync when the doc changes. Deliberately does NOT
 // duplicate the flow / state-machine diagrams (those live in the other tabs).
 
-const PREP_SRC_LABEL = '\u7d20\u6750\u6e90\uff1a'
-const PREP_SRC_NOTE =
-  'docs/interview-prep-futu.md \u4e3a\u5355\u4e00\u771f\u76f8\u6e90\uff1b\u672c\u9875\u662f\u5b83\u7684\u53d9\u4e8b\u7cbe\u534e\uff0c\u6539\u8bdd\u672f\u8bf7\u5148\u6539\u90a3\u4efd doc \u518d\u540c\u6b65\u6b64\u5904\uff0c\u522b\u8ba9\u4e24\u8fb9\u5206\u53c9\u3002'
+const PREP_EMPTY_T = '\u8fd8\u6ca1\u6709\u9762\u8bd5\u5361\u7247'
+const PREP_EMPTY_D = '\u5185\u5bb9\u5728 code/data/interview_prep.yaml\uff08\u4e0d\u5165 git\uff09\u3002\u6309\u5c97\u4f4d\u5199 cards\uff0c\u6539\u5b8c\u5237\u65b0\u5373\u53ef\uff0c\u4e0d\u7528\u91cd\u65b0\u6784\u5efa\u3002'
+const PREP_NOTE = '\u8fd9\u4e00\u680f\u4e0e\u4ea7\u54c1\u529f\u80fd\u65e0\u5173\uff0c\u53ea\u7ed9\u5f00\u53d1\u8005\u81ea\u5df1\u770b\u3002\u5185\u5bb9\u5b58\u5728 data/ \u4e0b\uff0c\u4e0d\u8fdb\u516c\u5f00\u4ed3\u5e93\u3002'
+const PREP_H_EV = '\u652f\u6491\u8bc1\u636e'
+const PREP_H_AVOID = '\u522b\u8fd9\u4e48\u8bf4'
+const PREP_H_PITCH = '\u7535\u68af\u9648\u8ff0'
 
-const PREP_T_PITCH = '\u7535\u68af\u9648\u8ff0'
-const PREP_S_PITCH = '\u4e00\u53e5\u8bdd\u8bb2\u6e05\u9879\u76ee'
-const PREP_T_HL = '\u56db\u4e2a\u6280\u672f\u4eae\u70b9'
-const PREP_S_HL = '\u91d1\u878d\u6d4b\u8bd5\u5b98\u4f1a\u773c\u775b\u4e00\u4eae\u7684\u56db\u70b9'
-const PREP_T_JD = 'JD \u80fd\u529b\u6620\u5c04'
-const PREP_S_JD = '\u9879\u76ee\u7ecf\u9a8c\u9010\u6761\u7ffb\u8bd1\u6210 JD \u8981\u6c42'
-const PREP_H_JD = 'JD \u8981\u6c42'
-const PREP_H_ANSWER = '\u7528\u9879\u76ee\u600e\u4e48\u7b54'
-const PREP_T_GAP = '\u8bda\u5b9e\u77ed\u677f + \u5e94\u5bf9'
-const PREP_S_GAP = '\u88ab\u8ffd\u95ee\u65f6\u4e0d\u614c'
-
-const PREP_PITCH =
-  '\u6211\u72ec\u7acb\u505a\u4e86\u4e00\u4e2a Boss\u76f4\u8058 \u81ea\u52a8\u5316\u6c42\u804c Agent\u3002\u5b83\u6a21\u62df\u771f\u5b9e\u6c42\u804c\u8005\u7684\u5b8c\u6574\u94fe\u8def\u2014\u2014\u641c\u7d22\u804c\u4f4d\u3001\u7528\u5927\u6a21\u578b\u591a\u7ef4\u5ea6\u6253\u5206\u51b3\u7b56\u3001\u81ea\u52a8\u6295\u9012\u3001\u518d\u540c\u6b65 HR \u4f1a\u8bdd\u8ffd\u8e2a\u8fdb\u5c55\u3002\u6280\u672f\u4e0a\u662f Python + \u6d4f\u89c8\u5668\u81ea\u52a8\u5316 + LLM + SQLite \u72b6\u6001\u673a + FastAPI/React \u5b9e\u65f6\u770b\u677f\u3002\u5b83\u672c\u8d28\u4e0a\u662f\u4e00\u4e2a\u8dd1\u5728\u771f\u5b9e\u4ea4\u6613\u5f0f\u94fe\u8def\u4e0a\u7684\u81ea\u52a8\u5316\u7cfb\u7edf\uff1a\u6709\u72b6\u6001\u6d41\u8f6c\u3001\u6709\u5e42\u7b49\u9632\u91cd\u3001\u6709\u6570\u636e\u4e00\u81f4\u6027\u6821\u9a8c\u3001\u6709\u5168\u7a0b\u53ef\u89c2\u6d4b\u3002'
-const PREP_PITCH_HOOK =
-  '\u6700\u540e\u534a\u53e5\u662f\u6545\u610f\u57cb\u7684\u94a9\u5b50\u2014\u2014\u628a\u300c\u6c42\u804c\u81ea\u52a8\u5316\u300d\u7ffb\u8bd1\u6210\u300c\u4ea4\u6613\u7cfb\u7edf\u6d4b\u8bd5\u300d\u9762\u8bd5\u5b98\u542c\u5f97\u61c2\u7684\u8bed\u8a00\u3002'
-
-type Highlight = { title: string; vs: string; point: string; color: string }
-const PREP_HIGHLIGHTS: Highlight[] = [
-  { color: '#0a84ff',
-    title: '\u72b6\u6001\u673a + \u5408\u6cd5\u6d41\u8f6c\u6821\u9a8c',
-    vs: '\u5bf9\u6807\u8ba2\u5355 / \u4ea4\u6613\u72b6\u6001\u6d4b\u8bd5',
-    point: 'applications \u7528\u663e\u5f0f\u5408\u6cd5\u8fc1\u79fb\u8868\u6321\u975e\u6cd5\u8df3\u8f6c\uff08\u4e0d\u5141\u8bb8 FOUND \u76f4\u8df3 OFFER\uff09\u3002\u8e29\u8fc7\u771f bug\uff1a\u67d0 SQL \u7684 CASE \u4fdd\u62a4\u6f0f\u4e86 sent \u7ec8\u6001\uff0c\u5df2\u53d1\u9001\u7684\u56de\u590d\u88ab\u91cd\u65b0\u5206\u6790\u540e\u8986\u5199\u56de pending \u2192 \u91cd\u590d\u53d1\u9001\uff0c\u6b63\u662f\u300c\u7ec8\u6001\u88ab\u975e\u6cd5\u56de\u9000\u300d\u2014\u2014\u91d1\u878d\u91cc\u5c31\u662f\u300c\u5df2\u7ed3\u7b97\u7684\u8ba2\u5355\u4e0d\u80fd\u88ab\u6539\u56de\u672a\u7ed3\u7b97\u300d\u3002' },
-  { color: '#30d158',
-    title: '\u5e42\u7b49 + \u5185\u5bb9\u6307\u7eb9\u53bb\u91cd',
-    vs: '\u5bf9\u6807\u4ea4\u6613\u9632\u91cd / \u5bf9\u8d26',
-    point: 'per-job \u539f\u5b50\u64cd\u4f5c + carryover \u5d29\u6e83\u6062\u590d\u3002Boss \u6bcf\u6b21\u641c\u7d22\u8f6e\u6362 encryptJobId\uff08\u4e3b\u952e\u4f1a\u53d8\uff09\uff0c\u5355\u6309 ID \u53bb\u91cd\u4f1a\u91cd\u590d\u6295\u9012\uff1b\u6539\u7b97 content_hash = sha256(\u6807\u9898|\u516c\u53f8id|JD) \u8bc6\u522b\u6362\u9a6c\u7532\u7684\u540c\u4e00\u5c97\u4f4d\u3002\u672c\u8d28\u662f\u53bb\u91cd\u7ef4\u5ea6\u9009\u9519\u2014\u2014\u4e3b\u952e\u4f1a\u53d8\uff0c\u8981\u627e\u4e1a\u52a1\u4e0a\u771f\u6b63\u7a33\u5b9a\u7684\u6307\u7eb9\uff0c\u5bf9\u8d26\u540c\u7406\u3002' },
-  { color: '#bf5af2',
-    title: '\u9a8c\u8bc1\u7ed3\u679c \u2260 \u9a8c\u8bc1\u52a8\u4f5c',
-    vs: '\u6d4b\u8bd5\u65ad\u8a00\u7684\u7075\u9b42',
-    point: '\u56de\u590d\u9001\u8fbe\u9a8c\u8bc1\u66fe\u5047\u9633\u6027\uff1a\u53d1\u5b8c\u7acb\u523b\u5339\u914d\u300c\u542b\u524d\u7f00\u7684\u6211\u65b9\u6c14\u6ce1\u300d\uff0c\u649e\u5230\u5386\u53f2\u65e7\u6c14\u6ce1\u8bef\u62a5\u6210\u529f\uff08duration_ms:1 \u662f\u7ea2\u65d7\uff0c\u6ca1\u7b49\u7f51\u7edc\u5f80\u8fd4\u5c31\u547d\u4e2d\uff09\u3002\u6b63\u89e3\uff1a\u53d1\u9001\u540e\u91cd\u626b\u4f1a\u8bdd\u3001\u7b49\u5f02\u6b65\u6e32\u67d3\u3001\u786e\u8ba4\u65b0\u6d88\u606f\u771f\u843d\u5730\u5e76\u56de\u5199 DB\u3002\u63a5\u53e3\u8fd4\u56de 200 \u2260 \u6d88\u606f\u771f\u9001\u8fbe\u3002' },
-  { color: '#ff9f0a',
-    title: '\u5168\u94fe\u8def\u53ef\u89c2\u6d4b + JSONL \u56de\u653e',
-    vs: '\u5bf9\u6807 JD \u7684\u6d41\u91cf\u56de\u653e',
-    point: '\u6bcf\u6b65 tool \u7edf\u4e00\u8d70 registry \u81ea\u52a8\u8bb0 trace\u3001\u7ecf SSE \u5b9e\u65f6\u63a8 React \u770b\u677f\uff1b\u6bcf\u6b21\u8fd0\u884c\u843d\u6210\u6301\u4e45\u5316 JSONL\uff0c\u53ef /api/runs/{id}/events \u56de\u653e\u6574\u6761\u5df2\u8dd1\u6d41\u6c34\u7ebf\u3002\u53ef\u89c2\u6d4b\u6027\u662f\u81ea\u52a8\u5316\u80fd\u5b9a\u4f4d\u95ee\u9898\u7684\u524d\u63d0\uff0c\u4e0d\u53ef\u89c2\u6d4b\u7684\u81ea\u52a8\u5316\u53ea\u4f1a\u63a9\u76d6 bug\u3002' },
-]
-
-type JdRow = { jd: string; answer: string }
-const PREP_JD_ROWS: JdRow[] = [
-  { jd: '\u5b9e\u65f6\u4ea4\u6613\u94fe\u8def / \u6e05\u7ed3\u7b97\u6d4b\u8bd5',
-    answer: '\u72b6\u6001\u673a\u9a71\u52a8\u7684\u591a\u9636\u6bb5\u6d41\u6c34\u7ebf\uff08W1/W2/W3\uff09\uff0c\u6bcf\u9636\u6bb5\u6709\u660e\u786e\u524d\u7f6e/\u540e\u7f6e\u72b6\u6001\uff0c\u4e0e\u4ea4\u6613\u2192\u6e05\u7b97\u2192\u7ed3\u7b97\u7684\u591a\u9636\u6bb5\u6d41\u8f6c\u540c\u6784\u3002' },
-  { jd: '\u8ba2\u5355 / \u98ce\u63a7 / \u8d44\u4ea7\u7ed3\u7b97\u51c6\u786e\u6027',
-    answer: '\u72b6\u6001\u6d41\u8f6c\u5408\u6cd5\u6027\u6821\u9a8c + \u5e42\u7b49\u9632\u91cd + \u5185\u5bb9\u6307\u7eb9\u53bb\u91cd + \u300c\u7ec8\u6001\u88ab\u975e\u6cd5\u56de\u9000\u300d\u771f\u5b9e\u7f3a\u9677\u590d\u76d8\u3002' },
-  { jd: '\u8bbe\u8ba1\u6d4b\u8bd5\u7528\u4f8b / \u6a21\u62df\u6295\u8d44\u8005\u884c\u4e3a',
-    answer: '\u6574\u4e2a Agent \u5c31\u5728\u6a21\u62df\u771f\u5b9e\u6c42\u804c\u8005\u7684\u884c\u4e3a\u5e8f\u5217\uff1b\u5929\u7136\u505a\u884c\u4e3a\u5efa\u6a21\u4e0e\u8fb9\u754c\uff08\u7a7a HR \u6d88\u606f\u7edd\u4e0d\u8d77\u8349\u3001\u5e73\u53f0\u7cfb\u7edf\u63d0\u793a\u4e0d\u80fd\u8bef\u5224\u6210 HR \u6d88\u606f\uff09\u3002' },
-  { jd: '\u81ea\u52a8\u5316\u6d4b\u8bd5',
-    answer: '\u6d4f\u89c8\u5668\u81ea\u52a8\u5316\uff08DrissionPage\uff09+ 457 \u4e2a pytest \u5355\u6d4b/\u96c6\u6210\u6d4b\u8bd5\uff0c\u6d4b\u8bd5\u5b88\u95e8\uff08\u7eff\u4e86\u624d\u7b97\u5b8c\u6210\uff09\u3002' },
-  { jd: '\u6d41\u91cf\u56de\u653e',
-    answer: 'JSONL \u5168\u91cf\u843d\u76d8 + \u56de\u653e\u7aef\u70b9\uff0c\u53ef\u4e8b\u540e\u9010\u6b65\u590d\u73b0\u95ee\u9898\u3002' },
-  { jd: 'AI \u8d4b\u80fd\u6d4b\u8bd5',
-    answer: 'models judge, code decides\uff1a\u53ea\u6709\u6253\u5206/\u610f\u56fe\u5206\u6790\u4ea4\u7ed9 LLM\uff0c\u8def\u7531/\u72b6\u6001/\u91cd\u8bd5\u7528\u786e\u5b9a\u6027\u4ee3\u7801\uff1bLLM \u8f93\u51fa\u4e09\u5c42\u5bb9\u9519\u89e3\u6790\uff08\u4ee3\u7801\u5757\u63d0\u53d6\u2192json.loads\u2192json-repair \u515c\u5e95\uff09\u3002' },
-  { jd: 'Python / \u7f51\u7edc / \u6570\u636e\u5e93',
-    answer: 'Python 3.11 \u5168\u6808\uff1bSQLite \u7528 WAL + \u7ebf\u7a0b\u5c40\u90e8\u8fde\u63a5 + busy_timeout \u89e3\u51b3\u5e76\u53d1\u5199\u9501\uff1b\u6d4f\u89c8\u5668\u81ea\u52a8\u5316\u672c\u8eab\u5728\u8ddf HTTP/DOM/\u5f02\u6b65\u6e32\u67d3\u6253\u4ea4\u9053\u3002' },
-]
-
-type Gap = { gap: string; cope: string }
-const PREP_GAPS: Gap[] = [
-  { gap: '\u786e\u5b9e\u6ca1\u505a\u8fc7\u91d1\u878d\u6e05\u7ed3\u7b97\u4e1a\u52a1',
-    cope: '\u627f\u8ba4\uff0c\u5f3a\u8c03\u53ef\u8fc1\u79fb\u7684\u6d4b\u8bd5\u5e95\u5c42\u80fd\u529b\uff08\u72b6\u6001\u6821\u9a8c / \u4e00\u81f4\u6027\u5e42\u7b49 / \u65ad\u8a00\u4e25\u8c28\uff09+ \u5b66\u4e60\u610f\u613f\u2014\u2014JD \u660e\u786e\u66f4\u770b\u91cd\u5feb\u901f\u5b66\u4e60\u3002' },
-  { gap: '\u9879\u76ee\u662f\u81ea\u52a8\u5316\u5f00\u53d1\u4e0d\u662f\u6d4b\u8bd5\u5c97',
-    cope: '\u91cd\u6784\u53d9\u4e8b\uff1a\u81ea\u52a8\u5316\u6d4b\u8bd5\u4e0e\u81ea\u52a8\u5316 Agent \u662f\u540c\u4e00\u5957\u6280\u80fd\u2014\u2014\u90fd\u8981\u9a71\u52a8\u771f\u5b9e\u7cfb\u7edf\u3001\u65ad\u8a00\u771f\u5b9e\u7ed3\u679c\u3001\u5904\u7406\u5f02\u6b65\u4e0e\u4e0d\u786e\u5b9a\u6027\u3002' },
-  { gap: '\u88ab\u8ffd\u95ee\u4ea4\u6613 / CFA \u7ecf\u9a8c',
-    cope: '\u5982\u5b9e\u8bf4\uff1b\u82e5\u6709\u5b9e\u76d8\u4ea4\u6613 / \u671f\u6743\u7ecf\u5386\u4e00\u5b9a\u8981\u8bb2\uff0c\u6362\u6210\u300c\u5bf9\u4ea4\u6613\u6709\u771f\u5b9e\u5174\u8da3\u300d\u7684\u951a\u70b9\u3002' },
-]
+function PrepCardBox({ card, n }: { card: PrepCard; n: number }) {
+  return (
+    <div className="rounded-xl p-3.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+      <div className="mb-2 flex items-baseline gap-2.5">
+        <CountPill n={n} />
+        <span className="text-[15.5px] font-semibold leading-snug text-text-1">{card.q}</span>
+      </div>
+      {card.a && <p className="text-[14.5px] leading-relaxed text-text-2">{card.a}</p>}
+      {card.evidence.length > 0 && (
+        <div className="mt-2.5 rounded-lg p-2.5" style={{ background: 'rgba(10,132,255,0.06)', border: '1px solid rgba(10,132,255,0.16)' }}>
+          <div className="mb-1 text-[12px] font-semibold uppercase tracking-wider text-signal-blue">{PREP_H_EV}</div>
+          <ul className="space-y-1">
+            {card.evidence.map((e, i) => (
+              <li key={i} className="flex gap-2 text-[14px] leading-relaxed text-text-2">
+                <span className="text-text-3">&middot;</span><span>{e}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {card.avoid && (
+        <div className="mt-2 rounded-lg px-2.5 py-2" style={{ background: 'rgba(255,69,58,0.06)', border: '1px solid rgba(255,69,58,0.18)' }}>
+          <span className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: '#ff6961' }}>{PREP_H_AVOID}</span>
+          <p className="mt-0.5 text-[14px] leading-relaxed text-text-2">{card.avoid}</p>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function PrepTab() {
+  const [doc, setDoc] = useState<PrepDoc | null>(null)
+  const [role, setRole] = useState<string>('')
+
+  useEffect(() => {
+    API.getInterviewPrep()
+      .then((d) => {
+        setDoc(d)
+        if (d.roles.length > 0) setRole(d.roles[0].key)
+      })
+      .catch(() => setDoc({ roles: [] }))
+  }, [])
+
+  const cur = doc?.roles.find((r) => r.key === role) || null
+
   return (
     <div className="space-y-4">
       <div className="rounded-xl p-3" style={{ background: 'rgba(255,159,10,0.06)', border: '1px solid rgba(255,159,10,0.2)' }}>
-        <p className="text-[14px] leading-relaxed text-text-2">
-          <span className="font-semibold text-signal-amber">{PREP_SRC_LABEL}</span>
-          {PREP_SRC_NOTE}
-        </p>
+        <p className="text-[14px] leading-relaxed text-text-2">{PREP_NOTE}</p>
       </div>
 
-      <Section badge={'\u2460'} title={PREP_T_PITCH} sub={PREP_S_PITCH}>
-        <p className="text-[15.5px] leading-relaxed text-text-1">{PREP_PITCH}</p>
-        <div className="mt-3 rounded-xl p-3" style={{ background: 'rgba(10,132,255,0.06)', border: '1px solid rgba(10,132,255,0.18)' }}>
-          <p className="text-[14.5px] leading-relaxed text-text-2">{PREP_PITCH_HOOK}</p>
+      {doc && doc.roles.length === 0 && (
+        <div className="rounded-xl p-5 text-center" style={{ border: '1px dashed rgba(255,255,255,0.12)' }}>
+          <p className="text-[15px] font-semibold text-text-1">{PREP_EMPTY_T}</p>
+          <p className="mt-1.5 text-[14px] leading-relaxed text-text-3">{PREP_EMPTY_D}</p>
         </div>
-      </Section>
+      )}
 
-      <Section badge={'\u2461'} title={PREP_T_HL} sub={PREP_S_HL}>
-        <div className="space-y-2">
-          {PREP_HIGHLIGHTS.map((h) => (
-            <div key={h.title} className="rounded-xl p-3.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
-              <div className="mb-1.5 flex items-baseline gap-2.5">
-                <Dot color={h.color} />
-                <span className="text-[16px] font-semibold text-text-1">{h.title}</span>
-                <span className="text-[13.5px] text-text-3">{h.vs}</span>
-              </div>
-              <p className="text-[14.5px] leading-relaxed text-text-2">{h.point}</p>
-            </div>
+      {doc && doc.roles.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {doc.roles.map((r) => (
+            <button key={r.key} type="button" onClick={() => setRole(r.key)}
+              className={`rounded-lg px-3 py-1.5 text-[14px] font-medium transition ${
+                role === r.key ? 'text-text-1' : 'text-text-3 hover:text-text-2'
+              }`}
+              style={role === r.key
+                ? { background: 'rgba(10,132,255,0.16)', boxShadow: 'inset 0 0 0 1px rgba(10,132,255,0.3)' }
+                : { border: '1px solid rgba(255,255,255,0.08)' }}>
+              {r.name}
+            </button>
           ))}
         </div>
-      </Section>
+      )}
 
-      <Section badge={'\u2462'} title={PREP_T_JD} sub={PREP_S_JD}>
-        <div className="overflow-hidden rounded-xl" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
-          <div className="grid grid-cols-[minmax(150px,240px)_1fr] gap-2 px-3 py-2 text-[14px] font-semibold uppercase tracking-wider text-text-3"
-            style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-            <span>{PREP_H_JD}</span>
-            <span>{PREP_H_ANSWER}</span>
-          </div>
-          {PREP_JD_ROWS.map((r) => (
-            <div key={r.jd} className="grid grid-cols-[minmax(150px,240px)_1fr] items-start gap-2 px-3 py-2.5"
-              style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-              <span className="text-[15px] leading-relaxed text-text-1">{r.jd}</span>
-              <span className="text-[14.5px] leading-relaxed text-text-2">{r.answer}</span>
+      {cur && cur.pitch && (
+        <Section badge={'\u2460'} title={PREP_H_PITCH} sub={cur.name}>
+          <p className="text-[15.5px] leading-relaxed text-text-1">{cur.pitch}</p>
+          {cur.hook && (
+            <div className="mt-3 rounded-xl p-3" style={{ background: 'rgba(10,132,255,0.06)', border: '1px solid rgba(10,132,255,0.18)' }}>
+              <p className="text-[14.5px] leading-relaxed text-text-2">{cur.hook}</p>
             </div>
-          ))}
-        </div>
-      </Section>
+          )}
+        </Section>
+      )}
 
-      <Section badge={'\u2463'} title={PREP_T_GAP} sub={PREP_S_GAP}>
-        <div className="space-y-2">
-          {PREP_GAPS.map((g) => (
-            <div key={g.gap} className="rounded-xl p-3" style={{ background: 'rgba(255,69,58,0.05)', border: '1px solid rgba(255,69,58,0.16)' }}>
-              <p className="text-[15px] font-semibold text-text-1">{g.gap}</p>
-              <p className="mt-1 text-[14.5px] leading-relaxed text-text-2">{g.cope}</p>
-            </div>
-          ))}
+      {cur && cur.cards.length > 0 && (
+        <div className="space-y-2.5">
+          {cur.cards.map((c, i) => <PrepCardBox key={c.q} card={c} n={i + 1} />)}
         </div>
-      </Section>
+      )}
     </div>
   )
 }
