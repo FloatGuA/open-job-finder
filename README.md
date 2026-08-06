@@ -1,8 +1,8 @@
 # OpenJobFinder
 
-基于 Boss直聘 的 AI 自动化求职 Agent，三条流程：**W1 投递**（按求职偏好搜索职位、LLM 多维度评分筛选、自动投递）；**W2 检查回应**（同步 HR 会话、分析意图、按需发送附件简历、追踪应聘进展并草拟回复）；**W3 发送已批准回复**（把你审批过的回复定位会话发出，并重扫验证投递落地）。
+基于 Boss直聘 的 AI 自动化求职 Agent，三条流程：**W1 投递**（按求职偏好搜索职位、LLM 多维度评分筛选、自动投递）；**W2 检查回应**（同步 HR 会话、分析意图、按需发送附件简历、追踪应聘进展并草拟回复）；**W3 发送已批准回复**（把你审批过的回复定位会话发出，并重扫验证投递落地）。另有**简历子系统**：视觉模型解析简历入「信息池」，从池中组合出多份面向不同岗位的简历，投递时由 Agent 判断该发哪一份。
 
-An AI-powered job application agent for Boss Zhipin, in three workflows: **W1 (apply)** — search jobs by your preferences, score them with LLM across multiple dimensions, auto-apply; **W2 (check responses)** — sync HR conversations, analyze intent, send resume attachments on demand, track progress and draft replies; **W3 (send approved replies)** — locate the conversation, send the reply you approved, and verify delivery by re-scanning the thread.
+An AI-powered job application agent for Boss Zhipin, in three workflows: **W1 (apply)** — search jobs by your preferences, score them with LLM across multiple dimensions, auto-apply; **W2 (check responses)** — sync HR conversations, analyze intent, send resume attachments on demand, track progress and draft replies; **W3 (send approved replies)** — locate the conversation, send the reply you approved, and verify delivery by re-scanning the thread. A **resume subsystem** parses your resume with a vision model into an "info pool", lets you compose multiple job-specific resumes from it, and has the agent pick which one to send.
 
 ---
 
@@ -44,8 +44,11 @@ An AI-powered job application agent for Boss Zhipin, in three workflows: **W1 (a
 - 自检模块（独立页面）：一键探针检查浏览器登录态、数据库、LLM 可用性；可运行完整自检周期（真实跑一轮 W1/W2）并查看历史记录；支持每 12 小时自动自检（W1 10 个职位 + W2 全量，不含 W3）
   Self-check module (dedicated page): one-click probes for browser login state, database, and LLM availability; run a full self-check cycle (actually executes a W1/W2 round) with history; optional automatic self-check every 12 hours (W1 10 jobs + full W2, excluding W3)
 
-- 结构化简历模块（独立页面）：上传简历 + 自我描述后，由 LLM 解析成可排列组合的段落块（教育/实习/项目/技能/获奖），支持 FlowCV 式手动增删改与排序；可针对单个职位生成定制简历与招呼语（含关键词匹配的预制模板），并用 Chromium 渲染导出 PDF，无需 WeasyPrint/GTK 系统依赖（简历自动发送功能尚未实现）
-  Structured resume module (dedicated page): upload a resume plus a self-description and let the LLM parse it into recombinant blocks (education / internship / project / skills / awards), editable and reorderable FlowCV-style; generate a tailored resume and greeting per job (with keyword-matched preset templates) and export to PDF rendered via Chromium — no WeasyPrint/GTK system dependencies required (automatic resume sending is not yet implemented)
+- 简历子系统（独立页面）：上传 PDF 由**视觉模型**（读页面图片，而非纯文本抽取，排版型简历不丢结构）解析进**信息池**——关于你的全部素材的主库，只增改不删，写盘前自动快照可回滚。从池中拖拽组合出**多份简历**（各带目标岗位），分区名完全自定义；字段级加粗/斜体/下划线；预览按 A4 分页且与导出 PDF 同源（Chromium 渲染，无需 WeasyPrint/GTK）
+  Resume subsystem (dedicated page): upload a PDF and a **vision model** parses it from page images (not plain-text extraction, so layout-heavy resumes keep their structure) into an **info pool** — the master library of your material, append/update-only, auto-snapshotted before every write with rollback. Compose **multiple resumes** from the pool by drag-and-drop (each with a target role), fully custom section names, per-field bold/italic/underline; the A4-paginated preview shares its source with the exported PDF (rendered via Chromium — no WeasyPrint/GTK needed)
+
+- 按岗位选简历：HR 索要简历时，用**确定性关键词匹配**（岗位标题权重高于 JD 正文）挑出最合适的那一份并在会话页给出「建议发 X 版」。**刻意不用 LLM**——路由决策要可解释可预期。是否真的把该版本的已导出 PDF 作为附件发出，由 `w2.auto_send_adapted_resume` 控制（**默认关**）；开启后若该简历没导出过 PDF、上传失败或未确认送达，**一律自动回退发 Boss 站内简历，不会漏发**
+  Per-job resume routing: when an HR asks for your resume, a **deterministic keyword match** (job title weighted above JD body) picks the best-fitting version and the chat page shows "suggest sending version X". **Deliberately not LLM-driven** — routing decisions must be explainable and predictable. Whether that version's exported PDF is actually sent as an attachment is controlled by `w2.auto_send_adapted_resume` (**off by default**); when on, any failure (no exported PDF, upload error, delivery unconfirmed) **falls back to the built-in Boss resume, so nothing is ever missed**
 
 - 日志页"概览"视图：把每次 workflow 运行的日志解析成类实时（live）的可读时间线，无需直接阅读原始 JSON
   Logs "overview" view: parses each workflow run's log into a live-style readable timeline, no need to read raw JSON
@@ -140,10 +143,17 @@ Scanning scope is controlled via the `w2` section of `config.yaml` (also overrid
 
 ```yaml
 w2:
+  auto_send_adapted_resume: false  # 是否自动发送适配简历的 PDF 附件（默认关，见上）
+                                   # Auto-send the tailored resume PDF (off by default; see above)
   max_conversations: 200    # 本次最多处理会话数 / Max conversations per run
-  no_response_days: 14      # 投递后无回应判超时拒绝 / Days before no-response timeout
-  stale_conv_days: 14       # 最后一条消息满 N 天无更新判陈旧关闭 / Days since last message before stale-close
+  no_response_days: 14      # 会话满 N 天无新消息 → 打「停滞」软标记，不改投递状态
+                            # Days without new messages before a conversation is soft-marked stalled
+  stale_conv_days: 30       # 投递满 N 天且无进展（排除面试/offer）→ 级联清理该岗位数据，允许重走流程
+                            # Days after applying with no progress before the job's data is purged for a fresh run
 ```
+
+> 注：`no_response_days` **不会**把投递判为拒绝——投递（打招呼）不需要 HR 回复即成立，"HR 没回"不等于被拒。
+> Note: `no_response_days` never marks an application as rejected — applying doesn't require an HR reply, and silence is not rejection.
 
 ### 启动 Dashboard / Start the Dashboard
 
@@ -210,7 +220,20 @@ Job search preferences (keywords, cities, threshold, etc.) are written to `data/
 - SQLite — 求职状态与 HR 会话持久化 / Application state and HR conversation persistence
 - FastAPI + uvicorn — Dashboard 后端 / Dashboard backend
 - React 18 + Vite + Tailwind CSS v3 — Dashboard 前端 SPA / Dashboard frontend SPA
+- PyMuPDF (fitz) — 简历 PDF 渲染成页面图片喂视觉模型 / Renders resume PDF pages to images for the vision model
 - Jinja2 + Chromium (DrissionPage CDP) — 结构化简历 HTML 渲染与 PDF 导出 / Structured resume HTML rendering and PDF export
 - PyYAML — 配置与 profile 读写 / Config and profile I/O
 - questionary — 交互式 TUI 配置引导 / Interactive TUI for profile setup
 - json-repair — LLM 输出 JSON 容错修复 / Fault-tolerant JSON parsing for LLM output
+
+---
+
+## 项目文档 / Project docs
+
+| 文件 | 内容 |
+|------|------|
+| `PROGRESS.md` | 做到哪了、下一步是什么 / What's done, what's next |
+| `DECISION.md` | 为什么这么做，以及为什么不那么做 / Why it's built this way, and what was rejected |
+| `PITFALLS.md` | 环境地雷与静默失败 / Environment landmines and silent failures |
+| `TECHNICAL.md` | 分层约定、数据流、状态机 / Layering, data flow, state machines |
+| `docs/configuration.md` | 三层配置模型 / The three-layer config model |
