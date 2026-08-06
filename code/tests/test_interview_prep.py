@@ -83,3 +83,23 @@ roles:
 
 def test_empty_file_returns_empty(tmp_path):
     assert interview_prep.load_prep(_write(tmp_path, "")) == {"roles": []}
+
+
+def test_collapses_cjk_fold_spaces(tmp_path):
+    """YAML 折叠标量在换行处插空格；中文句中不该留这个空格，中英混排的必须留。"""
+    p = _write(tmp_path, """
+roles:
+  - key: k
+    name: n
+    cards:
+      - q: >-
+          落库，
+          每次运行
+        a: >-
+          共 302 行 /
+          全项目，使用 SQLite 存储
+""")
+    card = interview_prep.load_prep(p)["roles"][0]["cards"][0]
+    assert card["q"] == "落库，每次运行"                       # CJK 之间的空格收掉
+    assert "302 行 / 全项目" in card["a"]                      # 中英混排的空格保留
+    assert "使用 SQLite 存储" in card["a"]                     # 英文两侧空格保留

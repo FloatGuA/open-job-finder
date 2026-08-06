@@ -43,7 +43,7 @@ function Section({ badge, title, sub, children }: {
   )
 }
 
-// \u53ef\u5c55\u5f00\u7684\u6280\u672f\u8bb2\u89e3\u5757\uff1a\u6807\u9898\u59cb\u7ec8\u53ef\u89c1\uff0c\u6df1\u5165\u5185\u5bb9\u70b9\u5f00\u624d\u663e\u793a——\u907f\u514d\u6574\u9875\u5806\u6ee1\u957f\u6587\u3002
+// \u53ef\u5c55\u5f00\u7684\u6280\u672f\u8bb2\u89e3\u5757\uff1a\u6807\u9898\u59cb\u7ec8\u53ef\u89c1\uff0c\u6df1\u5165\u5185\u5bb9\u70b9\u5f00\u624d\u663e\u793a\u2014\u2014\u907f\u514d\u6574\u9875\u5806\u6ee1\u957f\u6587\u3002
 function Collapsible({ title, hint, accent, children, defaultOpen = false }: {
   title: string; hint?: string; accent: string; children: React.ReactNode; defaultOpen?: boolean
 }) {
@@ -52,7 +52,7 @@ function Collapsible({ title, hint, accent, children, defaultOpen = false }: {
       <summary
         className="flex cursor-pointer select-none list-none items-center gap-2 px-3.5 py-2.5 [&::-webkit-details-marker]:hidden"
       >
-        <span className="text-[13px] transition-transform duration-150 group-open:rotate-90" style={{ color: accent }}>{'▸'}</span>
+        <span className="text-[13px] transition-transform duration-150 group-open:rotate-90" style={{ color: accent }}>{'\u25b8'}</span>
         <span className="text-[15px] font-semibold" style={{ color: accent }}>{title}</span>
         {hint && <span className="text-[13.5px] text-text-3">{hint}</span>}
       </summary>
@@ -864,6 +864,21 @@ const PREP_H_EV = '\u652f\u6491\u8bc1\u636e'
 const PREP_H_AVOID = '\u522b\u8fd9\u4e48\u8bf4'
 const PREP_H_PITCH = '\u7535\u68af\u9648\u8ff0'
 
+// \u5361\u7247\u6b63\u6587\u53ea\u652f\u6301 **\u52a0\u7c97** \u4e00\u79cd\u6807\u8bb0\u2014\u2014\u9762\u8bd5\u5361\u7247\u53ea\u9700\u8981\u5f3a\u8c03\u91cd\u70b9\uff0c
+// \u5f15\u5165\u5b8c\u6574 markdown \u6e32\u67d3\u5668\u662f\u8fc7\u5ea6\u8bbe\u8ba1\u3002\u5947\u6570\u4e2a ** \u65f6\u672b\u5c3e\u6bb5\u6309\u7eaf\u6587\u672c\u5904\u7406\u3002
+function RichText({ text }: { text: string }) {
+  const parts = text.split('**')
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 === 1
+          ? <strong key={i} className="font-semibold text-text-1">{p}</strong>
+          : <span key={i}>{p}</span>
+      )}
+    </>
+  )
+}
+
 function PrepCardBox({ card, n }: { card: PrepCard; n: number }) {
   return (
     <div className="rounded-xl p-3.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -871,14 +886,14 @@ function PrepCardBox({ card, n }: { card: PrepCard; n: number }) {
         <CountPill n={n} />
         <span className="text-[15.5px] font-semibold leading-snug text-text-1">{card.q}</span>
       </div>
-      {card.a && <p className="text-[14.5px] leading-relaxed text-text-2">{card.a}</p>}
+      {card.a && <p className="text-[14.5px] leading-relaxed text-text-2"><RichText text={card.a} /></p>}
       {card.evidence.length > 0 && (
         <div className="mt-2.5 rounded-lg p-2.5" style={{ background: 'rgba(10,132,255,0.06)', border: '1px solid rgba(10,132,255,0.16)' }}>
           <div className="mb-1 text-[12px] font-semibold uppercase tracking-wider text-signal-blue">{PREP_H_EV}</div>
           <ul className="space-y-1">
             {card.evidence.map((e, i) => (
               <li key={i} className="flex gap-2 text-[14px] leading-relaxed text-text-2">
-                <span className="text-text-3">&middot;</span><span>{e}</span>
+                <span className="text-text-3">&middot;</span><span><RichText text={e} /></span>
               </li>
             ))}
           </ul>
@@ -887,7 +902,7 @@ function PrepCardBox({ card, n }: { card: PrepCard; n: number }) {
       {card.avoid && (
         <div className="mt-2 rounded-lg px-2.5 py-2" style={{ background: 'rgba(255,69,58,0.06)', border: '1px solid rgba(255,69,58,0.18)' }}>
           <span className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: '#ff6961' }}>{PREP_H_AVOID}</span>
-          <p className="mt-0.5 text-[14px] leading-relaxed text-text-2">{card.avoid}</p>
+          <p className="mt-0.5 text-[14px] leading-relaxed text-text-2"><RichText text={card.avoid} /></p>
         </div>
       )}
     </div>
@@ -940,10 +955,10 @@ function PrepTab() {
 
       {cur && cur.pitch && (
         <Section badge={'\u2460'} title={PREP_H_PITCH} sub={cur.name}>
-          <p className="text-[15.5px] leading-relaxed text-text-1">{cur.pitch}</p>
+          <p className="text-[15.5px] leading-relaxed text-text-1"><RichText text={cur.pitch} /></p>
           {cur.hook && (
             <div className="mt-3 rounded-xl p-3" style={{ background: 'rgba(10,132,255,0.06)', border: '1px solid rgba(10,132,255,0.18)' }}>
-              <p className="text-[14.5px] leading-relaxed text-text-2">{cur.hook}</p>
+              <p className="text-[14.5px] leading-relaxed text-text-2"><RichText text={cur.hook} /></p>
             </div>
           )}
         </Section>

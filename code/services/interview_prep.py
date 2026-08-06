@@ -6,23 +6,34 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import yaml
+
+# YAML 折叠标量（`>-`）在每个换行处插一个空格。英文里正好是词间距，中文里就成了
+# 句中一个多余的空格（"落库， 每次运行"）。在读入边界统一收掉：只有空格两侧都是
+# CJK 字符/全角标点时才删——"302 行 / 全项目"这种中英混排的空格必须保留。
+_CJK = r"　-〿一-鿿＀-￯"
+_CJK_GAP = re.compile(r"(?<=[" + _CJK + r"])[ \t]+(?=[" + _CJK + r"])")
+
+
+def _text(v: Any) -> str:
+    return _CJK_GAP.sub("", str(v or "").strip())
 
 
 def _clean_card(raw: Any) -> dict | None:
     if not isinstance(raw, dict):
         return None
-    q = str(raw.get("q") or "").strip()
+    q = _text(raw.get("q"))
     if not q:
         return None
     ev = raw.get("evidence") or []
     return {
         "q": q,
-        "a": str(raw.get("a") or "").strip(),
-        "evidence": [str(x).strip() for x in ev if str(x).strip()] if isinstance(ev, list) else [],
-        "avoid": str(raw.get("avoid") or "").strip(),
+        "a": _text(raw.get("a")),
+        "evidence": [_text(x) for x in ev if _text(x)] if isinstance(ev, list) else [],
+        "avoid": _text(raw.get("avoid")),
     }
 
 
@@ -30,15 +41,15 @@ def _clean_role(raw: Any) -> dict | None:
     if not isinstance(raw, dict):
         return None
     key = str(raw.get("key") or "").strip()
-    name = str(raw.get("name") or "").strip()
+    name = _text(raw.get("name"))
     if not key or not name:
         return None
     cards = [c for c in (_clean_card(x) for x in (raw.get("cards") or [])) if c]
     return {
         "key": key,
         "name": name,
-        "pitch": str(raw.get("pitch") or "").strip(),
-        "hook": str(raw.get("hook") or "").strip(),
+        "pitch": _text(raw.get("pitch")),
+        "hook": _text(raw.get("hook")),
         "cards": cards,
     }
 
