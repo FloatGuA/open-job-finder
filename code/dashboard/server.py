@@ -5,6 +5,7 @@ import re
 import asyncio
 import queue
 import threading
+import time
 import json as _json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -180,7 +181,34 @@ def _serialize_record(record) -> dict[str, Any]:
 _wechat_id_from = wechat_id_from
 
 
-def _serialize_conversation(conv, messages: list[dict], job_url: str, job_title: str = "") -> dict[str, Any]:
+def _analysis_state(conv, active_window_days: int) -> str:
+    """会话的「意图分析是否是最新的」——ok / pending / stale。
+
+    存在的理由：LLM 分析失败时 AnalyzeStep 刻意**不写库**（不污染数据、不推进水位线，
+    这样下轮才会重试）。代价是 `intent` 列留着上一轮的旧值，UI 无法分辨「这就是分析
+    结论」和「这次没分析成，你看到的是旧的」。两者靠 last_analyzed_ts 可以确定性区分。
+
+    判定必须严格镜像 `tools/biz_logic/filter_conversations` 的分支顺序，否则 UI 会
+    承诺一件流水线不会做的事：
+      - ok      水位线追平消息时间（或没有真实时间戳，脏检查同样不会挑它）
+      - pending 水位线落后 **且** 在活跃窗口内 → 下轮 W2 会重新分析
+      - stale   水位线落后 **但** 超出活跃窗口 → too_old 优先级高于 unanalyzed，
+                永远不会再被分析（这是 filter 里有意的取舍，不是 bug）
+    """
+    analyzed = int(getattr(conv, "last_analyzed_ts", 0) or 0)
+    last_ts = int(getattr(conv, "last_msg_ts", 0) or 0)
+    if not last_ts or analyzed >= last_ts:
+        return "ok"
+    if active_window_days and active_window_days > 0:
+        cutoff_ms = int((time.time() - active_window_days * 86400) * 1000)
+        if last_ts < cutoff_ms:
+            return "stale"
+    return "pending"
+
+
+def _serialize_conversation(
+    conv, messages: list[dict], job_url: str, job_title: str = "", active_window_days: int = 0
+) -> dict[str, Any]:
     """Derive the dashboard's conversation shape from the T030 schema.
 
     HRConversation no longer carries messages / last_msg_text / last_msg_from /
@@ -223,6 +251,9 @@ def _serialize_conversation(conv, messages: list[dict], job_url: str, job_title:
         "status": conv.stage,
         "stage": conv.stage,
         "intent": conv.intent,
+        # intent 是否是最新一次分析的结果（见 _analysis_state）。'pending'/'stale' 时
+        # intent 是上一轮的旧值，不能当作本轮结论展示。
+        "analysis_state": _analysis_state(conv, active_window_days),
         "suggested_reply": reply_text,
         "needs_reply": conv.reply_status in ("pending", "approved", "revision"),
         "reply_status": conv.reply_status,
@@ -1362,6 +1393,12 @@ async def get_conversations(
     convs = tracker.get_hr_conversations(stage=stage)
     if status:
         convs = [c for c in convs if c.reply_status == status]
+    # 活跃窗口＝W2 的 no_response_days（ScanStep 就是拿它当 active_window_days 传给
+    # filter_conversations 的）。用于判断「水位线落后的会话下轮还会不会被重新分析」。
+    from services.settings_resolver import resolve_params
+    active_window_days = int(
+        resolve_params("w2", {}, app.state.config, DATA_DIR).get("no_response_days", 0) or 0
+    )
     # One tracker.get() per distinct job_id yields BOTH the job URL (open-in-Boss)
     # and the job title (在招岗位名) — the conversation table stores neither; they
     # live on the applications row, keyed by the hard-association job_id.
@@ -1378,6 +1415,7 @@ async def get_conversations(
                 c, tracker.get_hr_messages(c.conv_id),
                 job_urls.get(c.job_id or "", ""),
                 job_titles.get(c.job_id or "", ""),
+                active_window_days,
             )
             for c in convs
         ],

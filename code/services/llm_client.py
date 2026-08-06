@@ -228,12 +228,14 @@ class OllamaProvider:
             # 「多页图片 + prompt」→ 400 exceed_context 或**静默截断第二页**（表现为区块串味/
             # 漏读）。视觉请求显式放大上下文，让整份简历都进模型。
             payload.setdefault("options", {})["num_ctx"] = 16384
-        # 90s (was 180s): a reachable-but-slow ollama still gets ample time, but a
-        # stuck generate no longer hangs the whole chain for 3 minutes before falling
-        # through to codex. With qwen3 think=false (fast, no reasoning trace) this is generous.
-        # Vision inference over a resume page image on a local 7b VL is far slower than
-        # text (30-60s typical); give it more room. Text stays at the tight 90s.
-        timeout = 240 if images else 90
+        # 180s（2026-08-06 从 90s 调回）。90s 当初的理由是「卡住的生成不再拖 3 分钟才
+        # fall through 到 codex」——**那个理由现在已经不成立**：balanced 链只剩 ollama 一个
+        # provider，压根没有可以 fall through 的下家，缩短超时只是让调用更早地彻底失败。
+        # 真机依据（run w2_20260806_0224）：GPU 被其它程序占满时（显存 93%、利用率 63%），
+        # qwen3:8b 生成掉到 0.6 token/s，16 次调用里 9 次超过 60s、5 次撞满 90s 而失败；
+        # 同一批调用在 GPU 空出来后只要 1-9s。慢的根因是算力被抢，不是模型卡死。
+        # 视觉推理本来就更慢（30-60s 典型），保持 240s。
+        timeout = 240 if images else 180
         resp = requests.post(f"{self.base_url}/api/generate", json=payload, timeout=timeout)
         if resp.status_code != 200:
             raise RuntimeError(f"Ollama returned status {resp.status_code}: {resp.text[:300]}")

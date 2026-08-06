@@ -40,6 +40,11 @@ function stageMeta(stage: string): { label: string; color: string } | null {
   }
 }
 
+// \u4f1a\u8bdd\u5217\u8868\u7684\u5206\u6790\u72b6\u6001\u6807\u8bc6\uff1aintent \u5217\u5b58\u7684\u53ef\u80fd\u662f\u4e0a\u4e00\u8f6e\u7684\u65e7\u503c\uff08LLM \u5931\u8d25\u65f6\u523b\u610f\u4e0d\u5199\u5e93\uff09\uff0c
+// \u9760 analysis_state \u624d\u80fd\u5206\u8fa8\u300c\u8fd9\u5c31\u662f\u7ed3\u8bba\u300d\u548c\u300c\u8fd9\u6b21\u6ca1\u5206\u6790\u6210\u300d\u3002
+const ANALYSIS_PENDING = '\u5f85\u91cd\u5206\u6790'
+const ANALYSIS_STALE = '\u8d85\u7a97\u672a\u5206\u6790'
+
 function TintBadge({ label, color }: { label: string; color: string }) {
   return (
     <span
@@ -156,12 +161,12 @@ function isQueuedForSend(conv: Conversation): boolean {
 }
 
 // Does a conversation belong under the active tab, given its CURRENT state? The ONE
-// predicate for tab membership — used both at fetch (initial scoping) AND live in the
+// predicate for tab membership \u2014 used both at fetch (initial scoping) AND live in the
 // render derivation. Applying it live is what makes optimistic status changes real-
-// time: approve/dismiss/revise on 待审批 (or cancel on 待发送) flips reply_status, and
-// the item immediately drops out of the tab it no longer matches — instead of
+// time: approve/dismiss/revise on \u5f85\u5ba1\u6279 (or cancel on \u5f85\u53d1\u9001) flips reply_status, and
+// the item immediately drops out of the tab it no longer matches \u2014 instead of
 // lingering until the next refetch (the "list doesn't update" bug). Sentinel filters
-// key off reply_status / wechat_pending; real stages match conv.stage; 全部 (undefined)
+// key off reply_status / wechat_pending; real stages match conv.stage; \u5168\u90e8 (undefined)
 // matches all.
 function matchesTabFilter(conv: Conversation, activeStage: string | undefined): boolean {
   switch (activeStage) {
@@ -170,9 +175,9 @@ function matchesTabFilter(conv: Conversation, activeStage: string | undefined): 
     case PENDING_FILTER:
       return conv.reply_status === 'pending'
     case SEND_FILTER:
-      // 待发送 = queued to send on the next W3 run: an approved/revision text reply
+      // \u5f85\u53d1\u9001 = queued to send on the next W3 run: an approved/revision text reply
       // OR a manually staged resume (resume_status='queued'). Both are delivered by
-      // W3, so they share this tab; the row shows a 待发简历 badge to tell them apart.
+      // W3, so they share this tab; the row shows a \u5f85\u53d1\u7b80\u5386 badge to tell them apart.
       return isQueuedForSend(conv) || conv.resume_status === 'queued'
     case WECHAT_FILTER:
       return !!conv.wechat_pending
@@ -612,6 +617,12 @@ export default function Chat() {
                         )}
                         {conv.intent && (
                           <TintBadge label={INTENT_LABELS[conv.intent] ?? conv.intent} color={INTENT_COLORS[conv.intent] ?? '#84848c'} />
+                        )}
+                        {conv.analysis_state === 'pending' && (
+                          <TintBadge label={ANALYSIS_PENDING} color="#ff9f0a" />
+                        )}
+                        {conv.analysis_state === 'stale' && (
+                          <TintBadge label={ANALYSIS_STALE} color="#84848c" />
                         )}
                       </div>
                     </div>

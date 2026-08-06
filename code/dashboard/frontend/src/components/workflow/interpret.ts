@@ -180,7 +180,7 @@ export function interpretEvent(ev: ProgressEvent): string {
       return `HR \u610f\u56fe\uff1a${INTENT_LABELS[intent] ?? intent}`
     }
     case 'llm_degraded':
-      return 'LLM \u5168\u90e8\u964d\u7ea7\uff0c\u610f\u56fe\u5224\u4e3a\u672a\u8bc6\u522b'
+      return '\u610f\u56fe\u5206\u6790\u5931\u8d25\uff0c\u672a\u5199\u5165\u7ed3\u679c\uff08\u4e0b\u8f6e\u91cd\u8bd5\uff09'
     case 'resume_sent':
       return '\u5df2\u53d1\u9001\u7b80\u5386'
     case 'conv_navigate_failed': {

@@ -57,12 +57,15 @@ export interface Conversation {
   last_msg_at?: string
   stage: string
   intent?: string
+  // 'ok' = intent \u662f\u6700\u65b0\u4e00\u6b21\u5206\u6790\u7684\u7ed3\u679c\uff1b'pending' = \u4e0a\u6b21\u5206\u6790\u5931\u8d25(intent \u662f\u65e7\u503c)\uff0c\u4e0b\u8f6e\u91cd\u8bd5\uff1b
+  // 'stale' = \u8d85\u51fa\u6d3b\u8dc3\u7a97\u53e3\uff0ctoo_old \u4f18\u5148\u4e8e unanalyzed\uff0c\u4e0d\u4f1a\u518d\u88ab\u5206\u6790
+  analysis_state?: 'ok' | 'pending' | 'stale'
   suggested_reply?: string
   needs_reply?: boolean
   reply_status?: 'pending' | 'approved' | 'revision' | 'dismissed' | 'sent'
   reply_draft?: string
   resume_status?: 'queued' | null
-  matched_resume?: string          // W2 按岗位选出的「建议发这一份」
+  matched_resume?: string          // W2 \u6309\u5c97\u4f4d\u9009\u51fa\u7684\u300c\u5efa\u8bae\u53d1\u8fd9\u4e00\u4efd\u300d
   matched_resume_reason?: string
   status: string
   job_id?: string
@@ -330,7 +333,7 @@ export interface SmokeCheck {
 export interface RunDiagnosis {
   run_id: string | null
   pipeline?: string
-  /** false = legacy/absent log we cannot judge — NOT the same as "failed". */
+  /** false = legacy/absent log we cannot judge \u2014 NOT the same as "failed". */
   diagnosable?: boolean
   ok?: boolean
   complete?: boolean
@@ -386,7 +389,7 @@ export interface ResumeBlock {
   time: string
   bullets: string[]
   summary: string
-  // 字段级富文本；缺省 = 用模板预设（标题粗体、日期灰色…）
+  // \u5b57\u6bb5\u7ea7\u5bcc\u6587\u672c\uff1b\u7f3a\u7701 = \u7528\u6a21\u677f\u9884\u8bbe\uff08\u6807\u9898\u7c97\u4f53\u3001\u65e5\u671f\u7070\u8272\u2026\uff09
   style?: { title?: FieldMarks; time?: FieldMarks; bullets?: FieldMarks }
 }
 export interface ResumeBasicInfo {
@@ -401,7 +404,7 @@ export interface ResumeSection {
   name: string
   blocks: ResumeBlock[]
 }
-// v2.16 动态分区形状：信息池与每份简历共用（sections 数组顺序即分区顺序）
+// v2.16 \u52a8\u6001\u5206\u533a\u5f62\u72b6\uff1a\u4fe1\u606f\u6c60\u4e0e\u6bcf\u4efd\u7b80\u5386\u5171\u7528\uff08sections \u6570\u7ec4\u987a\u5e8f\u5373\u5206\u533a\u987a\u5e8f\uff09
 export interface ResumeBlocks {
   basic_info: ResumeBasicInfo
   self_description: string
@@ -554,7 +557,7 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-  // 信息池（v2.16：求职者全部信息主库；上传解析入池，简历从池组合）
+  // \u4fe1\u606f\u6c60\uff08v2.16\uff1a\u6c42\u804c\u8005\u5168\u90e8\u4fe1\u606f\u4e3b\u5e93\uff1b\u4e0a\u4f20\u89e3\u6790\u5165\u6c60\uff0c\u7b80\u5386\u4ece\u6c60\u7ec4\u5408\uff09
   getPool: (): Promise<ResumeBlocks> => requestJson('/api/pool'),
   getInterviewPrep: (): Promise<PrepDoc> => requestJson('/api/interview-prep'),
   savePool: (body: ResumeBlocks): Promise<{ ok: boolean }> =>
@@ -563,14 +566,14 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-  // 返回体带 _stats（整理前后条目数）供前端提醒是否丢内容
+  // \u8fd4\u56de\u4f53\u5e26 _stats\uff08\u6574\u7406\u524d\u540e\u6761\u76ee\u6570\uff09\u4f9b\u524d\u7aef\u63d0\u9192\u662f\u5426\u4e22\u5185\u5bb9
   buildPool: (self_description: string): Promise<ResumeBlocks & { _stats?: { before: number; after: number } }> =>
     requestJson('/api/pool/build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ self_description }),
     }),
-  // 信息池快照（每次保存前自动留档，可回滚）
+  // \u4fe1\u606f\u6c60\u5feb\u7167\uff08\u6bcf\u6b21\u4fdd\u5b58\u524d\u81ea\u52a8\u7559\u6863\uff0c\u53ef\u56de\u6eda\uff09
   getPoolSnapshots: (): Promise<{ snapshots: PoolSnapshot[]; current: PoolCurrent }> => requestJson('/api/pool/snapshots'),
   restorePoolSnapshot: (fname: string): Promise<ResumeBlocks> =>
     requestJson(`/api/pool/snapshots/${encodeURIComponent(fname)}/restore`, { method: 'POST' }),
@@ -580,8 +583,8 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-  // 把预览用的简历 HTML 交后端 Chromium 打印成 PDF（与预览同源），返回 blob 供下载；
-  // name 用于服务端「最近生成」存档命名
+  // \u628a\u9884\u89c8\u7528\u7684\u7b80\u5386 HTML \u4ea4\u540e\u7aef Chromium \u6253\u5370\u6210 PDF\uff08\u4e0e\u9884\u89c8\u540c\u6e90\uff09\uff0c\u8fd4\u56de blob \u4f9b\u4e0b\u8f7d\uff1b
+  // name \u7528\u4e8e\u670d\u52a1\u7aef\u300c\u6700\u8fd1\u751f\u6210\u300d\u5b58\u6863\u547d\u540d
   printResumePdf: async (html: string, name?: string): Promise<Blob> => {
     const r = await fetch('/api/resume/print-pdf', {
       method: 'POST',
@@ -591,7 +594,7 @@ export const API = {
     if (!r.ok) throw new Error(`PDF export failed (${r.status})`)
     return r.blob()
   },
-  // 多份简历管理
+  // \u591a\u4efd\u7b80\u5386\u7ba1\u7406
   getResumes: (): Promise<ResumeIndex> => requestJson('/api/resumes'),
   createResume: (name: string, target: string, copyFromActive = true): Promise<ResumeMeta> =>
     requestJson('/api/resumes', {
@@ -605,13 +608,13 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     }),
-  // 读某份简历内容（不激活）——已保存简历列表的预览
+  // \u8bfb\u67d0\u4efd\u7b80\u5386\u5185\u5bb9\uff08\u4e0d\u6fc0\u6d3b\uff09\u2014\u2014\u5df2\u4fdd\u5b58\u7b80\u5386\u5217\u8868\u7684\u9884\u89c8
   getResumeDoc: (slug: string): Promise<ResumeBlocks> => requestJson(`/api/resumes/${slug}/blocks`),
   activateResume: (slug: string): Promise<ResumeIndex> =>
     requestJson(`/api/resumes/${slug}/activate`, { method: 'POST' }),
   deleteResume: (slug: string): Promise<{ ok: boolean }> =>
     requestJson(`/api/resumes/${slug}`, { method: 'DELETE' }),
-  // 最近生成（导出存档）
+  // \u6700\u8fd1\u751f\u6210\uff08\u5bfc\u51fa\u5b58\u6863\uff09
   getResumeExports: (): Promise<{ exports: ResumeExport[] }> => requestJson('/api/resume/exports'),
   deleteResumeExport: (fname: string): Promise<{ ok: boolean }> =>
     requestJson(`/api/resume/exports/${encodeURIComponent(fname)}`, { method: 'DELETE' }),
