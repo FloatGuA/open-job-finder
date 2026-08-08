@@ -110,7 +110,7 @@
 
 ## 已完成
 
-- **修「日志陈旧 running」+ Chat.tsx 拒绝全部计数不实时更新**（2026-08-09，v2.19.1.14，696 passed，build 绿；纯代码修复，无需真机验证）
+- **修「日志陈旧 running」+ Chat.tsx 拒绝全部计数不实时更新**（2026-08-09，v2.19.1.14，commit `3832cd2`，696 passed，build 绿；纯代码修复，无需真机验证）
   - **日志陈旧 running 根因**：`w1_runner.py`/`w2_runner.py` 正常异常路径本就会 `run_logger.close("failed")` 再 raise——但**硬杀进程（Stop-Process/崩溃）跳过整个 except/finally**，run_end 永远不会写入；而 `run_log_reader.py` 的读取逻辑把"最后一行不是 run_end"一律显示成 `running`，且 server 启动时从无孤儿回收机制（grep 全库确认零命中）——两者叠加就是 Logs 页面卡死在 running 不会消失。
   - **修复**：新增 `services/run_logger.reconcile_orphaned_runs()`，server 启动时调用一次。判据干净：**进程刚启动，此刻不可能有任何 run 在真实运行**，所以任何"最后一行非 run_end"的 run 文件在此刻都是无歧义的孤儿——不是靠猜的启发式。给孤儿 run 追加一条合成 `run_end`（`status="failed"`, summary 注明"orphaned: 进程随服务器重启已消失"），复用既有 `failed` 状态词表（前端 Logs 页已有红色渲染，不用改前端）。只追加不改写，保持 JSONL 只增量写的既有纪律。`dashboard/server.py` 的 `startup()` 挂载调用 + 日志行。测试 +3（孤儿闭合/正常结束不动/无 runs 目录）。
   - **顺带清理**：Chat.tsx「一键拒绝全部」按钮三处用了未实时更新的 `conversations.length`（个别处理只改字段不移除数组项，长度不随之收缩），改用页面实际渲染用的 `tabScoped.length`；纯显示层修复，后端 `dismiss_all_pending_replies` 的 SQL 作用域本就按 DB 实时 `reply_status='pending'` 走，不受影响。
