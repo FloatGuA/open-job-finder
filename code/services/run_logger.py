@@ -130,3 +130,43 @@ class RunLogger:
             except Exception:
                 pass
             self._f = None
+
+
+def reconcile_orphaned_runs() -> list[str]:
+    """Close out run files left dangling by a hard kill (process killed / crashed
+    mid-run never reaches the except/finally in w1_runner.py's `run_logger.close()`,
+    so no run_end is ever written -- the Logs page then reports it as 'running'
+    forever, since summarize_run_file() has no way to tell "still running" apart
+    from "orphaned"). Call once at server startup: this process just started, so by
+    definition nothing can legitimately still be running yet -- any run file whose
+    last event isn't run_end at this point is unambiguously orphaned, not a race.
+
+    Appends a synthetic run_end (status="failed") rather than rewriting the file,
+    keeping the JSONL write-once/append-only discipline every other event follows.
+    Returns the run_ids that were reconciled, for a startup log line.
+    """
+    if not RUNS_DIR.exists():
+        return []
+    reconciled: list[str] = []
+    for path in RUNS_DIR.glob("*.jsonl"):
+        try:
+            lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            if not lines:
+                continue
+            first = json.loads(lines[0])
+            last = json.loads(lines[-1])
+            if first.get("event") != "run_start" or last.get("event") == "run_end":
+                continue
+            run_id = first.get("run_id", path.stem)
+            with path.open("a", encoding="utf-8", newline="\n") as f:
+                f.write(json.dumps({
+                    "event": "run_end",
+                    "run_id": run_id,
+                    "status": "failed",
+                    "summary": {"reason": "orphaned: process was gone when the server restarted"},
+                    "ts": _now_iso(),
+                }, ensure_ascii=False) + "\n")
+            reconciled.append(run_id)
+        except (OSError, json.JSONDecodeError) as exc:
+            _log.warning("reconcile_orphaned_runs: skipping %s: %s", path, exc)
+    return reconciled

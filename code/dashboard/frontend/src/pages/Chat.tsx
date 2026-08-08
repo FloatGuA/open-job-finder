@@ -528,12 +528,12 @@ export default function Chat() {
             </div>
           </div>
 
-          {activeStage === PENDING_FILTER && conversations.length > 0 && (
+          {activeStage === PENDING_FILTER && tabScoped.length > 0 && (
             <div className="px-3 py-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
               {bulkConfirm ? (
                 <div className="rounded-lg p-2" style={{ background: 'rgba(255,69,58,0.1)', border: '1px solid rgba(255,69,58,0.3)' }}>
                   <p className="mb-2 text-[11px] leading-relaxed text-text-2">
-                    {'\u786e\u8ba4\u62d2\u7edd\u5f53\u524d\u5168\u90e8 '}{conversations.length}{' \u6761\u5f85\u5ba1\u6279\u56de\u590d\uff1f\u6b64\u64cd\u4f5c\u4e0d\u53d1\u9001\u3001\u4ec5\u6e05\u7406\u540d\u5355\uff08\u5df2\u6279\u51c6\u7684\u4e0d\u53d7\u5f71\u54cd\uff09\u3002'}
+                    {'\u786e\u8ba4\u62d2\u7edd\u5f53\u524d\u5168\u90e8 '}{tabScoped.length}{' \u6761\u5f85\u5ba1\u6279\u56de\u590d\uff1f\u6b64\u64cd\u4f5c\u4e0d\u53d1\u9001\u3001\u4ec5\u6e05\u7406\u540d\u5355\uff08\u5df2\u6279\u51c6\u7684\u4e0d\u53d7\u5f71\u54cd\uff09\u3002'}
                   </p>
                   <div className="flex gap-2">
                     <button
@@ -562,7 +562,7 @@ export default function Chat() {
                   className="w-full rounded-lg px-3 py-1.5 text-xs font-medium transition"
                   style={{ background: 'rgba(255,69,58,0.14)', color: '#ff453a', boxShadow: 'inset 0 0 0 1px rgba(255,69,58,0.3)' }}
                 >
-                  {'\u4e00\u952e\u62d2\u7edd\u5168\u90e8\uff08'}{conversations.length}{'\uff09'}
+                  {'\u4e00\u952e\u62d2\u7edd\u5168\u90e8\uff08'}{tabScoped.length}{'\uff09'}
                 </button>
               )}
             </div>

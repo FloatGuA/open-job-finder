@@ -36,6 +36,7 @@ from services.prompt_manager import EDITABLE_PROMPTS, PromptManager
 from services.tracker import ApplicationTracker
 from tools.biz_logic.wechat_id import wechat_id_from
 from services import run_log_reader
+from services.run_logger import reconcile_orphaned_runs
 from services.scheduler_service import SchedulerService
 from services.workflow_orchestration import OrchestrationService
 
@@ -462,6 +463,10 @@ async def startup() -> None:
     _initialize_state()
     app.state.emitter = getattr(app.state, "emitter", None) or ProgressEmitter()
     _get_scheduler().rebuild(_load_schedule_config(), restore_interval_times=True)
+    reconciled = reconcile_orphaned_runs()
+    if reconciled:
+        logger.info("Reconciled %d orphaned run(s) left 'running' by a prior hard kill: %s",
+                    len(reconciled), ", ".join(reconciled))
 
 
 @app.on_event("shutdown")

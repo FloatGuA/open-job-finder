@@ -4,7 +4,7 @@ import json
 import pytest
 
 import services.run_logger as _run_logger_mod
-from services.run_logger import RunLogger
+from services.run_logger import RunLogger, reconcile_orphaned_runs
 from tools.base import BaseTool, ToolResult
 from tools.registry import ToolRegistry
 
@@ -85,6 +85,40 @@ def test_run_logger_business_event_has_no_status_or_duration(tmp_path, monkeypat
     assert entry["event"] == "job_scored"
     assert "status" not in entry
     assert "duration_ms" not in entry
+
+
+def test_reconcile_orphaned_runs_closes_dangling_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(_run_logger_mod, "RUNS_DIR", tmp_path / "runs")
+    rl = RunLogger(run_id="w2_20260101_0904", pipeline="w2")
+    rl.log_run_start()
+    rl.log_tool(step="scan", tool="extract_conversation_list", scope={}, status="successful",
+                duration_ms=100, data={})
+    # simulate a hard kill: no log_run_end / close() call
+
+    reconciled = reconcile_orphaned_runs()
+    assert reconciled == ["w2_20260101_0904"]
+
+    lines = (tmp_path / "runs" / "w2_20260101_0904.jsonl").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(l) for l in lines]
+    assert events[-1]["event"] == "run_end"
+    assert events[-1]["status"] == "failed"
+    assert "orphaned" in events[-1]["summary"]["reason"]
+
+
+def test_reconcile_orphaned_runs_leaves_finished_run_untouched(tmp_path, monkeypatch):
+    monkeypatch.setattr(_run_logger_mod, "RUNS_DIR", tmp_path / "runs")
+    rl = RunLogger(run_id="w1_20260101_0905", pipeline="w1")
+    rl.log_run_start()
+    rl.log_run_end(status="successful", summary={"applied": 1})
+
+    assert reconcile_orphaned_runs() == []
+    lines = (tmp_path / "runs" / "w1_20260101_0905.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2  # unchanged: run_start + the original run_end only
+
+
+def test_reconcile_orphaned_runs_no_runs_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(_run_logger_mod, "RUNS_DIR", tmp_path / "does_not_exist")
+    assert reconcile_orphaned_runs() == []
 
 
 # ── ToolRegistry ──────────────────────────────────────────────────────────────

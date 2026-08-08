@@ -5,8 +5,8 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-04（v2.19.0.8 三列宽度拉平 + 删自我描述/学历冗余字段） |
-| 当前版本 | 2.19.0.8                        |
+| 最后更新 | 2026-08-09（v2.19.1.14 修「待审批」实时计数 + 修日志陈旧 running + 全项目扫视补 jobs.db 备份/通知缺口） |
+| 当前版本 | 2.19.1.14                       |
 
 ## 待跟进（另开会话）
 
@@ -110,6 +110,12 @@
 
 ## 已完成
 
+- **修「日志陈旧 running」+ Chat.tsx 拒绝全部计数不实时更新**（2026-08-09，v2.19.1.14，696 passed，build 绿；纯代码修复，无需真机验证）
+  - **日志陈旧 running 根因**：`w1_runner.py`/`w2_runner.py` 正常异常路径本就会 `run_logger.close("failed")` 再 raise——但**硬杀进程（Stop-Process/崩溃）跳过整个 except/finally**，run_end 永远不会写入；而 `run_log_reader.py` 的读取逻辑把"最后一行不是 run_end"一律显示成 `running`，且 server 启动时从无孤儿回收机制（grep 全库确认零命中）——两者叠加就是 Logs 页面卡死在 running 不会消失。
+  - **修复**：新增 `services/run_logger.reconcile_orphaned_runs()`，server 启动时调用一次。判据干净：**进程刚启动，此刻不可能有任何 run 在真实运行**，所以任何"最后一行非 run_end"的 run 文件在此刻都是无歧义的孤儿——不是靠猜的启发式。给孤儿 run 追加一条合成 `run_end`（`status="failed"`, summary 注明"orphaned: 进程随服务器重启已消失"），复用既有 `failed` 状态词表（前端 Logs 页已有红色渲染，不用改前端）。只追加不改写，保持 JSONL 只增量写的既有纪律。`dashboard/server.py` 的 `startup()` 挂载调用 + 日志行。测试 +3（孤儿闭合/正常结束不动/无 runs 目录）。
+  - **顺带清理**：Chat.tsx「一键拒绝全部」按钮三处用了未实时更新的 `conversations.length`（个别处理只改字段不移除数组项，长度不随之收缩），改用页面实际渲染用的 `tabScoped.length`；纯显示层修复，后端 `dismiss_all_pending_replies` 的 SQL 作用域本就按 DB 实时 `reply_status='pending'` 走，不受影响。
+  - **PROGRESS.md 顺带精简**：清掉几条已过时/低价值的历史遗留待办（W2 已批准回复发不出去问题A/B、`update_status()`竞争与`datetime.utcnow()`迁移——后者其实已在别处完成、三条未验证选择器、"计算机视觉操作层"长期设想）——2026-08-05 从 TECHNICAL.md 迁入时未经复核就整体照搬，这次借机核实后清理。
+
 - **简历排版与工作台改版**（2026-08-04，v2.19.0.1，677 passed + 前端 13 passed，build 绿，真机逐项验证）
   - **① 字体**：正文改 **微软雅黑**、标题类（姓名/分区标题/条目标题）改 **黑体**，移除原 Georgia 衬线（用户定）。
   - **② 字段级富文本**：每个条目的 **标题 / 时间 / 要点各自** 可切 粗/斜/下划线（B/I/U 三个开关 × 三个字段）。**空样式 = 用模板预设**，所以老数据与 AI 组合生成的简历行为完全不变，只是字体按 ① 换掉。开关只在「当前简历」列出现——信息池是素材库，不管排版。真机验证：点「标题-加粗」预览立刻出现 `font-weight:700`。
@@ -198,18 +204,15 @@
 
 > **2026-07-22 整改收口**：四路独立审视的 High/Med/Low + server.py 减重已全部处理（明细见 `docs/audit-remediation-log.md`）。审查中确认两处「双实现」是**有意设计**非缺陷、维持原样：`upsert_hr_conversation`（工具版=运行时身份/stage、tracker 版=onboarding 播种，列集与调用方不重叠）、`filter_conversations` 的 `too_old` 优先于 `unanalyzed`（分析两月前死线程无收益，真机 909 会话靠此窗口收敛到约 12）。剩余可选项：server.py 减重批 C（session helpers，31 行，收益小）。
 
-**必须改（影响正确性）**
+**必须改（数据完整性 / 可观测性，2026-08-09 全项目扫视发现）**
 
-- `update_status()` 走 read-modify-write 路径，多线程/多进程场景存在竞争（当前单线程不影响，引入并发后需改为直接 SQL UPDATE）。
-- `datetime.utcnow()` 已废弃，需全局迁移到 `datetime.now(timezone.utc)`。
+- **`data/jobs.db` 零备份、零恢复路径**：唯一权威库（applications + hr_conversations + hr_messages，几周真实投递与 HR 会话历史），`tracker.py` 初始化无任何快照逻辑，崩溃/坏盘/迁移写错即不可逆丢失。**本项目已经验证过这类风险会真的发生**——`info_pool.yaml` 在 v2.17.1 被判定"唯一主库却零备份"高风险后加了快照+回滚（见 `[[resume-vision-parse-plan]]` 一线记忆），但同样的教训没推广到更关键的 `jobs.db`；且 `jobs.db` 历史上已因 schema 漂移做过三次紧急重建（`migrate_030.py`/`migrate_app_rebuild.py`/`migrate_hrconv_rebuild.py`）。方向：仿 `info_pool` 的分层快照（写前存档 + 保留策略），或更轻量的定时 `VACUUM INTO` 落一份只读副本。
+- **零主动通知通道**：全库 grep `webhook/email/notify` 零命中（唯一命中都是 `threading.Condition.notify()`）。调度器/自检全靠"写文件 + 用户自己打开 Dashboard 看"，没有推送。核心卖点是"不用盯着也能跑"，但 session 过期 / Boss 改版选择器失效 / 撞配额上限，任一失败都可能安静地跑好几天而无人察觉。方向：至少给"连续 N 次 run 失败"或"self-check 连续不通过"加一条本地可感知的信号（系统通知 / 邮件 / 简单的 webhook 出口，视用户实际会看哪个渠道而定——按需再定，不要过度设计）。
 
 **待真实环境验证**
 
-- `send_chat_message` 的输入框选择器（`.input-area div[contenteditable='true']` 等候选项）未充分验证，Boss直聘 实际 DOM 结构可能变化。
-- 未读 badge selector 未验证（测试期间所有会话均已读，badge 未出现）。
 - `extract_conversation_list` 的 `boss_conv_id` 取自会话卡片 `.friend-content` 的 `d-c` 属性，但已知 Boss直聘 的 `d-c` 普遍是用户自身 ID 而非会话唯一 ID；其在 `navigate_to_conversation` 中的实际用途与有效性待确认。
 - W2 会话卡片解析（`extract_conversation_list`）全部使用 CSS class 选择器（`.friend-content-warp`、`.name-text` 等），Boss直聘 改版易碎，已配 fallback 链缓解，待真实环境验证命中率。
-- `accept_resume_card` 的境外跨境二次确认框选择器（旧 `.boss-dialog__button`）未实测，靠「附件简历」marker 兜底（详见"设计决策 — W2 发简历策略"；2026-06-11 已实测 toolbar 主动发送路径 15/15，accept 路径靠 marker 自验证）。
 
 **可选改进**
 
@@ -245,10 +248,7 @@
 
 ### 待跟进（杂项）
 
-- [ ] **W2 已批准回复发不出去 · 问题A（沉底会话漏抓）**：reply 发送依赖会话仍在 scan 到的滚动列表里；沉底会话扫不到 → `approved_reply_conversation_missing_from_scan` → replies_sent=0。修向：发送时用 Boss 聊天列表**搜索框按公司/HR 定位并直接导航**，不依赖滚动窗口。详见记忆 [[w2-reply-send-gaps]]
-- [ ] **W2 已批准回复发不出去 · 问题B（运行期写锁）**：W2 跑时从 UI 点批准撞 SQLite 写锁→请求失败→乐观 UI 回退（看着像没生效）。修向：写端点加 busy_timeout/重试，或 running 时禁用批准按钮。临时规避：别在 W2 跑时点批准
 - [ ] 问题2：W2 实时进度——实跑时确认 SSE 事件是否进控制台 LIVE 骨架投影/近期卡片（本次有头跑未专门核验）
-- [ ] 日志陈旧 running：被强杀的 run（如 w2_1412/1426）永久显示 running，未 finalize。可在 server 启动时把孤儿 running 标 aborted/failed
 - [ ] 验证脚本 `design/drive.py`（前端驱动）+ `esc.py`/`shot_*.py`：DrissionPage 多实例必须用**独立调试端口**（drive.py 已用 9777），与服务端 Boss 浏览器默认 9222 冲突会致 Handshake 404/页面断开
 
 ### 后端运行时问题
@@ -293,10 +293,6 @@
 - [ ] LLM fallback 命中层统计：FallbackChain 记录 attempt 序号到日志
 - [ ] --health-check 环境自检：检查 Chromium/DrissionPage/Ollama/profile/session 就绪状态
 - [ ] Dashboard 投递趋势：/api/stats 增加按天聚合历史数据
-
-### 长期规划
-
-- [ ] **计算机视觉操作层**：Boss直聘 前端 DOM 变更频率极高（class 无语义、定期重混淆），CSS 选择器方案长期维护成本高。规划将频繁断裂的操作（简历发送按钮、打招呼按钮、简历请求卡片识别）改为截图 → Claude Vision 识别坐标 → `page.actions.move_to(x,y).click()`，与 DOM 结构完全解耦。DrissionPage 自带截图 API，结合现有 FallbackChain 无需引入新依赖。短期先做混合模式（稳定操作保留 DOM，高频断点改用 Vision），长期可全视觉化。
 
 ### 已知遗留问题（不阻断，待机会修复）
 
