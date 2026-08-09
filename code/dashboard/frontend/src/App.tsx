@@ -10,6 +10,7 @@ import Logs from './pages/Logs'
 import Automation from './pages/Automation'
 import Resume from './pages/Resume'
 import StateMachine from './pages/StateMachine'
+import InterviewPrep from './pages/InterviewPrep'
 import Settings from './pages/Settings'
 import { AppContext, type AppContextValue, type Page } from './context/app-context'
 
@@ -21,6 +22,7 @@ const PAGE_COMPONENTS: Record<Page, JSX.Element> = {
   automation: <Automation />,
   resume: <Resume />,
   lifecycle: <StateMachine />,
+  interview: <InterviewPrep />,
   settings: <Settings />,
 }
 

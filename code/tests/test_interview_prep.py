@@ -81,6 +81,34 @@ roles:
     assert card["a"] == "" and card["evidence"] == [] and card["avoid"] == ""
 
 
+def test_kind_defaults_to_project(tmp_path):
+    """不写 kind 的老卡片全是项目问答，缺省必须是 project，否则历史内容会被归错组。"""
+    p = _write(tmp_path, """
+roles:
+  - key: k
+    name: n
+    cards:
+      - q: 没写 kind
+""")
+    assert interview_prep.load_prep(p)["roles"][0]["cards"][0]["kind"] == "project"
+
+
+def test_kind_normalized_and_unknown_falls_back(tmp_path):
+    """kind 是页面分组依据，拼错时宁可归到 project 也不能漏渲染。"""
+    p = _write(tmp_path, """
+roles:
+  - key: k
+    name: n
+    cards:
+      - q: 八股
+        kind: BASICS
+      - q: 拼错的
+        kind: nonsense
+""")
+    kinds = [c["kind"] for c in interview_prep.load_prep(p)["roles"][0]["cards"]]
+    assert kinds == ["basics", "project"]
+
+
 def test_empty_file_returns_empty(tmp_path):
     assert interview_prep.load_prep(_write(tmp_path, "")) == {"roles": []}
 

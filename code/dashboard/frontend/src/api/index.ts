@@ -877,8 +877,10 @@ export async function handleJson<T>(res: Response): Promise<T> {
   return payload as T
 }
 
+export type PrepKind = 'project' | 'basics'
 export interface PrepCard {
   q: string
+  kind: PrepKind
   a: string
   evidence: string[]
   avoid: string

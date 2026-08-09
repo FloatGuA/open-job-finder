@@ -22,6 +22,11 @@ def _text(v: Any) -> str:
     return _CJK_GAP.sub("", str(v or "").strip())
 
 
+# 卡片分两类：basics 是与本项目无关的通用八股，project 是针对本项目的问答。
+# 缺省 project——历史内容全是项目问答，不写 kind 的老卡片语义不变。
+_KINDS = ("project", "basics")
+
+
 def _clean_card(raw: Any) -> dict | None:
     if not isinstance(raw, dict):
         return None
@@ -29,8 +34,10 @@ def _clean_card(raw: Any) -> dict | None:
     if not q:
         return None
     ev = raw.get("evidence") or []
+    kind = str(raw.get("kind") or "").strip().lower()
     return {
         "q": q,
+        "kind": kind if kind in _KINDS else "project",
         "a": _text(raw.get("a")),
         "evidence": [_text(x) for x in ev if _text(x)] if isinstance(ev, list) else [],
         "avoid": _text(raw.get("avoid")),

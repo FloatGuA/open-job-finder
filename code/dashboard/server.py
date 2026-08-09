@@ -796,7 +796,7 @@ def _clean_doc_body(body: dict) -> dict:
 # ── 信息池（v2.16：求职者全部信息的主库；上传解析入池，简历从池组合）──────────
 @app.get("/api/interview-prep")
 async def get_interview_prep() -> JSONResponse:
-    """面试 Prep 卡片（架构页专用，与产品功能无关）。内容在 data/ 下，不入 git。"""
+    """面试 Prep 卡片（「面试准备」页专用，与产品功能无关）。内容在 data/ 下，不入 git。"""
     from services import interview_prep
     return JSONResponse(interview_prep.load_prep(str(DATA_DIR / "interview_prep.yaml")))
 

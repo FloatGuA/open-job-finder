@@ -12,6 +12,7 @@ const PAGE_TITLES = {
   automation: '\u81ea\u52a8\u5316',
   resume: '\u7b80\u5386',
   lifecycle: '\u67b6\u6784',
+  interview: '\u9762\u8bd5\u51c6\u5907',
   settings: '\u8bbe\u7f6e',
 } as const
 

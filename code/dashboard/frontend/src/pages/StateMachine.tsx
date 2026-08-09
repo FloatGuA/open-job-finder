@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { API, type ArchitectureLive, type PrepCard, type PrepDoc } from '@/api'
+import { API, type ArchitectureLive } from '@/api'
 import { useAppContext } from '@/context/app-context'
 import DevLabel from '@/components/dev/DevLabel'
 
@@ -851,137 +851,14 @@ function DataTab({ live }: { live: ArchitectureLive | null }) {
   )
 }
 
-// -- (5) interview-prep tab -------------------------------------------
-// Narrative layer for interviews (elevator pitch / highlights / JD-mapping).
-// Content is mirrored from docs/interview-prep-futu.md -- that doc stays the
-// source of truth; keep this in sync when the doc changes. Deliberately does NOT
-// duplicate the flow / state-machine diagrams (those live in the other tabs).
-
-const PREP_EMPTY_T = '\u8fd8\u6ca1\u6709\u9762\u8bd5\u5361\u7247'
-const PREP_EMPTY_D = '\u5185\u5bb9\u5728 code/data/interview_prep.yaml\uff08\u4e0d\u5165 git\uff09\u3002\u6309\u5c97\u4f4d\u5199 cards\uff0c\u6539\u5b8c\u5237\u65b0\u5373\u53ef\uff0c\u4e0d\u7528\u91cd\u65b0\u6784\u5efa\u3002'
-const PREP_NOTE = '\u8fd9\u4e00\u680f\u4e0e\u4ea7\u54c1\u529f\u80fd\u65e0\u5173\uff0c\u53ea\u7ed9\u5f00\u53d1\u8005\u81ea\u5df1\u770b\u3002\u5185\u5bb9\u5b58\u5728 data/ \u4e0b\uff0c\u4e0d\u8fdb\u516c\u5f00\u4ed3\u5e93\u3002'
-const PREP_H_EV = '\u652f\u6491\u8bc1\u636e'
-const PREP_H_AVOID = '\u522b\u8fd9\u4e48\u8bf4'
-const PREP_H_PITCH = '\u7535\u68af\u9648\u8ff0'
-
-// \u5361\u7247\u6b63\u6587\u53ea\u652f\u6301 **\u52a0\u7c97** \u4e00\u79cd\u6807\u8bb0\u2014\u2014\u9762\u8bd5\u5361\u7247\u53ea\u9700\u8981\u5f3a\u8c03\u91cd\u70b9\uff0c
-// \u5f15\u5165\u5b8c\u6574 markdown \u6e32\u67d3\u5668\u662f\u8fc7\u5ea6\u8bbe\u8ba1\u3002\u5947\u6570\u4e2a ** \u65f6\u672b\u5c3e\u6bb5\u6309\u7eaf\u6587\u672c\u5904\u7406\u3002
-function RichText({ text }: { text: string }) {
-  const parts = text.split('**')
-  return (
-    <>
-      {parts.map((p, i) =>
-        i % 2 === 1
-          ? <strong key={i} className="font-semibold text-text-1">{p}</strong>
-          : <span key={i}>{p}</span>
-      )}
-    </>
-  )
-}
-
-function PrepCardBox({ card, n }: { card: PrepCard; n: number }) {
-  return (
-    <div className="rounded-xl p-3.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-      <div className="mb-2 flex items-baseline gap-2.5">
-        <CountPill n={n} />
-        <span className="text-[15.5px] font-semibold leading-snug text-text-1">{card.q}</span>
-      </div>
-      {card.a && <p className="text-[14.5px] leading-relaxed text-text-2"><RichText text={card.a} /></p>}
-      {card.evidence.length > 0 && (
-        <div className="mt-2.5 rounded-lg p-2.5" style={{ background: 'rgba(10,132,255,0.06)', border: '1px solid rgba(10,132,255,0.16)' }}>
-          <div className="mb-1 text-[12px] font-semibold uppercase tracking-wider text-signal-blue">{PREP_H_EV}</div>
-          <ul className="space-y-1">
-            {card.evidence.map((e, i) => (
-              <li key={i} className="flex gap-2 text-[14px] leading-relaxed text-text-2">
-                <span className="text-text-3">&middot;</span><span><RichText text={e} /></span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {card.avoid && (
-        <div className="mt-2 rounded-lg px-2.5 py-2" style={{ background: 'rgba(255,69,58,0.06)', border: '1px solid rgba(255,69,58,0.18)' }}>
-          <span className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: '#ff6961' }}>{PREP_H_AVOID}</span>
-          <p className="mt-0.5 text-[14px] leading-relaxed text-text-2"><RichText text={card.avoid} /></p>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function PrepTab() {
-  const [doc, setDoc] = useState<PrepDoc | null>(null)
-  const [role, setRole] = useState<string>('')
-
-  useEffect(() => {
-    API.getInterviewPrep()
-      .then((d) => {
-        setDoc(d)
-        if (d.roles.length > 0) setRole(d.roles[0].key)
-      })
-      .catch(() => setDoc({ roles: [] }))
-  }, [])
-
-  const cur = doc?.roles.find((r) => r.key === role) || null
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-xl p-3" style={{ background: 'rgba(255,159,10,0.06)', border: '1px solid rgba(255,159,10,0.2)' }}>
-        <p className="text-[14px] leading-relaxed text-text-2">{PREP_NOTE}</p>
-      </div>
-
-      {doc && doc.roles.length === 0 && (
-        <div className="rounded-xl p-5 text-center" style={{ border: '1px dashed rgba(255,255,255,0.12)' }}>
-          <p className="text-[15px] font-semibold text-text-1">{PREP_EMPTY_T}</p>
-          <p className="mt-1.5 text-[14px] leading-relaxed text-text-3">{PREP_EMPTY_D}</p>
-        </div>
-      )}
-
-      {doc && doc.roles.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {doc.roles.map((r) => (
-            <button key={r.key} type="button" onClick={() => setRole(r.key)}
-              className={`rounded-lg px-3 py-1.5 text-[14px] font-medium transition ${
-                role === r.key ? 'text-text-1' : 'text-text-3 hover:text-text-2'
-              }`}
-              style={role === r.key
-                ? { background: 'rgba(10,132,255,0.16)', boxShadow: 'inset 0 0 0 1px rgba(10,132,255,0.3)' }
-                : { border: '1px solid rgba(255,255,255,0.08)' }}>
-              {r.name}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {cur && cur.pitch && (
-        <Section badge={'\u2460'} title={PREP_H_PITCH} sub={cur.name}>
-          <p className="text-[15.5px] leading-relaxed text-text-1"><RichText text={cur.pitch} /></p>
-          {cur.hook && (
-            <div className="mt-3 rounded-xl p-3" style={{ background: 'rgba(10,132,255,0.06)', border: '1px solid rgba(10,132,255,0.18)' }}>
-              <p className="text-[14.5px] leading-relaxed text-text-2"><RichText text={cur.hook} /></p>
-            </div>
-          )}
-        </Section>
-      )}
-
-      {cur && cur.cards.length > 0 && (
-        <div className="space-y-2.5">
-          {cur.cards.map((c, i) => <PrepCardBox key={c.q} card={c} n={i + 1} />)}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // -- shell --------------------------------------------------------
 
-type TabKey = 'arch' | 'flow' | 'sm' | 'data' | 'prep'
+type TabKey = 'arch' | 'flow' | 'sm' | 'data'
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'arch', label: '\u67b6\u6784' },
   { key: 'flow', label: '\u6d41\u7a0b' },
   { key: 'sm', label: '\u72b6\u6001\u673a' },
   { key: 'data', label: '\u6570\u636e\u6a21\u578b' },
-  { key: 'prep', label: '\u9762\u8bd5Prep' },
 ]
 
 export default function StateMachine() {
@@ -1030,7 +907,6 @@ export default function StateMachine() {
       {tab === 'flow' && <FlowTab running={workflowRunning} />}
       {tab === 'sm' && <StateMachineTab live={live} />}
       {tab === 'data' && <DataTab live={live} />}
-      {tab === 'prep' && <PrepTab />}
     </div>
   )
 }
