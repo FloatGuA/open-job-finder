@@ -303,3 +303,32 @@ class TestHRMessages:
         tracker.insert_hr_messages("c1", msgs)
         result = tracker.get_hr_messages("c1")
         assert result[0]["msg_time"] == "10:30"
+
+    def test_get_hr_messages_bulk_matches_per_conv_calls(self, tracker):
+        tracker.insert_hr_messages("c1", [
+            {"sender": "hr", "text": "a", "time": "09:00"},
+            {"sender": "me", "text": "b", "time": "09:05"},
+        ])
+        tracker.insert_hr_messages("c2", [{"sender": "hr", "text": "c", "time": "10:00"}])
+        # c3 has no messages -- must still appear with an empty list, not be absent.
+        result = tracker.get_hr_messages_bulk(["c1", "c2", "c3"])
+        assert result["c1"] == tracker.get_hr_messages("c1")
+        assert result["c2"] == tracker.get_hr_messages("c2")
+        assert result["c3"] == []
+
+    def test_get_hr_messages_bulk_empty_input(self, tracker):
+        assert tracker.get_hr_messages_bulk([]) == {}
+
+
+# ── Batch application lookup ─────────────────────────────────────────────────
+
+class TestGetMany:
+    def test_get_many_matches_individual_get(self, tracker):
+        tracker.upsert(_rec("j1"))
+        tracker.upsert(_rec("j2"))
+        result = tracker.get_many(["j1", "j2", "missing"])
+        assert set(result.keys()) == {"j1", "j2"}
+        assert result["j1"].job_id == tracker.get("j1").job_id
+
+    def test_get_many_empty_input(self, tracker):
+        assert tracker.get_many([]) == {}

@@ -6,13 +6,13 @@ import DevLabel from '@/components/dev/DevLabel'
 
 // Sentinel filter values: not real stages \u2014 filter by reply_status client-side.
 // \u5f85\u5ba1\u6279 = pending (needs your review); \u5f85\u53d1\u9001 = approved/revision (queued to send).
-const PENDING_FILTER = '__pending__'
-const SEND_FILTER = '__send__'
+export const PENDING_FILTER = '__pending__'
+export const SEND_FILTER = '__send__'
 // \u5f85\u52a0\u5fae\u4fe1: client-side filter by wechat_pending (HR sent their WeChat, not dismissed).
-const WECHAT_FILTER = '__wechat__'
+export const WECHAT_FILTER = '__wechat__'
 // \u8d85\u65f6\u65e0\u56de\u5e94: stage=closed but NOT an explicit rejection (a 14-day stall soft-marker),
 // i.e. the conversation went quiet rather than being turned down. Client-side.
-const STALE_FILTER = '__stale__'
+export const STALE_FILTER = '__stale__'
 
 const STAGE_TABS: Array<{ label: string; value: string | undefined }> = [
   { label: '\u5168\u90e8', value: undefined },
@@ -27,7 +27,7 @@ const STAGE_TABS: Array<{ label: string; value: string | undefined }> = [
 ]
 
 // stage \u2192 tinted badge (signal palette)
-function stageMeta(stage: string): { label: string; color: string } | null {
+export function stageMeta(stage: string): { label: string; color: string } | null {
   switch (stage) {
     case 'interview':
       return { label: '\u9762\u8bd5', color: '#ff9f0a' }
@@ -57,7 +57,7 @@ function TintBadge({ label, color }: { label: string; color: string }) {
 }
 
 // \u8ddd\u4e0a\u6b21\u6c9f\u901a\u5929\u6570\uff1a\u7528 last_msg_at\uff08\u6700\u540e\u4e00\u6761\u5df2\u8bb0\u5f55\u6d88\u606f\u7684\u5165\u5e93\u65f6\u95f4\uff09\u3002
-function daysSinceContact(iso?: string): number | null {
+export function daysSinceContact(iso?: string): number | null {
   if (!iso) return null
   const t = new Date(iso).getTime()
   if (Number.isNaN(t)) return null
@@ -66,7 +66,7 @@ function daysSinceContact(iso?: string): number | null {
 
 // \u641c\u7d22\u5339\u914d\uff1a\u516c\u53f8\u540d / HR \u540d / HR \u5934\u8854 / \u6700\u540e\u6d88\u606f\u9884\u89c8 / \u6bcf\u6761\u6d88\u606f\u6b63\u6587\uff08\u5168\u6587\uff09\u3002
 // \u7eaf\u5ba2\u6237\u7aef\u5b50\u4e32\u5339\u914d\uff08\u5df2\u52a0\u8f7d\u7684\u4f1a\u8bdd\uff09\uff0c\u4e0d\u533a\u5206\u5927\u5c0f\u5199\u3002q \u5df2 trim+lowercase\u3002
-function convMatchesQuery(conv: Conversation, q: string): boolean {
+export function convMatchesQuery(conv: Conversation, q: string): boolean {
   if (!q) return true
   if ((conv.company ?? '').toLowerCase().includes(q)) return true
   if ((conv.hr_name ?? '').toLowerCase().includes(q)) return true
@@ -80,10 +80,10 @@ function convMatchesQuery(conv: Conversation, q: string): boolean {
 //  - number card:  "<name>'s WeChat: <id>"     -> HR's id, sent right after we agree.
 // We render both as distinct green cards (not stray text bubbles) and drive a strong
 // "go add on WeChat" banner that surfaces the actual id once it arrives.
-const WECHAT_CARD_SUBSTR = '\u6211\u60f3\u8981\u548c\u60a8\u4ea4\u6362\u5fae\u4fe1'
-const WECHAT_NUMBER_MARKER = '\u5fae\u4fe1\u53f7'
-const WECHAT_CARD_PREFIX = '[\u5361\u7247]'
-function isWechatCard(msg: ConversationMessage): boolean {
+export const WECHAT_CARD_SUBSTR = '\u6211\u60f3\u8981\u548c\u60a8\u4ea4\u6362\u5fae\u4fe1'
+export const WECHAT_NUMBER_MARKER = '\u5fae\u4fe1\u53f7'
+export const WECHAT_CARD_PREFIX = '[\u5361\u7247]'
+export function isWechatCard(msg: ConversationMessage): boolean {
   return msg.sender === 'hr'
     && msg.text.startsWith(WECHAT_CARD_PREFIX)
     && (msg.text.includes(WECHAT_CARD_SUBSTR) || msg.text.includes(WECHAT_NUMBER_MARKER))
@@ -148,7 +148,7 @@ function MessageBubble({ msg }: { msg: ConversationMessage }) {
   )
 }
 
-function isReplyApprovalVisible(conv: Conversation | null): boolean {
+export function isReplyApprovalVisible(conv: Conversation | null): boolean {
   return !!conv && (
     conv.reply_status === 'pending' ||
     conv.reply_status === 'revision' ||
@@ -156,7 +156,7 @@ function isReplyApprovalVisible(conv: Conversation | null): boolean {
   )
 }
 
-function isQueuedForSend(conv: Conversation): boolean {
+export function isQueuedForSend(conv: Conversation): boolean {
   return conv.reply_status === 'approved' || conv.reply_status === 'revision'
 }
 
@@ -168,7 +168,7 @@ function isQueuedForSend(conv: Conversation): boolean {
 // lingering until the next refetch (the "list doesn't update" bug). Sentinel filters
 // key off reply_status / wechat_pending; real stages match conv.stage; \u5168\u90e8 (undefined)
 // matches all.
-function matchesTabFilter(conv: Conversation, activeStage: string | undefined): boolean {
+export function matchesTabFilter(conv: Conversation, activeStage: string | undefined): boolean {
   switch (activeStage) {
     case undefined:
       return true

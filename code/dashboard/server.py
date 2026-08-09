@@ -35,7 +35,7 @@ from services.progress_emitter import ProgressEmitter, ProgressEvent
 from services.prompt_manager import EDITABLE_PROMPTS, PromptManager
 from services.tracker import ApplicationTracker
 from tools.biz_logic.wechat_id import wechat_id_from
-from services import run_log_reader
+from services import artifact_cleanup, run_log_reader
 from services.run_logger import reconcile_orphaned_runs
 from services.scheduler_service import SchedulerService
 from services.workflow_orchestration import OrchestrationService
@@ -554,6 +554,42 @@ async def get_apply_failure_screenshot(name: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="screenshot not found")
     return FileResponse(str(path), media_type="image/png")
+
+
+@app.get("/api/ops/artifacts")
+async def get_ops_artifacts() -> JSONResponse:
+    """Failed-run JSONL logs + W1 apply-failure screenshots in one listing — both
+    accumulate real HR/company PII on disk with no automatic cleanup (see
+    services/artifact_cleanup.py docstring). A manual review-then-delete entry
+    point, not an automatic purge: the user decides what's still worth keeping."""
+    apply_failures_dir = DATA_DIR / "apply_failures"
+    return JSONResponse({
+        "run_logs": artifact_cleanup.list_failed_run_logs(RUNS_DIR),
+        "screenshots": artifact_cleanup.list_apply_failure_screenshots(apply_failures_dir),
+    })
+
+
+@app.post("/api/ops/artifacts/delete")
+async def delete_ops_artifacts(request: Request) -> JSONResponse:
+    """Bulk-delete selected run logs / screenshots by filename. Each name is
+    validated independently (path traversal, extension) so one bad entry in a
+    batch does not abort the rest — the response reports per-file outcome."""
+    data = await request.json()
+    run_log_names = data.get("run_logs") or []
+    screenshot_names = data.get("screenshots") or []
+    apply_failures_dir = DATA_DIR / "apply_failures"
+
+    run_log_results = {
+        name: artifact_cleanup.delete_run_log(RUNS_DIR, name) for name in run_log_names
+    }
+    screenshot_results = {
+        name: artifact_cleanup.delete_screenshot(apply_failures_dir, name) for name in screenshot_names
+    }
+    return JSONResponse({
+        "run_logs": run_log_results,
+        "screenshots": screenshot_results,
+        "deleted_count": sum(run_log_results.values()) + sum(screenshot_results.values()),
+    })
 
 
 @app.get("/api/jobs/{job_id}")
@@ -1397,22 +1433,21 @@ async def get_conversations(
     active_window_days = int(
         resolve_params("w2", {}, app.state.config, DATA_DIR).get("no_response_days", 0) or 0
     )
-    # One tracker.get() per distinct job_id yields BOTH the job URL (open-in-Boss)
-    # and the job title (在招岗位名) — the conversation table stores neither; they
-    # live on the applications row, keyed by the hard-association job_id.
-    job_urls: dict[str, str] = {}
-    job_titles: dict[str, str] = {}
-    for c in convs:
-        if c.job_id and c.job_id not in job_urls:
-            rec = tracker.get(c.job_id)
-            job_urls[c.job_id] = (rec.url or "") if rec else ""
-            job_titles[c.job_id] = (rec.title or "") if rec else ""
+    # Job title/url (在招岗位名 + open-in-Boss link) live on the applications row,
+    # not on hr_conversations — batch-fetched by distinct job_id (one query, not one
+    # per conversation). Same for messages, keyed by conv_id. At 900+ conversations
+    # the old per-conversation tracker.get()/get_hr_messages() loop was the dominant
+    # cost of this endpoint (N+1 -> 2 queries total).
+    job_ids = sorted({c.job_id for c in convs if c.job_id})
+    apps_by_job_id = tracker.get_many(job_ids)
+    messages_by_conv = tracker.get_hr_messages_bulk([c.conv_id for c in convs])
+
     return JSONResponse({
         "conversations": [
             _serialize_conversation(
-                c, tracker.get_hr_messages(c.conv_id),
-                job_urls.get(c.job_id or "", ""),
-                job_titles.get(c.job_id or "", ""),
+                c, messages_by_conv.get(c.conv_id, []),
+                (apps_by_job_id.get(c.job_id).url or "") if apps_by_job_id.get(c.job_id) else "",
+                (apps_by_job_id.get(c.job_id).title or "") if apps_by_job_id.get(c.job_id) else "",
                 active_window_days,
             )
             for c in convs

@@ -203,6 +203,35 @@ export interface RunsResponse {
   total: number
 }
 
+export interface FailedRunLogItem {
+  run_id: string
+  pipeline: string
+  filename: string
+  started_at: string
+  status: string
+  duration_ms: number | null
+  summary: Record<string, unknown> | null
+  size_bytes: number
+}
+
+export interface ApplyFailureScreenshotItem {
+  filename: string
+  label: string
+  size_bytes: number
+  mtime: string
+}
+
+export interface OpsArtifactsResponse {
+  run_logs: FailedRunLogItem[]
+  screenshots: ApplyFailureScreenshotItem[]
+}
+
+export interface DeleteOpsArtifactsResponse {
+  run_logs: Record<string, boolean>
+  screenshots: Record<string, boolean>
+  deleted_count: number
+}
+
 export interface ToolEntry {
   tool: string
   scope: Record<string, string>
@@ -821,6 +850,14 @@ export const API = {
     requestJson(`/api/runs/${runId}`),
   getRunEvents: (runId: string): Promise<RunEventsResponse> =>
     requestJson(`/api/runs/${runId}/events`),
+  getOpsArtifacts: (): Promise<OpsArtifactsResponse> =>
+    requestJson('/api/ops/artifacts'),
+  deleteOpsArtifacts: (body: { run_logs: string[]; screenshots: string[] }): Promise<DeleteOpsArtifactsResponse> =>
+    requestJson('/api/ops/artifacts/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
 }
 
 export async function handleJson<T>(res: Response): Promise<T> {

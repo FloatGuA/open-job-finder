@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { API, type RunSummaryItem, type RunDetail, type StepEntry, type ToolEntry, type BusinessEvent, type RunDiagnosis } from '@/api'
+import { API, type RunSummaryItem, type RunDetail, type StepEntry, type ToolEntry, type BusinessEvent, type RunDiagnosis, type OpsArtifactsResponse } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
 import { RunView } from '@/components/workflow/WorkflowTrack'
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
@@ -347,6 +347,11 @@ function DecisionsTab({ detail }: { detail: RunDetail }) {
 
 type PipelineFilter = '' | 'w1' | 'w2' | 'w3'
 type DetailTab = 'overview' | 'flow' | 'decisions' | 'diagnosis'
+type PageTab = 'runs' | 'cleanup'
+const PAGE_TABS: Array<{ key: PageTab; label: string }> = [
+  { key: 'runs', label: '\u8fd0\u884c\u8bb0\u5f55' },
+  { key: 'cleanup', label: '\u5931\u8d25\u65e5\u5fd7\u6e05\u7406' },
+]
 
 /** Deterministic verdict for one run, read straight from its JSONL log.
  *  See docs/run-log-guide.md for how to read the report. */
@@ -412,6 +417,167 @@ function DiagnosisTab({ runId }: { runId: string }) {
   )
 }
 
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+// Manual review-then-delete entry point for the two file-based artifact types that
+// accumulate real HR/company PII with no automatic cleanup: failed-run JSONL logs
+// and W1 apply-failure screenshots (precommit_pii_scan.py only guards what goes
+// into git, not what sits on disk). Deliberately NOT an automatic purge \u2014 the
+// user looks at what is there and decides what is still worth keeping.
+function OpsCleanupSection() {
+  const [data, setData] = useState<OpsArtifactsResponse | null>(null)
+  const [selectedLogs, setSelectedLogs] = useState<Set<string>>(new Set())
+  const [selectedShots, setSelectedShots] = useState<Set<string>>(new Set())
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const load = () => {
+    API.getOpsArtifacts()
+      .then((d) => {
+        setData(d)
+        setSelectedLogs(new Set())
+        setSelectedShots(new Set())
+      })
+      .catch(() => setData({ run_logs: [], screenshots: [] }))
+  }
+
+  useEffect(() => { load() }, [])
+
+  const toggle = (set: Set<string>, setter: (s: Set<string>) => void, name: string) => {
+    const next = new Set(set)
+    if (next.has(name)) next.delete(name)
+    else next.add(name)
+    setter(next)
+  }
+
+  const selectOlderThan = (days: number) => {
+    if (!data) return
+    const cutoff = Date.now() - days * 86400000
+    setSelectedLogs(new Set(
+      data.run_logs.filter((r) => new Date(r.started_at).getTime() < cutoff).map((r) => r.filename)
+    ))
+    setSelectedShots(new Set(
+      data.screenshots.filter((s) => new Date(s.mtime).getTime() < cutoff).map((s) => s.filename)
+    ))
+  }
+
+  const selectAll = () => {
+    if (!data) return
+    setSelectedLogs(new Set(data.run_logs.map((r) => r.filename)))
+    setSelectedShots(new Set(data.screenshots.map((s) => s.filename)))
+  }
+
+  const clearSelection = () => {
+    setSelectedLogs(new Set())
+    setSelectedShots(new Set())
+  }
+
+  const totalSelected = selectedLogs.size + selectedShots.size
+
+  const handleDelete = async () => {
+    if (totalSelected === 0) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      const res = await API.deleteOpsArtifacts({
+        run_logs: [...selectedLogs],
+        screenshots: [...selectedShots],
+      })
+      setNotice(`\u5df2\u5220\u9664 ${res.deleted_count} \u4e2a\u6587\u4ef6`)
+      load()
+    } catch (e) {
+      setNotice('\u5220\u9664\u5931\u8d25\uff1a' + (e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!data) return <p className="px-4 py-6 text-xs text-text-3">\u52a0\u8f7d\u4e2d\u2026</p>
+
+  const empty = data.run_logs.length === 0 && data.screenshots.length === 0
+  const btnCls = "rounded-lg px-3 py-1.5 text-xs font-medium transition bg-white/[0.04] text-text-2 hover:bg-white/[0.08] disabled:opacity-40 disabled:cursor-not-allowed"
+
+  return (
+    <div className="space-y-4">
+      <p className="text-[11px] text-text-3">\u5931\u8d25\u7684 run \u65e5\u5fd7\uff08\u542b HR \u59d3\u540d/\u804a\u5929\u539f\u6587\uff09\u4e0e W1 \u6295\u9012\u5931\u8d25\u622a\u56fe\uff08\u542b\u516c\u53f8/HR \u4fe1\u606f\uff09\u53ea\u5728\u8fd9\u91cc\u624b\u52a8\u67e5\u770b\u548c\u6e05\u7406\uff0c\u4e0d\u4f1a\u81ea\u52a8\u5220\u9664\u3002</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={selectAll} className={btnCls}>\u5168\u9009</button>
+        <button type="button" onClick={() => selectOlderThan(7)} className={btnCls}>\u9009\u4e2d 7 \u5929\u524d</button>
+        <button type="button" onClick={() => selectOlderThan(30)} className={btnCls}>\u9009\u4e2d 30 \u5929\u524d</button>
+        <button type="button" onClick={clearSelection} className={btnCls}>\u6e05\u7a7a\u9009\u62e9</button>
+        <button
+          type="button"
+          onClick={handleDelete}
+          disabled={busy || totalSelected === 0}
+          className="rounded-lg px-3 py-1.5 text-xs font-medium transition bg-signal-red/16 text-signal-red hover:bg-signal-red/24 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          \u5220\u9664\u5df2\u9009\uff08{totalSelected}\uff09
+        </button>
+        {notice && <span className="text-xs text-text-3">{notice}</span>}
+      </div>
+
+      {empty && <p className="px-4 py-6 text-center text-xs text-text-3">\u6ca1\u6709\u9700\u8981\u6e05\u7406\u7684\u6587\u4ef6</p>}
+
+      {data.run_logs.length > 0 && (
+        <div>
+          <p className="mb-2 text-[10px] font-medium tracking-widest text-text-3 uppercase select-none">
+            \u5931\u8d25\u7684 RUN \u65e5\u5fd7\uff08{data.run_logs.length}\uff09
+          </p>
+          <div className="divide-y divide-bg-hover rounded-xl bg-bg-card2">
+            {data.run_logs.map((r) => (
+              <label key={r.filename} className="flex cursor-pointer items-center gap-3 px-3 py-2 text-xs hover:bg-bg-hover">
+                <input
+                  type="checkbox"
+                  checked={selectedLogs.has(r.filename)}
+                  onChange={() => toggle(selectedLogs, setSelectedLogs, r.filename)}
+                />
+                <PipelineBadge pipeline={r.pipeline} />
+                <span className="font-mono text-text-2">{r.run_id}</span>
+                <StatusBadge status={r.status} />
+                <span className="ml-auto text-text-3">{fmtTime(r.started_at)} \u00b7 {fmtBytes(r.size_bytes)}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {data.screenshots.length > 0 && (
+        <div>
+          <p className="mb-2 text-[10px] font-medium tracking-widest text-text-3 uppercase select-none">
+            \u5931\u8d25\u622a\u56fe\uff08{data.screenshots.length}\uff09
+          </p>
+          <div className="divide-y divide-bg-hover rounded-xl bg-bg-card2">
+            {data.screenshots.map((s) => (
+              <label key={s.filename} className="flex cursor-pointer items-center gap-3 px-3 py-2 text-xs hover:bg-bg-hover">
+                <input
+                  type="checkbox"
+                  checked={selectedShots.has(s.filename)}
+                  onChange={() => toggle(selectedShots, setSelectedShots, s.filename)}
+                />
+                <a
+                  href={`/api/apply-failure/${s.filename}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono text-signal-bright hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {s.label}
+                </a>
+                <span className="ml-auto text-text-3">{fmtTime(s.mtime)} \u00b7 {fmtBytes(s.size_bytes)}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Logs() {
   const [runs, setRuns] = useState<RunSummaryItem[]>([])
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
@@ -420,6 +586,7 @@ export default function Logs() {
   const [pipelineFilter, setPipelineFilter] = useState<PipelineFilter>('')
   const [detailTab, setDetailTab] = useState<DetailTab>('overview')
   const [loading, setLoading] = useState(false)
+  const [pageTab, setPageTab] = useState<PageTab>('runs')
 
   const [diagMap, setDiagMap] = useState<Record<string, RunDiagnosis>>({})
 
@@ -468,7 +635,30 @@ export default function Logs() {
   const selectedRun = selectedRunId ? runs.find((r) => r.run_id === selectedRunId) ?? null : null
 
   return (
-    <div className="flex h-full gap-4 overflow-hidden">
+    <div className="flex h-full flex-col gap-4 overflow-hidden">
+      <div className="flex shrink-0 gap-1 rounded-xl p-1" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+        {PAGE_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setPageTab(t.key)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+              pageTab === t.key ? 'text-text-1' : 'text-text-3 hover:text-text-2'
+            }`}
+            style={pageTab === t.key ? { background: 'rgba(10,132,255,0.16)', boxShadow: 'inset 0 0 0 1px rgba(10,132,255,0.3)' } : undefined}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {pageTab === 'cleanup' && (
+        <div className="flex-1 overflow-y-auto rounded-2xl bg-bg-card p-4 shadow-card" style={{ border: '1px solid rgba(255,255,255,0.08)' }}>
+          <OpsCleanupSection />
+        </div>
+      )}
+
+      <div className={`flex flex-1 gap-4 overflow-hidden ${pageTab === 'runs' ? '' : 'hidden'}`}>
       {/* ------------------------------------------------------------------ */}
       {/* Left: run list                                                       */}
       {/* ------------------------------------------------------------------ */}
@@ -679,6 +869,7 @@ export default function Logs() {
           </>
         )}
       </div>
+    </div>
     </div>
   )
 }

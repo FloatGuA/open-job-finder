@@ -240,6 +240,64 @@ class TestRunLogs:
         assert client.get("/api/runs/unknown").status_code == 404
 
 
+class TestOpsArtifacts:
+    def test_empty_when_nothing_on_disk(self, client):
+        r = client.get("/api/ops/artifacts")
+        assert r.status_code == 200
+        assert r.json() == {"run_logs": [], "screenshots": []}
+
+    def test_lists_only_failed_runs_and_all_screenshots(self, client, tmp_path):
+        runs_dir = tmp_path / "runs"
+        _write_run_log(runs_dir, "w1_ok.jsonl", [
+            {"event": "run_start", "run_id": "ok1", "pipeline": "w1", "ts": "2026-08-01T00:00:00Z"},
+            {"event": "run_end", "run_id": "ok1", "ts": "2026-08-01T00:01:00Z", "status": "successful", "summary": {}},
+        ])
+        _write_run_log(runs_dir, "w1_bad.jsonl", [
+            {"event": "run_start", "run_id": "bad1", "pipeline": "w1", "ts": "2026-08-01T00:00:00Z"},
+            {"event": "run_end", "run_id": "bad1", "ts": "2026-08-01T00:01:00Z", "status": "failed", "summary": {}},
+        ])
+        shots_dir = tmp_path / "data" / "apply_failures"
+        shots_dir.mkdir(parents=True)
+        (shots_dir / "bad1_job1_20260801_000100.png").write_bytes(b"fake")
+
+        r = client.get("/api/ops/artifacts")
+        data = r.json()
+        assert [x["run_id"] for x in data["run_logs"]] == ["bad1"]
+        assert data["screenshots"][0]["filename"] == "bad1_job1_20260801_000100.png"
+
+    def test_delete_removes_selected_files_only(self, client, tmp_path):
+        runs_dir = tmp_path / "runs"
+        _write_run_log(runs_dir, "w1_bad.jsonl", [
+            {"event": "run_start", "run_id": "bad1", "pipeline": "w1", "ts": "2026-08-01T00:00:00Z"},
+            {"event": "run_end", "run_id": "bad1", "ts": "2026-08-01T00:01:00Z", "status": "failed", "summary": {}},
+        ])
+        shots_dir = tmp_path / "data" / "apply_failures"
+        shots_dir.mkdir(parents=True)
+        (shots_dir / "keep.png").write_bytes(b"x")
+        (shots_dir / "drop.png").write_bytes(b"x")
+
+        r = client.post("/api/ops/artifacts/delete", json={
+            "run_logs": ["w1_bad.jsonl"],
+            "screenshots": ["drop.png"],
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["run_logs"] == {"w1_bad.jsonl": True}
+        assert body["screenshots"] == {"drop.png": True}
+        assert body["deleted_count"] == 2
+        assert not (runs_dir / "w1_bad.jsonl").exists()
+        assert not (shots_dir / "drop.png").exists()
+        assert (shots_dir / "keep.png").exists()
+
+    def test_delete_rejects_path_traversal_without_error(self, client, tmp_path):
+        r = client.post("/api/ops/artifacts/delete", json={
+            "run_logs": ["../../etc/passwd"],
+            "screenshots": [],
+        })
+        assert r.status_code == 200
+        assert r.json()["run_logs"] == {"../../etc/passwd": False}
+
+
 class TestJobsEndpoints:
     def test_list_empty(self, client):
         r = client.get("/api/jobs")

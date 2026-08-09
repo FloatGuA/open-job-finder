@@ -5,8 +5,8 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-09（v2.19.2.15 4-agent 全项目审视 → 落地一个转换多份 SQL 的交叉印证发现） |
-| 当前版本 | 2.19.2.15                       |
+| 最后更新 | 2026-08-09（v2.19.2.17 Chat.tsx 补测试 + 会话列表 N+1 修复 + 新增失败日志清理入口） |
+| 当前版本 | 2.19.2.17                       |
 
 ## 待跟进（另开会话）
 
@@ -23,18 +23,17 @@
 
 **Dashboard 不加认证**：用户已拍板不做（局域网仅本人使用），完整取舍记在 `DECISION.md`「Dashboard 不加访问控制」，这里不重复。
 
-**「还值得做什么」审出的其余几条**（1条已否，其余先记录）：
-1. **`Chat.tsx`（937行，W2 审批界面，对真实 HR 做不可逆动作最密集的地方）零测试**——通俗说：批准/驳回/改写/发简历这些按钮背后的判断逻辑，现在没有任何自动化测试盯着，只能靠人工点一遍才能发现坏没坏。项目自己在 `Resume.tsx` 上刚踩过"零测试→4个真机bug全靠用户手工发现"的坑（v2.17.1 已修），同样的窟窿还开在风险更高的 Chat.tsx 上。工作量：中，复用已有 vitest 基础设施，从纯函数（如 `matchesTabFilter`）开始测起。
-2. **`/api/conversations` 无分页 + N+1 查询**：现在是一次性拉全部会话，再对每条单独查消息。几百条无感，几千条后前端一次性渲染 + 后端 N+1 会先在这里变慢。工作量：中，后端加分页/游标 + 前端改懒加载。
-3. **run 日志 + W1 失败截图含真实 HR 姓名/聊天原文/公司名，本机永久不清理**——`precommit_pii_scan.py` 只管进不进 git，管不到磁盘上无限增长的这些文件。工作量：小，接入现有 selfcheck 循环挂一个按时间/条数的定期 purge。
-4. **没有"公司/HR 黑名单"**：30天自动清理连 REJECTED 记录一起删（`purge_stale_applications`），一家骗子/体验很差的公司 30 天后可能被系统"遗忘"、评分机制再次投递给它。工作量：中，加一张不受 purge 影响的黑名单表 + W1 分类阶段过滤 + 前端一个"拉黑"入口。
-5.（顺带）`requirements.txt` 里的 `cryptography` 全项目零 import，是死依赖，清理是举手之劳。
+**「还值得做什么」审出的其余几条**：
+- ~~1 Chat.tsx零测试~~ / ~~2 会话无分页+N+1~~ / ~~3 失败日志PII不清理~~ / ~~5 cryptography死依赖~~ **均已完成，见「已完成」**。
+- **4「公司/HR 黑名单」暂缓，先处理 W1 去重问题**（用户 2026-08-09 定）：黑名单要在 W1 分类阶段加过滤条件，但用户指出 W1 现有的去重/过滤逻辑本身可能一直有问题——"之前判断不会有重复岗位是错的，实际上还是会有；之前做的过滤肯定有问题（明显没有这么多）；现在把整个 W1 过滤删掉，反而过滤成功了；因为找的按钮是定死的"。**这段原话没有展开成完整诊断，需要单独一个会话查清楚**：现有去重机制（job_id + 内容指纹两层，见 [[w1-w2-status-revival]]）到底哪里坏的、"删掉过滤反而成功"具体指哪次改动、"按钮定死"说的是哪个选择器。黑名单功能等这个查清楚、现有去重站得住脚之后再设计，不要在可能有问题的地基上叠新过滤条件。
 
 **扩展到其他招聘网站（应届生 / JobsDB / 腾讯字节国企央企官网）—— 架构评估，供未来参考，非近期计划**：
 - 天然可复用：打分逻辑、简历子系统、审批队列、Dashboard、tracker 通用 schema——这些跟 Boss 已经解耦得不错。
 - 100% Boss 专属、换站点要重写：`services/boss_search_url.py`、`tools/browser/w1|w2/*`、`browser_context.py` 里拦截 `getGeekFriendList` 的 XHR hook。
 - 应届生大概率没有 Boss 那种"投递后即时 HR 聊天"模型，W2/W3 整条会话追踪流水线可能无对象可用；JobsDB 界面英文，难点在意图分析 prompt 要不要按语境重设计而非"能不能跑";**企业自建系统（腾讯/字节/国企央企）冲击最大**——大概率是"投递→邮件/短信通知"而非站内聊天，W2/W3 完全不适用，且国企/央企更可能有短信验证码/实名认证，现有反检测手段应付不了。
 - 如果真要做，方向建议：把"投递"和"会话追踪"拆成两个独立能力（W2/W3 做成可选层），边界划在 `tools/browser/w1|w2/*` + `boss_search_url.py` 这一层，其余不用动。
+
+> **待真机验证（本轮新增，Chrome 插件未连上，只做到后端接口+build 绿，没走完整浏览器点击链路）**：日志页新 Tab「失败日志清理」——打开后能看到失败 run 列表 + 失败截图列表、勾选/全选/按天数筛选、删除后列表刷新、截图点开能跳到 `/api/apply-failure/{name}` 原图。失败的样子：Tab 空白、列表不出、勾选后删除按钮计数不对、删除后文件其实还在。
 
 ### ✅ 待真机验证清单（2026-08-04 汇总，用户暂无精力验收）
 
@@ -142,6 +141,13 @@
   - **`send_chat_message.execute()`（决定 W3 回复到底发没发出去的核心逻辑）补齐 7 个单测**：之前唯二引用它的两个测试文件都只在 registry 边界打桩 `ToolResult`，从没真正跑过内部分支。新增 `tests/test_send_chat_message.py`：browser 未初始化 / 输入框未找到 / 插入后文本为空 / 按钮提交成功 / 按钮不可用退回 Enter / 提交后框未清空（多行 Enter 假成功场景）/ 意外异常兜底，全部走 mock page 对象。
   - **顺带修**：`tests/test_server.py` 的 `build_model_router` 打桩之前用裸 `MagicMock()`，`.configured_provider_names()` 调用会返回不可 JSON 序列化的嵌套 MagicMock（旧代码靠"摸私有属性+裸except"意外规避了这个问题）——补上显式 `.return_value = []`。
   - 触发原因：用户让 4 个并行 subagent 分头审「去耦合/潜藏bug代码重复/还值得做什么/扩展到其他站点」，"去耦合"和"潜藏bug"两个互不知情的 agent **独立撞上同一个系统性问题**（一个转换多份 SQL、NULL 语义不一致），交叉印证后判定为本轮唯一值得立刻动手的项；其余发现（含"必须先决定设计"和"改动面太大暂不碰"的几项）记在「待跟进」，Dashboard 不加认证的取舍记在 DECISION.md。
+
+- **「还值得做什么」审出的 4 条落地（除黑名单）**（2026-08-09，v2.19.2.17，726 passed，build 绿）
+  - **① `Chat.tsx` 补 7 个纯函数单测**：`stageMeta`/`daysSinceContact`/`convMatchesQuery`/`isWechatCard`/`isReplyApprovalVisible`/`isQueuedForSend`/`matchesTabFilter` 全部加 `export`（含相关 sentinel 常量与微信卡片识别常量），新增 `Chat.filters.test.ts`（37 例）。**只测这一层、不碰动作函数（approve/dismiss/...）**——用户已确认这个取舍：这一层正是这次对话里两次真 bug（2026-07-28 tab 不实时更新 / 2026-08-09 拒绝全部计数）的发源地，回报明确；动作函数主要是 API 调用+乐观更新，单测能测的东西有限、成本更高。
+  - **② `/api/conversations` N+1 查询修复**：950 条会话原先每条单独查一次消息（950 次 SQL）+ 按 job_id 单独查投递信息，改为 `tracker.get_hr_messages_bulk()`/`get_many()` 两次批量查询（`WHERE conv_id/job_id IN (...)`），返回 JSON 结构不变，前端零改动。只做了查询效率这一半；"前端只渲染可见部分/虚拟滚动"那一半未做——需要先确认查询优化后是否还有感知卡顿，值不值得再改 Chat.tsx 的渲染方式。
+  - **③ 新增「失败日志清理」入口**：`services/artifact_cleanup.py`（纯文件读写，list/delete 失败 run 日志 + W1 投递失败截图）+ `GET /api/ops/artifacts` + `POST /api/ops/artifacts/delete` + 日志页新 Tab `OpsCleanupSection`（勾选/全选/按 7/30 天前快速选/批量删除）。**手动查看后决定清理，不是自动 purge**——用户明确要"一次性看所有失败日志，不需要就清理"这个形态，不是定时自动删。只列状态为 failed/error/aborted/stopped 的 run（成功的 run 仍有回归诊断价值，不进这个列表）。截图文件名 `{run_id}_{job_id}_{时间戳}.png` 里 run_id/job_id 本身含下划线无法可靠拆分，只解析出稳定的末尾时间戳，其余整体作为 `label` 展示（不猜内部边界，避免误拆）。
+  - **④** `requirements.txt` 删除零 import 的 `cryptography>=41.0.0`。
+  - 后端 `tracker.get_many`/`get_hr_messages_bulk` +4 测试、`artifact_cleanup` +14 测试、`TestOpsArtifacts` 端点 +4 测试，全量 726 passed；前端 vitest 50 passed、`npm run build` 绿。**真机点击链路未验证**（Chrome 插件本轮未连上），见上方「待真机验证」新增条目。
 
 - **修「日志陈旧 running」+ Chat.tsx 拒绝全部计数不实时更新**（2026-08-09，v2.19.1.14，commit `3832cd2`，696 passed，build 绿；纯代码修复，无需真机验证）
   - **日志陈旧 running 根因**：`w1_runner.py`/`w2_runner.py` 正常异常路径本就会 `run_logger.close("failed")` 再 raise——但**硬杀进程（Stop-Process/崩溃）跳过整个 except/finally**，run_end 永远不会写入；而 `run_log_reader.py` 的读取逻辑把"最后一行不是 run_end"一律显示成 `running`，且 server 启动时从无孤儿回收机制（grep 全库确认零命中）——两者叠加就是 Logs 页面卡死在 running 不会消失。

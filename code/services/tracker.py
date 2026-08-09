@@ -462,6 +462,18 @@ class ApplicationTracker:
     def get_application(self, job_id: str) -> Optional[ApplicationRecord]:
         return self.get(job_id)
 
+    def get_many(self, job_ids: list[str]) -> Dict[str, ApplicationRecord]:
+        """Batch variant of get() — one query for N ids instead of N queries.
+        Used by /api/conversations, which needs the job title/url for every distinct
+        job_id among the returned conversations."""
+        if not job_ids:
+            return {}
+        placeholders = ",".join("?" * len(job_ids))
+        rows = self.conn.execute(
+            f"SELECT * FROM applications WHERE job_id IN ({placeholders})", job_ids
+        ).fetchall()
+        return {row["job_id"]: self._row_to_record(row) for row in rows}
+
     def count_today(self) -> int:
         # "Applied today" = real greetings W1 actually sent today. Exclude backfill
         # reconstructions: backfill_application_from_conversation materialises
@@ -1063,6 +1075,24 @@ class ApplicationTracker:
             (conv_id,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_hr_messages_bulk(self, conv_ids: List[str]) -> Dict[str, List[dict]]:
+        """Batch variant of get_hr_messages() — one query for N conversations instead
+        of N queries. /api/conversations serializes every conversation's full message
+        list; at 900+ rows the per-conversation N+1 was the dominant cost."""
+        result: Dict[str, List[dict]] = {cid: [] for cid in conv_ids}
+        if not conv_ids:
+            return result
+        placeholders = ",".join("?" * len(conv_ids))
+        rows = self.conn.execute(
+            f"SELECT conv_id, sender, text, msg_time, created_at FROM hr_messages "
+            f"WHERE conv_id IN ({placeholders}) ORDER BY conv_id, id",
+            conv_ids,
+        ).fetchall()
+        for row in rows:
+            d = dict(row)
+            result[d.pop("conv_id")].append(d)
+        return result
 
     def close(self) -> None:
         self.conn.close()
