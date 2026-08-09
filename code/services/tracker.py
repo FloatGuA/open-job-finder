@@ -424,6 +424,17 @@ class ApplicationTracker:
         return row is not None
 
     def upsert(self, record: ApplicationRecord) -> None:
+        """Insert or update an application row.
+
+        NOTE: W1's real apply path goes through the `upsert_application` tool
+        (tools/db/w1/upsert_application.py), which has NULL-safe CASE guards on
+        score/url/applied_at and also writes content_hash -- a column this method
+        never touches. This method has no production caller (grep-confirmed: only
+        tests/test_tracker.py, test_server.py, test_finalize_w2_tools.py use it). It
+        is fixed rather than deleted because a plausible-looking helper with weaker
+        NULL semantics is exactly what gets wired up later by mistake -- same
+        reasoning as dismiss_reply() below.
+        """
         existing = self.conn.execute(
             "SELECT status, created_at FROM applications WHERE job_id = ?",
             (record.job_id,),
@@ -489,6 +500,12 @@ class ApplicationTracker:
         """Update status and optional extra fields in a single SQL UPDATE.
 
         Accepted extra_fields: score, applied_at, hr_name.
+
+        NOTE: post-apply status moves (REJECTED/INTERVIEWING/OFFER, timeouts, purge)
+        run through tools/db/w2/sync_application_status.py, mark_timeout_statuses.py
+        and purge_stale_applications.py, which hold their own SQL (see the
+        VALID_TRANSITIONS comment above). This method has no production caller
+        (grep-confirmed: test-only, same as upsert() above).
         """
         _ALLOWED = {"score", "applied_at", "hr_name"}
 

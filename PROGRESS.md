@@ -5,10 +5,36 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-09（v2.19.1.14 修「待审批」实时计数 + 修日志陈旧 running + 全项目扫视补 jobs.db 备份/通知缺口） |
-| 当前版本 | 2.19.1.14                       |
+| 最后更新 | 2026-08-09（v2.19.2.15 4-agent 全项目审视 → 落地一个转换多份 SQL 的交叉印证发现） |
+| 当前版本 | 2.19.2.15                       |
 
 ## 待跟进（另开会话）
+
+### 🔎 全项目 4-agent 审视清单（2026-08-09，去耦合/潜藏bug 已挑低风险项动手，其余记录待续）
+
+用户让 4 个并行 subagent 分头审了「去耦合」「潜藏 bug/代码重复」「还值得做什么」「扩展到 Boss直聘以外的站点」。已把低风险/无生产调用的几项直接改了（见「已完成」），下面是**记录但本轮未动**的部分。
+
+**去耦合 / 潜藏 bug 里判定"暂不动"的**（原因各不同，别混为一谈）：
+- `dashboard/server.py` 的 `open_conversation_in_browser` 端点绕过 `registry.call()` 直接 `.execute()` 三个浏览器工具，导致这个动作在 run 日志/SSE 里不可观测。**未动因为需要先决定设计**：这是个不挂在任何 W1/W2/W3 run 上的临时交互动作（点"在 Boss 打开"按钮），要接 registry.call 就要么传 `logger=None`（等于白改，观测性没变化），要么发明一套"独立交互动作也写自己的 run 日志"的新机制——后者是要不要做的产品判断，不是顺手就能定的小改动。
+- `services/llm_client.py` 的 `load_config()`（每次读盘）与 `services/config_manager.py` 的 `ConfigManager`（内存缓存单例）是两条独立的配置读取路径，`app.state.config` 走前者、Settings 页写走后者。目前"没炸"是因为能改 w1/w2 出厂默认的 `save_system_config()` 生产零调用——但这只是巧合不是保证。**未动因为改动面太大**：`app.state.config` 被 W1/W2 几十处 `resolve_params` 调用链共用，统一到哪一条路径需要通读所有消费方，不是这次"低风险"范围内能安全做完的。
+- `accept_resume_card.py`/`accept_wechat_card.py`/`click_toolbar_send_resume.py` 三处各自手写几乎相同的"找卡片里非 disabled 按钮并点击"JS，重复模式和当年聊天输入框选择器分散是同一种（那次已收敛进 `helpers.CHAT_INPUT_QUERY_JS`，这三处还没）。**未动因为要碰 3 个真实会对话产生副作用的浏览器工具**，值得做但不算"低风险"，应该单独一个会话专门做、跑完立刻真机复核。
+- W2 扫描入口 `navigate_to_chat_list.py` / `get_conversation_states.py` 无专属单测——两个 agent 一致认为优先级较低（有重试兜底），暂不补。
+- `services/chat_agent.py` 挂着已删除的旧 `orchestrator.py` 接口、全库唯一调用方是它自己的单测——**没有当新发现处理**：PROGRESS.md「保留的技术债」里本来就明确记了"`--chat` 模式禁用，ChatAgent 未迁移到新 pipeline"，是已知且刻意保留的技术债，不是这轮才发现的孤儿代码，删不删要单独决定。
+
+**Dashboard 不加认证**：用户已拍板不做（局域网仅本人使用），完整取舍记在 `DECISION.md`「Dashboard 不加访问控制」，这里不重复。
+
+**「还值得做什么」审出的其余几条**（1条已否，其余先记录）：
+1. **`Chat.tsx`（937行，W2 审批界面，对真实 HR 做不可逆动作最密集的地方）零测试**——通俗说：批准/驳回/改写/发简历这些按钮背后的判断逻辑，现在没有任何自动化测试盯着，只能靠人工点一遍才能发现坏没坏。项目自己在 `Resume.tsx` 上刚踩过"零测试→4个真机bug全靠用户手工发现"的坑（v2.17.1 已修），同样的窟窿还开在风险更高的 Chat.tsx 上。工作量：中，复用已有 vitest 基础设施，从纯函数（如 `matchesTabFilter`）开始测起。
+2. **`/api/conversations` 无分页 + N+1 查询**：现在是一次性拉全部会话，再对每条单独查消息。几百条无感，几千条后前端一次性渲染 + 后端 N+1 会先在这里变慢。工作量：中，后端加分页/游标 + 前端改懒加载。
+3. **run 日志 + W1 失败截图含真实 HR 姓名/聊天原文/公司名，本机永久不清理**——`precommit_pii_scan.py` 只管进不进 git，管不到磁盘上无限增长的这些文件。工作量：小，接入现有 selfcheck 循环挂一个按时间/条数的定期 purge。
+4. **没有"公司/HR 黑名单"**：30天自动清理连 REJECTED 记录一起删（`purge_stale_applications`），一家骗子/体验很差的公司 30 天后可能被系统"遗忘"、评分机制再次投递给它。工作量：中，加一张不受 purge 影响的黑名单表 + W1 分类阶段过滤 + 前端一个"拉黑"入口。
+5.（顺带）`requirements.txt` 里的 `cryptography` 全项目零 import，是死依赖，清理是举手之劳。
+
+**扩展到其他招聘网站（应届生 / JobsDB / 腾讯字节国企央企官网）—— 架构评估，供未来参考，非近期计划**：
+- 天然可复用：打分逻辑、简历子系统、审批队列、Dashboard、tracker 通用 schema——这些跟 Boss 已经解耦得不错。
+- 100% Boss 专属、换站点要重写：`services/boss_search_url.py`、`tools/browser/w1|w2/*`、`browser_context.py` 里拦截 `getGeekFriendList` 的 XHR hook。
+- 应届生大概率没有 Boss 那种"投递后即时 HR 聊天"模型，W2/W3 整条会话追踪流水线可能无对象可用；JobsDB 界面英文，难点在意图分析 prompt 要不要按语境重设计而非"能不能跑";**企业自建系统（腾讯/字节/国企央企）冲击最大**——大概率是"投递→邮件/短信通知"而非站内聊天，W2/W3 完全不适用，且国企/央企更可能有短信验证码/实名认证，现有反检测手段应付不了。
+- 如果真要做，方向建议：把"投递"和"会话追踪"拆成两个独立能力（W2/W3 做成可选层），边界划在 `tools/browser/w1|w2/*` + `boss_search_url.py` 这一层，其余不用动。
 
 ### ✅ 待真机验证清单（2026-08-04 汇总，用户暂无精力验收）
 
@@ -109,6 +135,13 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- **全项目 4-agent 审视 → 挑低风险项落地**（2026-08-09，v2.19.2.15，704 passed，build 绿，纯代码修复，无生产行为变化，已跑全量冒烟）
+  - **`tracker.upsert()`/`update_status()` 补"无生产调用方"警告 docstring**：grep 确认二者在生产代码里零调用（仅 3 个测试文件用于 seeding），但 W1 真实投递路径 `tools/db/w1/upsert_application.py` 对 `score`/`url`/`applied_at` 有 `CASE WHEN NOT NULL` 保护、还多写一列 `content_hash`，而 `tracker._upsert_application_row` 无条件覆写、且不知道 `content_hash` 这一列——是货真价实的"同一转换两份实现、语义不一致"，只是还没被真正接线触发。仿照已有的 `dismiss_reply()` 先例（"NOTE: 此方法无生产调用方，之所以修好而不删，是因为一个看着正当的同名 helper 正是以后会被误接线的那种坑"）加了同款警告，不删不改行为，纯文档。
+  - **`ModelRouter` 新增 `configured_provider_names()` 公开方法**：`dashboard/server.py` 的 `/api/config/llm` 端点原先直接摸 `model_router._chains` 私有属性、包在裸 `except: pass` 里。收进 `services/llm_client.py` 作为公开方法（跟"live 探活"的 `available_providers()` 区分开——新方法只列配置，不做 `is_available()` 探测，避免端点为了列个下拉框去起 CLI 子进程），端点改调它，去掉裸 except。测试 `test_model_router_configured_provider_names_dedupes_across_chains`。
+  - **`send_chat_message.execute()`（决定 W3 回复到底发没发出去的核心逻辑）补齐 7 个单测**：之前唯二引用它的两个测试文件都只在 registry 边界打桩 `ToolResult`，从没真正跑过内部分支。新增 `tests/test_send_chat_message.py`：browser 未初始化 / 输入框未找到 / 插入后文本为空 / 按钮提交成功 / 按钮不可用退回 Enter / 提交后框未清空（多行 Enter 假成功场景）/ 意外异常兜底，全部走 mock page 对象。
+  - **顺带修**：`tests/test_server.py` 的 `build_model_router` 打桩之前用裸 `MagicMock()`，`.configured_provider_names()` 调用会返回不可 JSON 序列化的嵌套 MagicMock（旧代码靠"摸私有属性+裸except"意外规避了这个问题）——补上显式 `.return_value = []`。
+  - 触发原因：用户让 4 个并行 subagent 分头审「去耦合/潜藏bug代码重复/还值得做什么/扩展到其他站点」，"去耦合"和"潜藏bug"两个互不知情的 agent **独立撞上同一个系统性问题**（一个转换多份 SQL、NULL 语义不一致），交叉印证后判定为本轮唯一值得立刻动手的项；其余发现（含"必须先决定设计"和"改动面太大暂不碰"的几项）记在「待跟进」，Dashboard 不加认证的取舍记在 DECISION.md。
 
 - **修「日志陈旧 running」+ Chat.tsx 拒绝全部计数不实时更新**（2026-08-09，v2.19.1.14，commit `3832cd2`，696 passed，build 绿；纯代码修复，无需真机验证）
   - **日志陈旧 running 根因**：`w1_runner.py`/`w2_runner.py` 正常异常路径本就会 `run_logger.close("failed")` 再 raise——但**硬杀进程（Stop-Process/崩溃）跳过整个 except/finally**，run_end 永远不会写入；而 `run_log_reader.py` 的读取逻辑把"最后一行不是 run_end"一律显示成 `running`，且 server 启动时从无孤儿回收机制（grep 全库确认零命中）——两者叠加就是 Logs 页面卡死在 running 不会消失。

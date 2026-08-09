@@ -94,6 +94,16 @@ def test_model_router_available_providers_missing_capability_returns_empty():
     assert providers == []
 
 
+def test_model_router_configured_provider_names_dedupes_across_chains():
+    shared = _make_chain("x", "ollama")
+    fast_chain = FallbackChain(shared.providers, chain_name="fast")
+    balanced_chain = FallbackChain(shared.providers + [_make_chain("y", "claude_cli").providers[0]], chain_name="balanced")
+    router = ModelRouter(chains={"fast": fast_chain, "balanced": balanced_chain})
+
+    names = router.configured_provider_names()
+    assert names == ["ollama", "claude_cli"]
+
+
 # ── build_model_router ────────────────────────────────────────────────────────
 
 def test_build_model_router_from_config():

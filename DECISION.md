@@ -103,3 +103,12 @@
 - **一个状态转换只能有一份 SQL（2026-07-22）** → tracker 独占连接/schema/迁移与每个写操作的唯一实现，`tools/db/*` 是薄壳调 tracker（提供 ToolResult 契约与 registry trace/SSE），端点一律无 SQL。整改中连抓四例「同一转换多份实现」漂移：mark_reply_sent 三份两义（一份写 NULL 而非 'sent' → 可能二次发送）、update_hr_analysis 双实现（tracker 版缺 last_analyzed_ts）、upsert_application 的 applied_at 语义相反（保留首次 vs 更新为最后）、冒烟自持执行路径。识别判据：**同一列在不同实现里的 CASE 分支不一致**。发现分叉不两边同步，选正确那版收敛。放弃的旧措辞「禁止 tool 层直接执行 SQL」——与 `tools/db` 全部复用 tracker.conn 的 sanctioned 形态冲突，读起来像被集体违反。
 - **server.py 减重：依赖注入方式按「有无状态」选（2026-07-22）** → 编排从「接线层」下沉三个 service。有状态的（SchedulerService 持 scheduler+锁、OrchestrationService 持限流态+队列引用）用 **service 类 + 跨簇依赖注入**（callable/`get_state` 访问器，不 import app，可 fake 测）；无状态的（run_log_reader 纯文件读）用**纯函数 + 路径传参**。放弃一刀切统一为 service 类——无状态逻辑用纯函数更简单最好测。`OrchestrationService` 用 `get_state` 而非 import app：在调用时读 app.state（`_initialize_state` 已填充），保留对懒填充的依赖又解耦 FastAPI。
 - **冒烟测试可信化：covered 独立于 ok（2026-07-21）** → 「本轮没投没发」旧逻辑直接 ok=True = 门形同虚设。加 `covered` 维度独立于 `ok`，验收看 `fully_covered` 而非 `ok`。覆盖判据必须选「能被主动触发的路径」（W1 有 score_threshold 旋钮可强制投；W2 发简历依赖 HR 索要、无旋钮 → 覆盖改看主链路 convs_processed，发送分支的落库断言在真发生时仍从严）。断言基于 run log 而非内存报告——log 每行 flush、崩溃仍在（`run_diagnostics`）。放弃发明 force_apply 开关——复用既有 score_threshold 旋钮。
+
+## Dashboard 不加访问控制
+
+- 日期 / 版本：2026-08-09
+- 背景：全项目扫视审计发现 `dashboard/server.py` 104 个端点零认证、且官方启动命令绑定 `0.0.0.0`——同局域网设备理论上能让 agent 对真实 HR 批准/发送回复、远程重启后端、改配置。审计报告按严重程度把这条排在最前面。
+- 选了什么：不加认证，维持现状。
+- 否掉了什么，为什么：加一个共享密钥 header 中间件（工作量小-中）——用户明确判定局域网只有本人使用，当前威胁模型下这层认证不产生实际防护收益，加了只是形式主义。
+- 代价 / 已知不足：如果未来局域网环境变化（多人共享网络、暴露到公网、接入不受信任的 IoT 设备等），这个风险敞口会重新变得真实。
+- 什么情况下该重新考虑：部署环境从"个人独占局域网"变成"多方共享网络"或考虑公网访问时，必须先加认证再开放。

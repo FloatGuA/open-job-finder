@@ -124,8 +124,13 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "BOSS_POSITIONS_PATH", data_dir / "boss_positions.json")
     monkeypatch.setattr(srv, "BOSS_INDUSTRIES_PATH", data_dir / "boss_industries.json")
     monkeypatch.setattr(srv, "RUNS_DIR", tmp_path / "runs")
-    # Prevent real LLM client creation
-    monkeypatch.setattr(srv, "build_model_router", lambda *a, **kw: MagicMock())
+    # Prevent real LLM client creation. configured_provider_names() must return a
+    # real list (not an auto-generated MagicMock) -- /api/config/llm JSON-encodes it.
+    def _fake_router(*a, **kw):
+        router = MagicMock()
+        router.configured_provider_names.return_value = []
+        return router
+    monkeypatch.setattr(srv, "build_model_router", _fake_router)
 
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c

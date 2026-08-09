@@ -1198,14 +1198,7 @@ async def get_llm_config() -> JSONResponse:
 
     tool_providers = config.get("llm", {}).get("tool_providers", {})
 
-    available: list[str] = []
-    try:
-        for chain in app.state.model_router._chains.values():
-            for p in chain.providers:
-                if p.name not in available:
-                    available.append(p.name)
-    except Exception:
-        pass
+    available = app.state.model_router.configured_provider_names()
 
     return JSONResponse({
         "capabilities": capabilities,

@@ -477,6 +477,20 @@ class ModelRouter:
         chain = self._chains.get(capability)
         return chain.available_providers if chain else []
 
+    def configured_provider_names(self) -> List[str]:
+        """Unique provider type names configured across every capability chain.
+
+        Static config listing (no is_available() I/O -- unlike available_providers()
+        above, which live-checks each provider and can shell out for CLI providers).
+        Used by the Settings UI to populate the provider dropdown.
+        """
+        names: List[str] = []
+        for chain in self._chains.values():
+            for provider in chain.providers:
+                if provider.name not in names:
+                    names.append(provider.name)
+        return names
+
 
 def build_model_router(config: dict) -> ModelRouter:
     caps = config.get("llm", {}).get("capabilities", {})
