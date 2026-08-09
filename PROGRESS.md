@@ -5,7 +5,7 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-09（v2.19.2.17 Chat.tsx 补测试 + 会话列表 N+1 修复 + 新增失败日志清理入口） |
+| 最后更新 | 2026-08-09（v2.19.2.17 Chat.tsx 补测试 + 会话列表 N+1 修复 + 新增失败日志清理入口 + 面试准备拆独立 Navigator，worktree 已合并） |
 | 当前版本 | 2.19.2.17                       |
 
 ## 待跟进（另开会话）
@@ -134,6 +134,12 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- **面试准备拆成独立 Navigator + 八股/项目分类**（2026-08-09，v2.19.2.16，commit `5b4fe3b`，后端全绿 + 前端 13 passed，build 绿；**在 worktree 分支 `worktree-orktree` 上，尚未合并回 master**）
+  - **拆页**：原本是架构页（`StateMachine.tsx`）的第 5 个 tab，和"看懂系统架构"无关，也只能平铺一份内容。改成独立页 `pages/InterviewPrep.tsx` + 侧栏入口 + Topbar 标题映射（`Page` 类型加 `'interview'`，三处映射都要补，最后那处是 tsc 抓出来的）。架构页删掉 prep tab 及其专属组件（`RichText` 整体搬走，`CountPill` 留下——另两个 tab 在用）。
+  - **分类**：`services/interview_prep.py` 的卡片加 `kind` 字段（`project` | `basics`），缺省 `project` 让老卡片语义不变，未知值回落 `project`（宁可归错组也不漏渲染）。测试 +2。新页面支持岗位切换、按 kind 筛选（全部/项目问答/通用八股，各带计数）、答案默认折叠 + 一键全展开。两个取舍（为什么不用 `sections` 嵌套、为什么默认折叠）记在 `DECISION.md`。
+  - **内容**：三个岗位（金融测试·质量 / AI 应用·Agent / 后端·全栈）各补 **7 张通用八股 + 2 张项目问答**，每岗共 14 张，写在**主仓** `code/data/interview_prep.yaml`（gitignore，不入 git，也不随分支合并走）。
+  - **未真机验证**：浏览器扩展没连上，只用临时 server（8766）验了 `/api/interview-prep` 返回结构（3 岗 × 14 张，project/basics 各 7）和 bundle hash 与 `static/index.html` 一致。**页面渲染和折叠交互没有肉眼看过** —— 这个页面历史上两次渲染缺陷（`**加粗**` 原样显示、YAML 折叠标量在中文里插空格）都是真机才发现的，合并后应当先翻一遍卡片：折叠能开合、切岗位不半开、加粗和中文空格正常。
 
 - **全项目 4-agent 审视 → 挑低风险项落地**（2026-08-09，v2.19.2.15，704 passed，build 绿，纯代码修复，无生产行为变化，已跑全量冒烟）
   - **`tracker.upsert()`/`update_status()` 补"无生产调用方"警告 docstring**：grep 确认二者在生产代码里零调用（仅 3 个测试文件用于 seeding），但 W1 真实投递路径 `tools/db/w1/upsert_application.py` 对 `score`/`url`/`applied_at` 有 `CASE WHEN NOT NULL` 保护、还多写一列 `content_hash`，而 `tracker._upsert_application_row` 无条件覆写、且不知道 `content_hash` 这一列——是货真价实的"同一转换两份实现、语义不一致"，只是还没被真正接线触发。仿照已有的 `dismiss_reply()` 先例（"NOTE: 此方法无生产调用方，之所以修好而不删，是因为一个看着正当的同名 helper 正是以后会被误接线的那种坑"）加了同款警告，不删不改行为，纯文档。

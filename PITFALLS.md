@@ -115,3 +115,10 @@
 **真因**：`updateConversation` 只就地改字段（如 `reply_status`），从不从 `conversations` 数组里移除项，所以原始数组长度只在重新拉取时才变；页面早先为了修同类 bug（2026-07-28，「W2 待审批列表没有实时更新」）引入了 `tabScoped = conversations.filter(matchesTabFilter)` 作为渲染用的实时过滤列表，但那次只把**列表渲染**换过去了，同一页面上其他直接写 `conversations.length` 的地方（按钮文案、确认框文案、显隐条件）没有一起排查，漏网了三处。
 **正确做法**：一旦某页面存在「原始拉取数组 vs 实时过滤视图」的分裂（如 `conversations` vs `tabScoped`），修的时候要 **grep 整个组件里该原始数组的所有 `.length`/`.map`/直接引用**，不能只改列表渲染那一处——凡是给用户看的计数/文案，一律要用过滤后的那个变量。
 **判据**：只要页面里同时存在两个语义不同的同源数组（一个"拉取时的"、一个"当前视图的"），任何显示数字的地方都要问一遍"这个数字该跟着哪个变"。
+
+## 在 git worktree 里跑本项目，`data/` 和 `node_modules/` 都不存在——依赖它们的功能会「看起来坏了」
+
+**现象**：两种表现，第二种是静默的。① `npm run build` 直接报 `vitest 不是内部或外部命令`——看着像 npm 装坏了。② 在 worktree 里起 dashboard，读 `data/` 的页面全是空的：面试准备页显示"还没有面试卡片"，简历/信息池同理。**没有任何报错**，看起来就是数据丢了或功能有 bug。
+**真因**：worktree 是仓库的独立工作目录，只有 **git 跟踪的文件**会出现在里面。`node_modules/`（未跟踪）和 `data/`（gitignore 的运行时数据：`jobs.db`、`browser_profile/`、`info_pool.yaml`、`interview_prep.yaml`、`resumes/`）全都只存在于主仓，worktree 里那个目录压根没有。后端 loader 又普遍按「文件不存在返回空结构」设计（这本身是对的，页面要能提示怎么建），于是缺文件和"内容为空"表现完全一致。
+**正确做法**：worktree 里只做**代码**改动，跑 `pytest` 和 `npm run build`（首次需在 worktree 内 `npm install` 装一份自己的 `node_modules`）。凡是要**看真实数据**的验证，回主仓做——把 worktree 的改动合并过去再验，或临时从主仓拷一份数据文件进 worktree（用完删掉，别让它留下来混淆）。gitignore 的数据文件本来就该直接在主仓改，它不参与合并。
+**判据**：在 worktree 里遇到「某个页面/功能空空如也但代码看着没问题」，先 `ls code/data/` ——目录不在就是这条，不是 bug。
