@@ -301,3 +301,21 @@
 - 否掉了什么，为什么：否掉"L2 已经完整验证、可以不用管了"这个错觉——不推翻已完成的 L2 实现本身（结构依然正确、18 个测试依然有效、真机走过审批/驳回全流程），但明确"验证过逻辑"和"验证过真实场景匹配度"是两个不同层级的验证，不能混为一谈。
 - 代价 / 已知不足：Layer 1 落地、真实数据开始流经这道闸门后，`pending_applications` 的字段 schema / `FieldSpec` 分类 / 审批页交互有较大概率需要调整——这部分返工量在最初评估"先做 L2 风险低"时没有被计入，不是失败，是走这条顺序时就该预料到的代价。
 - 什么情况下该重新考虑：不适用——这是记录一次认识上的教训，供以后判断"结构必要"和"建设顺序优先级"时分开论证，不要用前者替后者背书。
+
+## 首次在 Python 依赖之外引入 Node.js 运行时依赖（chrome-devtools-mcp）
+
+- 日期 / 版本：2026-08-13，Layer 1 实现阶段
+- 背景：Layer 1 按设计文档走 LangGraph + Chrome MCP + DeepSeek 技术路线（用户已确认，见"多站点执行层引入 agent 作为默认路径"）。Chrome MCP 生态（浏览器自动化的 MCP server）目前主流实现是 Node.js 包（Google 官方 `chrome-devtools-mcp`），没有对应的原生 Python 包。
+- 选了什么：Python 侧用 `langchain-mcp-adapters` 通过 stdio 子进程（`npx chrome-devtools-mcp@latest`）连接这个 Node.js MCP server，桥接成 LangGraph 可用的工具。`requirements.txt` 加了 `langgraph`/`langchain-openai`/`langchain-mcp-adapters`/`mcp` 四个新 Python 包；Node 依赖不体现在 requirements.txt 里，靠 npx 按需下载，没有走 package.json 锁版本（用的是 `@latest`）。
+- 否掉了什么，为什么：否掉"等一个 Python 原生的 CDP-MCP 实现"——目前生态里没有功能对等的选择，且这条技术路线是用户明确要求直接按设计文档搭建的，不是这次临时决定的。也否掉"把 chrome-devtools-mcp 版本锁定在 package.json 里管理"——这个包只在 Layer 1 这一条边缘路径用到，不值得为它引入 Node 包管理基础设施，用 `npx --yes chrome-devtools-mcp@latest` 现场拉取足够。
+- 代价 / 已知不足：①用 `@latest` 意味着这个包升级后行为可能漂移（tool 名称、a11y 快照文本格式变化），没有版本锁定的可复现性；②这是项目第一次要求运行环境里必须有 Node.js/npx，之前的技术栈（DrissionPage/Playwright/FastAPI 等）全是纯 Python，多了一个环境前置条件；③引入的是一套跟项目其余部分（DrissionPage）完全不同的浏览器自动化技术栈（Chrome MCP 底层是 Puppeteer/CDP），意味着 DrissionPage 特意规避的 CDP 检测风险，在 Layer 1 这条新路径上是重新暴露的——这正是设计文档"反自动化验证"仍未完成的那个未知风险，Layer 1 这次真跑本身会是第一手非正式信号，但不能替代专门的验证。
+- 什么情况下该重新考虑：chrome-devtools-mcp 升级后若出现破坏性行为变化导致 Layer 1 频繁失败，需要把版本锁定下来（这次开发验证过的是 `chrome-devtools-mcp@1.7.0`）；若真机验证发现华为站点对 CDP/Puppeteer 类自动化有明显拦截，需要重新评估整条技术路线是否可行。
+
+## Layer 1 的 DeepSeek 调用不走项目自己的 ModelRouter，改用 LangChain 原生绑定
+
+- 日期 / 版本：2026-08-13，Layer 1 实现阶段
+- 背景：项目现有 LLM 调用统一走 `services/llm_client.py` 的 `ModelRouter.complete()`（返回原始文本 + provider 名，DeepSeek 走的 `OpenAICompatibleProvider` 会直接忽略 `output_schema` 参数，结构化程度全靠 prompt 措辞 + `safe_parse_json` 兜底解析）。LangGraph 的用法习惯要求一个 LangChain 原生的 `BaseChatModel` 对象。
+- 选了什么：`code/multisite/layer1_agent.py` 里单独用 `langchain_openai.ChatOpenAI` 绑定 DeepSeek（`base_url=https://api.deepseek.com`，复用同一个 `DEEPSEEK_API_KEY` 环境变量），用 `.with_structured_output(ClassifyFieldsOutput)` 做结构化输出（DeepSeek 支持 function calling，这条路径比项目自己的手工 JSON 解析更可靠）。
+- 否掉了什么，为什么：否掉"复用 ModelRouter，在外面手写一层 LangChain BaseChatModel 包装它"——包装的价值不大，ModelRouter 的 FallbackChain 多 provider 容灾、capability 路由这些能力对 Layer 1 这条独立路径没有实际意义（目前只用一个 provider，不需要 fallback 语义），硬套上去反而要多写一层适配代码。也否掉"继续用项目的 safe_parse_json 手工解析 JSON"——LangChain 原生结构化输出对这个场景更合适，没理由绕远路。
+- 代价 / 已知不足：Layer 1 是目前唯一一处 LLM 调用完全游离于项目 `ModelRouter`/`FallbackChain` 之外的地方，provider_used 追踪、fallback 容灾这些项目级能力在这里都没有——DeepSeek 挂了 Layer 1 就直接失败，没有降级路径。
+- 什么情况下该重新考虑：Layer 1 未来需要支持多 provider 容灾（比如 DeepSeek 限流时切到其他模型）时，需要重新评估要不要把它接回 ModelRouter 体系，或者给 ModelRouter 补一层 LangChain 兼容接口。

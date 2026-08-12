@@ -15,3 +15,9 @@ sse-starlette>=1.6.1
 httpx>=0.24.0
 pytest-cov>=4.0.0
 python-dotenv>=1.0.0          # 从 .env 读取 API key（DEEPSEEK_API_KEY 等），.env 已在 .gitignore
+
+# 多站点扩展 Layer 1（识别 agent，code/multisite/）专用，不被 W1/W2/W3 使用
+langgraph>=1.0.0               # agent 流程编排（StateGraph）
+langchain-openai>=1.0.0        # LangGraph 需要 LangChain 原生 BaseChatModel，单独绑定 DeepSeek
+langchain-mcp-adapters>=0.3.0  # 把 chrome-devtools-mcp（Node 子进程）的工具桥接成 LangGraph 工具
+mcp>=1.0.0                     # MCP 客户端协议基础库

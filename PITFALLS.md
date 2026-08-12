@@ -134,3 +134,60 @@
 **真因**：worktree 是仓库的独立工作目录，只有 **git 跟踪的文件**会出现在里面。`node_modules/`（未跟踪）和 `data/`（gitignore 的运行时数据：`jobs.db`、`browser_profile/`、`info_pool.yaml`、`interview_prep.yaml`、`resumes/`）全都只存在于主仓，worktree 里那个目录压根没有。后端 loader 又普遍按「文件不存在返回空结构」设计（这本身是对的，页面要能提示怎么建），于是缺文件和"内容为空"表现完全一致。
 **正确做法**：worktree 里只做**代码**改动，跑 `pytest` 和 `npm run build`（首次需在 worktree 内 `npm install` 装一份自己的 `node_modules`）。凡是要**看真实数据**的验证，回主仓做——把 worktree 的改动合并过去再验，或临时从主仓拷一份数据文件进 worktree（用完删掉，别让它留下来混淆）。gitignore 的数据文件本来就该直接在主仓改，它不参与合并。
 **判据**：在 worktree 里遇到「某个页面/功能空空如也但代码看着没问题」，先 `ls code/data/` ——目录不在就是这条，不是 bug。
+
+---
+
+## 2026-08-13 新增（Layer 1：LangGraph + chrome-devtools-mcp + DeepSeek 真机验证）
+
+## `MultiServerMCPClient.get_tools()` 每次工具调用各开一个新 session，不是持续同一个浏览器
+
+**现象**：`navigate_page` 导航到目标网址后，紧接着 `take_snapshot()` 拿到的是全新一个空白浏览器实例的 `about:blank`，好像刚才的导航根本没发生。日志里 chrome-devtools-mcp 的启动横幅反复打印多次（每次工具调用一次）。
+**真因**：`client.get_tools(server_name=...)` 是个便捷方法，返回的每个工具各自绑定一次性的短生命周期 session——不是一个持续会话贯穿全程。每次 `.ainvoke()` 都在背后重新起一个 chrome-devtools-mcp 子进程 + 全新浏览器，前一次调用做的操作（导航）对这次调用的浏览器毫无意义。
+**正确做法**：用 `client.session(server_name)` 作为 async context manager 开一个持续 session，`langchain_mcp_adapters.tools.load_mcp_tools(session)` 把这一个 session 绑定的工具集传给整条 LangGraph 图（或整次自动化流程）复用。全程只应该看到一次 chrome-devtools-mcp 启动横幅。
+**判据**：启动横幅打印次数 > 1，或者"刚导航过的页面"取快照却是空白/初始状态，先怀疑这个，不要先怀疑导航本身失败了。
+
+## `langchain_mcp_adapters` 工具调用结果不保证是字符串，可能是内容块列表
+
+**现象**：`AttributeError: 'list' object has no attribute 'lower'`（或 `.strip()`/`.splitlines()` 等字符串方法炸掉），明明工具文档说返回的是文本。
+**真因**：`.ainvoke()` 的返回值单个文本内容块时是 `str`，多个内容块时是 `list[{"type":"text","text":...}, ...]`——由底层 MCP 结果的内容块数量决定，调用方不能假设是哪种。
+**正确做法**：写一个统一的文本提取函数，先判断类型（`isinstance(x, str)` / `isinstance(x, list)`），list 就拼接所有 `type=="text"` 块的 `text`，任何直接消费工具返回值当字符串用之前都先过这个函数。
+
+## `navigate_page` 只保证导航完成，不保证 SPA 客户端渲染完成
+
+**现象**：跟上面 session 隔离那条表现几乎一样（拿到空壳页面），但这次即使 session 是持续的、正确的同一个浏览器，紧跟导航之后立刻截图仍然可能是空的。
+**真因**：`navigate_page` 完成的是浏览器层面的页面加载事件，不是 JS 框架（React/Vue 等）客户端渲染完成的信号，两者之间有真实的时间差。
+**正确做法**：导航后不要只截一次图就下结论，轮询（间隔 1 秒左右）直到快照不再是空壳（比如判断行数/是否只有根节点），设一个合理的总超时。
+**判据**：跟"session 隔离"那条的区别——如果 session 已经确认是持续同一个（横幅只打印一次），还是拿到空壳，就是这条时序问题，不是 session 问题。
+
+## a11y 快照里的可交互元素可能完全没有 accessible name，按标签关键词匹配会静默漏掉整个字段
+
+**现象**：真机验证一个投递表单，"学校名称""学历""来源渠道"三个必填下拉框完全没有出现在扫描结果里——不报错，就是这些字段像不存在一样。
+**真因**：这些控件在 DOM/无障碍树里没有 `aria-label`/关联 `<label>` 等任何可读名称（常见于自定义下拉组件、文件上传输入框），任何"按元素自己的文字标签去匹配"的定位策略对这类元素天然无解，会直接跳过，且没有任何报错信号——是纯粹的静默漏字段。
+**正确做法**：给"按标签匹配"策略加一个兜底——匹配不到自己名字的元素，回退取快照里离它最近的、有文字内容的前置"地标"行（一般是紧邻的说明文字/上一个问题的标题）作为它的语义标签，而不是直接丢弃。
+**判据**：扫描表单字段的结果数量，跟人工用眼睛数页面上"看起来必填"的项数对不上，先怀疑这个，而不是怀疑分类逻辑判断错了。
+
+## chrome-devtools-mcp 的单选题（radio group）快照没有 radiogroup 包裹节点，朴素按行解析会把一个问题拆成 N 个假字段
+
+**现象**：一个"推荐方式"单选题（选项：无/内推/大使推荐）在解析结果里变成三个各自独立、语义错误的"字段"。
+**真因**：问题标题和各选项在快照文本里是**平铺的同级行**，没有类似 `radiogroup` 的父节点把它们关联起来；而且已选中的选项，状态是行尾一个裸的 `checked` 词（不是 `value="..."` 这种属性形式），跟 textbox 判断"是否已有值"的方式完全不同，直接套用会漏判。
+**正确做法**：把连续出现的 radio 行按"离它们最近的非 radio 文字地标"聚合成一个逻辑问题；任意一个选项带 `checked` 就整题跳过（已经有答案，不需要处理），不要按选项数量产出字段。
+**已由 `tests/test_layer1_agent.py::TestParseEmptyInputElements` 系列用例守门**（`test_already_selected_radio_group_is_excluded` / `test_unchecked_radio_group_surfaces_as_one_field`）。
+
+## DeepSeek 的 API 不支持 LangChain `with_structured_output()` 的默认结构化输出策略
+
+**现象**：`openai.BadRequestError: Error code: 400 - {'error': {'message': 'This response_format type is unavailable now', 'type': 'invalid_request_error'...}}`。
+**真因**：`with_structured_output()` 不显式指定 `method` 时，会尝试较新的 OpenAI `json_schema` response_format，DeepSeek 的 chat completions 端点不支持这个模式（虽然文档上支持 function calling）。
+**正确做法**：显式传 `method="function_calling"`——这是 DeepSeek 明确支持的、更通用的结构化输出方式，其他 OpenAI-compatible 第三方端点遇到同类报错也应优先试这个。
+
+## Python 脚本被 Bash 工具重定向到文件 + 后台跑时，`print()` 可能完全不出现在日志里
+
+**现象**：后台跑的脚本看起来"卡住了"，反复 `tail` 日志文件内容长时间不变，但进程其实还活着（CPU 使用率低但不是 0），也没报错——像是无声挂起。
+**真因**：标准输出连到文件（不是真实终端）时 Python 默认走全缓冲，不是行缓冲，`print()` 的内容可能一直留在内存缓冲区，直到缓冲区写满或进程退出才真正落盘，这段时间外部看日志文件完全看不出脚本的真实进度。
+**正确做法**：调试阶段用 `python -u`（无缓冲）跑，或者压根不依赖 print 做实时可观测性——关键中间状态（比如失败时的页面快照）应该主动落盘到一个随时能读的文件，而不是指望 stdout。
+**判据**：日志文件长时间原地不动，但对应进程还在（用 `tasklist`/`Get-CimInstance Win32_Process` 查 CPU 时间是不是在涨），先怀疑缓冲，不要先怀疑脚本挂了就去杀进程重跑。
+
+## 需要人工介入（如手动登录）的自动化脚本不能用阻塞的 `input()` 等——如果它是被 Claude Code 的 Bash 工具后台拉起的
+
+**现象**：脚本弹出一个真实浏览器窗口等用户操作，用户能看到窗口、能在窗口里点击/输入，但脚本本身像是永远卡在原地，用户没有任何办法让它"继续"。
+**真因**：这个子进程的 stdin 没有连接到用户能敲键盘的地方——用户看到的是浏览器窗口（一个独立进程），不是运行脚本的那个终端会话；阻塞在 `input()` 上等的是后者的输入，没人能提供。
+**正确做法**：需要人工完成某个动作（登录等）时，改成轮询检测该动作是否已完成（比如定期重新截图，检查登录态特征是否消失），不要求任何人对着运行脚本的进程本身输入任何东西。

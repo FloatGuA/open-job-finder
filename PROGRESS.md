@@ -5,8 +5,8 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-12（v2.20.0.1 多站点扩展 Layer 2 审批队列最小实现——`pending_applications` 表 + 审批端点 + 新 Navigator「跨站点投递」，真机全流程验证通过） |
-| 当前版本 | 2.20.0.1                       |
+| 最后更新 | 2026-08-13（v2.21.0.0 多站点扩展 Layer 1 识别 agent 首次真机跑通——LangGraph + chrome-devtools-mcp + DeepSeek，对拓竹科技（Bambu Lab）真实职位端到端验证成功，写入真实 pending_applications 记录） |
+| 当前版本 | 2.21.0.0                       |
 
 ## 待跟进（另开会话）
 
@@ -62,7 +62,7 @@
 - **Hytera/海能达（Moka 平台）recon 完成，真机走完并由用户提交**：入口是带身份 token 的定向邀请链接（非公开投递入口）。**关键发现：Moka 是跨企业共享的中心化 ATS**——打开链接时姓名/邮箱/教育背景已经预填，候选人档案挂在 Moka 账号上而非单个企业下，跟华为"每家企业各自从零解析"的模式根本不同。日期选择器只精确到年月（华为要精确到日）。证件号码同样落入硬约束分类全程未触碰，其余字段（手机/性别/出生日期/工作城市/教育经历成绩排名/英语能力等）由用户提供真实数值、Claude 只负责浏览器操作，最终由用户本人点击提交。
 - **新建 `code/data/personal_info/` 存放身份类信息**：`basic.yaml`（姓名/手机/邮箱）+ `identity.yaml`（性别/出生日期/证件国家/证件类型）按敏感度拆两个文件，整目录被根 `.gitignore` 覆盖；**刻意不存证件号码**。顺带修了一个真实漏洞：项目根目录 `resumes/` 此前未被 `.gitignore` 覆盖，已补上（`/resumes/`）。
 - **运行时架构定稿：识别→审批→分派→验证四层模型**（本轮从"要不要用 LangGraph+Chrome MCP+DeepSeek 做通用 agent"的讨论收敛而来，完整设计见 `docs/multi-site-expansion-design.md`"核心思路：四层运行时架构"）：Layer 1 agent 识别/判断（定位岗位、扫描字段、分类、生成候选值，允许出错）→ Layer 2 人工审批（Dashboard，**目前不存在，是唯一必建项**）→ Layer 3 纯代码分派（有确定性 adapter 用 CodeExecutor，没有就退化到 AgentExecutor；government_id 过滤 + 提交 go 信号在分派层统一强制，不在两条执行路径里各自实现）→ Layer 4 独立校验成功信号。**关键澄清：adapter 从"每站必需"降级为"高频站点才值得投入的可选优化"**——demographic 字段的值解析本来就通用、不属于 adapter，AgentExecutor 能通用处理页面交互，不需要提前认识网站。
-- **下一步建议**（按风险排序，详见设计文档"建议的下一步"）：~~①反自动化验证~~ 未做——仍是最大未知数，本轮所有 recon 用 claude-in-chrome（真人特征），不代表 Chrome MCP/DrissionPage 不会被目标站点拦；**②Layer 2 审批队列最小实现已完成**（2026-08-12，v2.20.0.0，见「已完成」），**但只用 seed 脚本假数据验证过表结构/审批页逻辑，字段设计（FieldSpec 三分类）是否匹配真实场景完全没验证过**（取舍见 `DECISION.md`"'L2 结构上不可替代'不等于'建设顺序上应该先做 L2'"）；③端到端最小验证（一个站点、不写 adapter、全走 AgentExecutor）——Layer 1（识别 agent）和 Layer 3/4（分派/验证）仍是 0 行代码，**下一个会话从 Layer 1 开始做**；④中国航油代表的"北森模板"通用性假设仍未深挖。
+- **下一步建议**（按风险排序，详见设计文档"建议的下一步"）：~~①反自动化验证~~ 仍未专门做——本轮 Layer 1 真跑（LangGraph+chrome-devtools-mcp）对拓竹站走完整登录+上传+多字段扫描流程没被拦，算一个非正式积极信号，但不能替代专门验证；**②Layer 2 审批队列已完成**（2026-08-12）**且 ③已被 Layer 1 真实数据验证过**（2026-08-13，v2.21.0.0，见「已完成」——真实 pending_applications 记录审批通过，`FieldSpec` 三分类跟真实场景匹配，`DECISION.md`"'L2 结构上不可替代'不等于'建设顺序上应该先做 L2'"那条记的"验证缺口"已补上）；Layer 3（真正把值填进表单、提交）和 Layer 4（独立验证提交成功）仍是 0 行代码，是下一块；④中国航油代表的"北森模板"通用性假设仍未深挖。
 
 > **待真机验证（本轮新增，Chrome 插件未连上，只做到后端接口+build 绿，没走完整浏览器点击链路）**：日志页新 Tab「失败日志清理」——打开后能看到失败 run 列表 + 失败截图列表、勾选/全选/按天数筛选、删除后列表刷新、截图点开能跳到 `/api/apply-failure/{name}` 原图。失败的样子：Tab 空白、列表不出、勾选后删除按钮计数不对、删除后文件其实还在。
 
@@ -165,6 +165,14 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- **多站点扩展 Layer 1（识别 agent）首次真机跑通**（2026-08-13，v2.21.0.0，pytest 全量绿含新增 26 例，端到端真机验证成功，非 seed 假数据）
+  - **背景**：Layer 2 做完但只用 seed 假数据验证过；这轮按用户要求直接搭 LangGraph + chrome-devtools-mcp + DeepSeek（不先用 claude-in-chrome 手动跑一遍再决定），目标站点原计划华为，用户中途改为拓竹科技（Bambu Lab）校招网站（`bambulab.jobs.feishu.cn`，飞书招聘 ATS），给了一个真实职位 URL，用户全程在场并真实登录了自己的账号。
+  - **交付**：`code/multisite/` 新包——`personal_info_loader.py`（读 `data/personal_info/` 拍平成 dict）、`chrome_mcp_client.py`（桥接 chrome-devtools-mcp，持久化登录目录按站点分开 `data/browser_profile_multisite/<site>/`）、`layer1_agent.py`（LangGraph 四节点：登录检查→打开申请并上传简历→扫描空字段并分类→写 `pending_applications`；government_id 类字段代码强制清空，工具集里根本不包含"提交"能力，安全边界靠没给这个手段而不是靠指令）。`prompts/classify_field.md` 新 prompt；`scripts/run_layer1.py` CLI 入口（`--site` 必填）。
+  - **真机调试过程**（10 轮真跑，每轮定位并修一个具体 bug，全部详细记入 `PITFALLS.md`）：工具返回值内容块提取（list vs str）、MCP session 每次工具调用各开一次导致 `about:blank`（最严重的一个）、SPA 渲染时序、无 accessible name 元素静默漏字段（"学校名称""学历""来源渠道"三个必填 combobox 一度完全没被扫描到）、单选题被拆成 N 个假字段、DeepSeek 结构化输出方法不兼容（需 `method="function_calling"`）、Python 输出缓冲导致后台跑看不到实时进度、阻塞 `input()` 在后台进程里没法用（改成轮询检测登录态）。
+  - **最终结果**（`pending_applications` id=6，真实数据）：demographic 字段（姓名/邮箱）正确从 `personal_info` 选中真实值；open_question 字段（来源渠道）生成了合理候选文本；学校名称/学历/专业/毕业时间因 `personal_info` 里没有教育背景数据，正确留空未编造（不是漏洞，是数据源本来没有，见下方遗留）；这张表单本身没有证件号码字段，故没有 government_id 类输出。已在 Dashboard「跨站点投递」页人工确认可正常审批——`DECISION.md`"L2 结构上不可替代"那条记的"从未被真实数据验证过"的缺口，本轮补上了。
+  - **测试**：`tests/test_layer1_agent.py` 新增 20 例（用真机捕获的真实、无 PII 的 a11y 快照做 fixture）+ `tests/test_personal_info_loader.py` 6 例。
+  - **已知遗留/下一步**：①`personal_info` 没有教育背景字段（学校/学历/专业），要不要扩充待定；②这次是我用 claude-in-chrome 手动浏览找到的职位 URL 喂给 Layer 1，不是 Layer 1 自己搜索筛选出来的——用户提出希望 Layer 1 未来能按存好的偏好条件（校招/应届生/深圳/运营·产品·Agent开发方向/避免有经验要求）自己搜索匹配，这次为了先验证核心机制没做，是明确的下一步，需要想清楚偏好存哪（`profile.yaml` 已有 cities/degree/experience 可复用，方向关键词要新加）；③Layer 3/4 仍是 0 行代码；④反自动化验证仍未专门做，这次真跑走完整流程没被拦，只是非正式积极信号；⑤`chrome-devtools-mcp` 用 `@latest` 未锁版本，这次验证过的是 1.7.0。
 
 - **多站点扩展 Layer 2 审批队列最小实现**（2026-08-12，v2.20.0.0→2.20.0.1，pytest 752 passed 退出码0，前端 tsc+50 vitest 全绿+build 成功，真机浏览器全流程验证通过）
   - **背景**：`docs/multi-site-expansion-design.md` 的四层运行时架构（识别→审批→分派→验证）明确建议不要一次性搭整个框架，按风险从高到低分三步，Layer 2 是"唯一不依赖其他任何东西、且不可绕过的必建项"，从这里起步。
