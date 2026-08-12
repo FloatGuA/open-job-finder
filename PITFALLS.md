@@ -99,11 +99,23 @@
 ## 改 server.py 新增端点后，--reload 常常不触发，表现为端点 404
 
 **现象**：新端点返回 404，前端静默拿到空数据，看起来像前端 bug。
-**真因**：WatchFiles 对新增路由的重载不可靠；运行中的进程还是旧的。
-**正确做法**：新增端点后直接 curl 一下确认，404 就重启后端。
+**真因（两种，表现完全一样，得分开排查）**：
+① WatchFiles 对新增路由的重载不可靠；运行中的进程还是旧的。
+② **进程压根没带 `--reload` 启动**——`/api/dev/restart`（Topbar「重启后端」按钮同款）只是
+`Path(__file__).touch()`，前提是进程本身在跑 `uvicorn --reload` 监听文件变化；如果当初是用不带
+`--reload` 的命令起的（例如手工敲的 `python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8765`，
+少了文档里的 `--reload`），touch 文件不会有任何效果，反复重试也只会一直 404。
+**正确做法**：新增端点后直接 curl 一下确认，404 先用 `/api/dev/restart`（或 Topbar 按钮）触发一次热重载，
+等几秒再 curl；**如果还是 404，别死等，去查真实进程命令行**——
+`netstat -ano | grep :8765` 拿到 PID，再
+`powershell -Command "Get-CimInstance Win32_Process -Filter 'ProcessId=<PID>' | Select CommandLine"`，
+看命令行里有没有 `--reload`。没有就必须手动 kill 该 PID、按 CLAUDE.md「启动方式」里的完整命令
+（带 `--reload`）重新起一个。
 **重启前必须先查 `/api/workflow/status`**——真跑 W1/W2 对真实 HR 不可撤销，`running` 非空先问用户。
 **连带坑**：杀进程后端口可能仍被占（孤儿 worker / socket 未释放），
 `Get-NetTCPConnection` 会显示一个**已经不存在的 PID**。重试一次即可，别急着换端口。
+**判据**：`/api/dev/restart` 触发后等了 5 秒以上仍 404，且反复 touch 也没用——说明不是「重载慢」，
+该去查进程命令行了，别在原地反复 curl。
 
 ---
 

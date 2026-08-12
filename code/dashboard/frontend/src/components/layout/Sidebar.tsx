@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Briefcase, Clock, FileText, GraduationCap, GripVertical, LayoutDashboard, MessageSquare, Network, ScrollText, Settings } from 'lucide-react'
+import { Briefcase, Clock, FileText, GraduationCap, Globe, GripVertical, LayoutDashboard, MessageSquare, Network, ScrollText, Settings } from 'lucide-react'
 import { API } from '@/api'
 import { useAppContext, type Page } from '@/context/app-context'
 import { APP_VERSION } from '@/version'
@@ -16,6 +16,7 @@ const ITEMS: Array<{ page: Page; title: string; icon: typeof LayoutDashboard }> 
   { page: 'resume', title: '\u7b80\u5386', icon: FileText },
   { page: 'lifecycle', title: '\u67b6\u6784', icon: Network },
   { page: 'interview', title: '\u9762\u8bd5\u51c6\u5907', icon: GraduationCap },
+  { page: 'crosssite', title: '\u8de8\u7ad9\u70b9\u6295\u9012', icon: Globe },
   { page: 'settings', title: '\u8bbe\u7f6e', icon: Settings },
 ]
 

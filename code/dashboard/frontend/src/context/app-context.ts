@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
 
-export type Page = 'dashboard' | 'jobs' | 'chat' | 'logs' | 'automation' | 'resume' | 'lifecycle' | 'interview' | 'settings'
+export type Page = 'dashboard' | 'jobs' | 'chat' | 'logs' | 'automation' | 'resume' | 'lifecycle' | 'interview' | 'crosssite' | 'settings'
 
 export interface AppContextValue {
   page: Page

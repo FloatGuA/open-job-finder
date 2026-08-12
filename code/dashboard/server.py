@@ -1639,6 +1639,54 @@ async def mark_sent(conv_id: str) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+# ── 跨站点投递审批（多站点扩展 Layer 2；见 docs/multi-site-expansion-design.md）──
+
+@app.get("/api/pending-applications")
+async def list_pending_applications(status: str | None = None) -> JSONResponse:
+    _initialize_state()
+    items = app.state.tracker.get_pending_applications(status=status)
+    return JSONResponse({"applications": [vars(a) for a in items], "total": len(items)})
+
+
+@app.get("/api/pending-applications/{application_id}")
+async def get_pending_application(application_id: int) -> JSONResponse:
+    _initialize_state()
+    rec = app.state.tracker.get_pending_application(application_id)
+    if rec is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    return JSONResponse(vars(rec))
+
+
+@app.post("/api/pending-applications/{application_id}/approve")
+async def approve_pending_application(application_id: int, body: dict) -> JSONResponse:
+    """Layer 2 go-signal. `fields` in the body is the reviewer-edited final field
+    list (government_id values filled in by hand) that Layer 3 will act on."""
+    _initialize_state()
+    tracker = app.state.tracker
+    if tracker.get_pending_application(application_id) is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    fields = body.get("fields")
+    if not isinstance(fields, list):
+        return JSONResponse({"ok": False, "error": "fields must be a list"}, status_code=400)
+    rowcount = tracker.decide_pending_application(application_id, "approved", fields=fields)
+    if rowcount == 0:
+        return JSONResponse({"ok": False, "error": "already decided"}, status_code=409)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/pending-applications/{application_id}/reject")
+async def reject_pending_application(application_id: int, body: dict | None = None) -> JSONResponse:
+    _initialize_state()
+    tracker = app.state.tracker
+    if tracker.get_pending_application(application_id) is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    reason = (body or {}).get("reason")
+    rowcount = tracker.decide_pending_application(application_id, "rejected", reason=reason)
+    if rowcount == 0:
+        return JSONResponse({"ok": False, "error": "already decided"}, status_code=409)
+    return JSONResponse({"ok": True})
+
+
 
 @app.post("/api/conversations/{conv_id}/open-in-browser")
 async def open_conversation_in_browser(conv_id: str) -> JSONResponse:

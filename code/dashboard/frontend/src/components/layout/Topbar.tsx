@@ -13,6 +13,7 @@ const PAGE_TITLES = {
   resume: '\u7b80\u5386',
   lifecycle: '\u67b6\u6784',
   interview: '\u9762\u8bd5\u51c6\u5907',
+  crosssite: '\u8de8\u7ad9\u70b9\u6295\u9012',
   settings: '\u8bbe\u7f6e',
 } as const
 

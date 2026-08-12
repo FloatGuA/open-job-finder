@@ -5,8 +5,8 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-09（v2.19.2.17 Chat.tsx 补测试 + 会话列表 N+1 修复 + 新增失败日志清理入口 + 面试准备拆独立 Navigator，worktree 已合并） |
-| 当前版本 | 2.19.2.17                       |
+| 最后更新 | 2026-08-12（v2.20.0.1 多站点扩展 Layer 2 审批队列最小实现——`pending_applications` 表 + 审批端点 + 新 Navigator「跨站点投递」，真机全流程验证通过） |
+| 当前版本 | 2.20.0.1                       |
 
 ## 待跟进（另开会话）
 
@@ -25,13 +25,44 @@
 
 **「还值得做什么」审出的其余几条**：
 - ~~1 Chat.tsx零测试~~ / ~~2 会话无分页+N+1~~ / ~~3 失败日志PII不清理~~ / ~~5 cryptography死依赖~~ **均已完成，见「已完成」**。
-- **4「公司/HR 黑名单」暂缓，先处理 W1 去重问题**（用户 2026-08-09 定）：黑名单要在 W1 分类阶段加过滤条件，但用户指出 W1 现有的去重/过滤逻辑本身可能一直有问题——"之前判断不会有重复岗位是错的，实际上还是会有；之前做的过滤肯定有问题（明显没有这么多）；现在把整个 W1 过滤删掉，反而过滤成功了；因为找的按钮是定死的"。**这段原话没有展开成完整诊断，需要单独一个会话查清楚**：现有去重机制（job_id + 内容指纹两层，见 [[w1-w2-status-revival]]）到底哪里坏的、"删掉过滤反而成功"具体指哪次改动、"按钮定死"说的是哪个选择器。黑名单功能等这个查清楚、现有去重站得住脚之后再设计，不要在可能有问题的地基上叠新过滤条件。
+- **4「多级黑名单」W1 去重前置调查已完成，设计已对齐，待实现**（2026-08-09）
 
-**扩展到其他招聘网站（应届生 / JobsDB / 腾讯字节国企央企官网）—— 架构评估，供未来参考，非近期计划**：
-- 天然可复用：打分逻辑、简历子系统、审批队列、Dashboard、tracker 通用 schema——这些跟 Boss 已经解耦得不错。
-- 100% Boss 专属、换站点要重写：`services/boss_search_url.py`、`tools/browser/w1|w2/*`、`browser_context.py` 里拦截 `getGeekFriendList` 的 XHR hook。
-- 应届生大概率没有 Boss 那种"投递后即时 HR 聊天"模型，W2/W3 整条会话追踪流水线可能无对象可用；JobsDB 界面英文，难点在意图分析 prompt 要不要按语境重设计而非"能不能跑";**企业自建系统（腾讯/字节/国企央企）冲击最大**——大概率是"投递→邮件/短信通知"而非站内聊天，W2/W3 完全不适用，且国企/央企更可能有短信验证码/实名认证，现有反检测手段应付不了。
-- 如果真要做，方向建议：把"投递"和"会话追踪"拆成两个独立能力（W2/W3 做成可选层），边界划在 `tools/browser/w1|w2/*` + `boss_search_url.py` 这一层，其余不用动。
+  **前置调查结论（推翻了最初的猜测）**：用户原话"重复"指的不是 W1 给同一 HR 发第二次招呼，而是 **Boss 自己会把一个月内投过的岗位重新推给你**——这是平台行为，W1 现有的按钮状态检查（`already_chatting`）足够防止真的重复问候，用户确认"目前 W1 投递是稳定的"。我最初怀疑的"Boss 轮换 encryptJobId 导致同岗位被当新岗位重投"**查了真实数据后证伪**：`applications` 表里 326 条有 `content_hash` 的记录里，**零重复**（同一 content_hash 没出现过第二次），`job_id` 本身是主键结构上也不可能重复。之前按"公司+HR"分组看到的疑似重复，抽样后发现是同一公司的不同真实岗位（如某电子公司一家就有"日语包装设计师""AI数据产品经理""硬件测试"等多个不同岗位），不是 bug。**教训：先查数据再下结论，不要拿 commit 标题当证据。**
+
+  **黑名单本身是独立需求**（不依赖 W1 去重是否有问题），五级粒度：公司 / HR / 具体岗位（job_id）/ 岗位类型 / 关键词，覆盖 W1（拦截投递）+ W2（拦截会话处理）。**设计已与用户对齐**，两层设计：
+
+  1. **Schema**（单表，`match_type` 判别）：
+     ```sql
+     CREATE TABLE blacklist_rules (
+       id INTEGER PRIMARY KEY,
+       match_type TEXT NOT NULL,   -- company / hr_name / job_id / keyword
+       match_value TEXT NOT NULL,
+       match_mode TEXT NOT NULL,   -- exact / contains
+       scope TEXT,                 -- 仅 keyword 用：title / jd_text / both
+       reason TEXT,
+       created_at TEXT NOT NULL
+     )
+     ```
+     真机查了 331 个真实 title（无结构化分类字段，但文本有"核心岗位词/技术领域修饰/雇佣性质修饰"三层模式）后确认：**"岗位类型"和"关键词"是同一套子串匹配机制**，不单独建 match_type，区别只是用户填词的粒度粗细——除非要在 UI 上分成两个入口（后端逻辑一样）。"具体岗位"用 `job_id` 做匹配值（不用 content_hash，UI 上本来就认识这个 id，更简单）。
+
+  2. **W1 两道闸**（信息什么时候可用决定卡在哪）：第一道在抓到卡片、**开 JD 面板之前**（公司/标题关键词/job_id，最省，连点击展开都不用）；第二道在 `fetch_jd` **之后**（HR 姓名——`card_pipeline.py:155` 那行注释写明搜索卡片上 HR 姓名经常是空的，真实姓名要等详情面板；以及 JD 正文关键词）。新 tool `tools/db/w1/check_blacklist.py`，**不需要新 Step**，内联进 `CardPipeline.run()`（就是当年 `check_content_duplicate` 被删前的位置）。
+
+  3. **W2 机制**：黑名单状态要用**独立字段**（如 `hr_conversations.blacklisted`），**不能复用 `stage='closed'`**——`closed` 是"沉寂但可能复活"的软状态（`DECISION.md` 里"closed 遇新活动复活"是刻意设计），黑名单语义相反（永远不想再理，新消息来了也不该复活），复用会被复活逻辑打脸。`filter_conversations` 最前面先查这个字段，命中跳过 analyze/起草/发简历，跟 `too_old` 同级但优先级更高。**两种触发场景要分开处理**：① 以后新遇到的会话——`filter_conversations` 读时判断即可；② **加规则那一刻库里已有的匹配会话**——不能只等下次扫描自然跳过，因为可能已有 `reply_status=pending/approved` 或 `resume_status=queued`，需要拉黑动作**主动**回头扫一遍 `hr_conversations`，命中的标 `blacklisted=1` + 清掉待发送状态（同 `dismiss_all_pending_replies` 的模式，按规则筛选）。
+
+  **还没设计的部分**：Chat.tsx 里点"拉黑"按钮时的多级选择 UI（勾选拉黑公司/HR/岗位其中几个）——用户明确要求要有 UI，不能默认单一粒度，下一步对齐这块再动手实现。
+
+**扩展到其他招聘网站 —— 运行时架构定稿（四层模型）+ 华为/Hytera 双站点 recon 完成**（2026-08-10~08-12，纯讨论+真机 recon 会话，零执行层代码改动）
+
+完整方案见 `docs/multi-site-expansion-design.md`；关键取舍已分别记入 `DECISION.md`（"扩展到应届生网""不做Android模拟器路线""多站点扩展走Adapter契约模式""网申表单字段处理""轻量二分类打分模式""不做自动测评类工具""Apple不适合做MVP目标""华为选定为MVP验证对象""表单字段填写简化：优先复用目标网站自带简历解析""多站点执行层引入agent作为默认路径，adapter降级为可选优化""政府证件号码类字段写入adapter契约作为硬约束"十一条）。这里只留摘要：
+
+- **天然可复用不变**：打分逻辑、简历子系统、审批队列、Dashboard、tracker 通用 schema。
+- **应届生网（yingjiesheng.com）已实地验证**：W1 投递可行——搜索页 URL 参数化、"立即申请"单击真实提交返回"投递成功"；**W2/W3 不可行**——"先聊聊"/"和HR聊聊"两个入口点击后 100% 弹 App 下载引导，PC 网页无内嵌 IM，产品层面锁死；个人中心"投递反馈"页有粗粒度状态轮询可作弱化替代。**未选为 MVP**（用户判定它是聚合平台，希望换单一企业站点练手）。
+- **候选筛选过程**（均真机点过，非猜测）：四大行——建行/工行 2026 春招已实质关闭、农行无在招岗位、中行本轮已结束且纯图片渲染无法文本抓取，均不适合当前 MVP；中国航油 0 在招岗位但发现其站点 `Powered by Beisen`（国内主流企业级招聘 SaaS 模板），如果按"北森模板"写 adapter 理论上可复用到多家客户，比单独啃一家自建系统杠杆更高，**留作后续参考，未深挖**；Apple 投递入口跳转 `idmsa.apple.com`（Apple 账号统一认证，牵连整个账号资产 + 大概率强2FA），**已否决**，见 DECISION.md。
+- **华为（career.huawei.com）recon 完成到简历解析页**：72 个活跃岗位、URL 结构干净、登录走独立 Uniportal 求职账号（风险量级远低于 Apple）。投递表单有真实复杂度——岗位意向下拉选择后 JD 正文动态换内容、部门意向两级联动下拉。**真机验证结果**：隐私声明须滚动到底才能继续；简历解析不稳定（同一份 PDF 首次上传返回"解析失败"，原样重传即成功）；解析成功填出姓名/邮箱/自我评价，**性别/证件签发国家/证件类型号码/出生日期/联系电话全部留空**——印证"人口学字段规则填"的缺口假设；表单是分步 wizard，当前分区必填项不满足就卡住无法进入下一节。未点最终提交。
+- **Hytera/海能达（Moka 平台）recon 完成，真机走完并由用户提交**：入口是带身份 token 的定向邀请链接（非公开投递入口）。**关键发现：Moka 是跨企业共享的中心化 ATS**——打开链接时姓名/邮箱/教育背景已经预填，候选人档案挂在 Moka 账号上而非单个企业下，跟华为"每家企业各自从零解析"的模式根本不同。日期选择器只精确到年月（华为要精确到日）。证件号码同样落入硬约束分类全程未触碰，其余字段（手机/性别/出生日期/工作城市/教育经历成绩排名/英语能力等）由用户提供真实数值、Claude 只负责浏览器操作，最终由用户本人点击提交。
+- **新建 `code/data/personal_info/` 存放身份类信息**：`basic.yaml`（姓名/手机/邮箱）+ `identity.yaml`（性别/出生日期/证件国家/证件类型）按敏感度拆两个文件，整目录被根 `.gitignore` 覆盖；**刻意不存证件号码**。顺带修了一个真实漏洞：项目根目录 `resumes/` 此前未被 `.gitignore` 覆盖，已补上（`/resumes/`）。
+- **运行时架构定稿：识别→审批→分派→验证四层模型**（本轮从"要不要用 LangGraph+Chrome MCP+DeepSeek 做通用 agent"的讨论收敛而来，完整设计见 `docs/multi-site-expansion-design.md`"核心思路：四层运行时架构"）：Layer 1 agent 识别/判断（定位岗位、扫描字段、分类、生成候选值，允许出错）→ Layer 2 人工审批（Dashboard，**目前不存在，是唯一必建项**）→ Layer 3 纯代码分派（有确定性 adapter 用 CodeExecutor，没有就退化到 AgentExecutor；government_id 过滤 + 提交 go 信号在分派层统一强制，不在两条执行路径里各自实现）→ Layer 4 独立校验成功信号。**关键澄清：adapter 从"每站必需"降级为"高频站点才值得投入的可选优化"**——demographic 字段的值解析本来就通用、不属于 adapter，AgentExecutor 能通用处理页面交互，不需要提前认识网站。
+- **下一步建议**（按风险排序，详见设计文档"建议的下一步"）：~~①反自动化验证~~ 未做——仍是最大未知数，本轮所有 recon 用 claude-in-chrome（真人特征），不代表 Chrome MCP/DrissionPage 不会被目标站点拦；**②Layer 2 审批队列最小实现已完成**（2026-08-12，v2.20.0.0，见「已完成」），**但只用 seed 脚本假数据验证过表结构/审批页逻辑，字段设计（FieldSpec 三分类）是否匹配真实场景完全没验证过**（取舍见 `DECISION.md`"'L2 结构上不可替代'不等于'建设顺序上应该先做 L2'"）；③端到端最小验证（一个站点、不写 adapter、全走 AgentExecutor）——Layer 1（识别 agent）和 Layer 3/4（分派/验证）仍是 0 行代码，**下一个会话从 Layer 1 开始做**；④中国航油代表的"北森模板"通用性假设仍未深挖。
 
 > **待真机验证（本轮新增，Chrome 插件未连上，只做到后端接口+build 绿，没走完整浏览器点击链路）**：日志页新 Tab「失败日志清理」——打开后能看到失败 run 列表 + 失败截图列表、勾选/全选/按天数筛选、删除后列表刷新、截图点开能跳到 `/api/apply-failure/{name}` 原图。失败的样子：Tab 空白、列表不出、勾选后删除按钮计数不对、删除后文件其实还在。
 
@@ -134,6 +165,19 @@
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- **多站点扩展 Layer 2 审批队列最小实现**（2026-08-12，v2.20.0.0→2.20.0.1，pytest 752 passed 退出码0，前端 tsc+50 vitest 全绿+build 成功，真机浏览器全流程验证通过）
+  - **背景**：`docs/multi-site-expansion-design.md` 的四层运行时架构（识别→审批→分派→验证）明确建议不要一次性搭整个框架，按风险从高到低分三步，Layer 2 是"唯一不依赖其他任何东西、且不可绕过的必建项"，从这里起步。
+  - **后端**：`services/tracker.py` 新增 `pending_applications` 表（site_name/job_title/company/job_url/fields JSON/status/reason/created_at/decided_at）+ CRUD 方法；`decide_pending_application` 用 `WHERE status='pending'` 守卫防止已决策记录被二次改写。`dashboard/server.py` 新增 4 端点（列表可按 status 过滤、详情、approve、reject），仿照既有 `approve-reply`/`dismiss-reply` 先例直接调 tracker，不建 tools/db 薄壳（理由见 `DECISION.md`）。`scripts/seed_pending_application.py` 造测试数据（Layer 1 识别 agent 尚未实现，无真实数据来源）。
+  - **前端**：新 Navigator「跨站点投递」（`pages/CrossSiteApplications.tsx`）——列表按状态筛选 + government_id 未填红色"需手填"标记；详情面板按字段 kind 分色标签（demographic 蓝/open_question 绿/government_id 红），government_id 空值时输入框标红，批准前强制校验全部填齐。
+  - **测试**：tracker 层 8 例 + 端点层 10 例，均为新文件/新增测试类。
+  - **真机验证**：backend 热重载踩坑——运行中的进程原来是不带 `--reload` 启动的，`/api/dev/restart` 的 touch 机制对它完全无效，反复重试也是 404（已更新 `PITFALLS.md` 对应条目，补充"查进程命令行"这条诊断路径）；kill 重启后用 claude-in-chrome 在真实浏览器走完整链路——筛选、选中、编辑字段填入证件号码、批准（校验通过→写回编辑值→状态变 approved→从待审批列表消失）、驳回（填理由→状态变 rejected→理由正确回显），全部符合预期。验证完清空了 seed 测试数据，真实 DB 现在是空表。
+  - **未做/下一步**：Layer 1（识别 agent）和 Layer 3/4（分派/验证）仍是 0 行代码；反自动化验证（用 DrissionPage/Chrome MCP 实测目标站点是否拦截自动化）也还没做，是设计文档标注的最大未知数。
+
+- **balanced 档 LLM 换 DeepSeek + 新增 .env 支持**（2026-08-12，v2.19.2.19，pytest 734 passed 退出码0，后端已重启验证正常，无生产行为回归）
+  - **DeepSeek 替换**：`config.yaml` 的 `llm.capabilities.balanced` 从本地 `ollama qwen3:8b` 换成 DeepSeek（`openai_compatible` provider，`model=deepseek-chat`，走 `services/llm_client.py` 现成的 `OpenAICompatibleProvider`，未改代码）。`balanced` 是唯一有生产调用方的能力档（打分/意图分析/回复生成/简历文本生成/自检全走它）；`vision`（简历图片解析）保持 `codex_cli`+`claude_cli` 不变——`OpenAICompatibleProvider` 遇 `images` 参数直接 raise，硬约束换不了；`fast`/`powerful` 两档查证后确认生产代码零调用，未动。取舍详见 `DECISION.md`。
+  - **新增 .env 支持**：加 `python-dotenv` 依赖，`services/llm_client.py` 模块顶部 `load_dotenv()`（文件不存在则跳过不报错），新增 `code/.env.example` 模板；与原有的 shell export 方式并存，不冲突（`.gitignore` 本就覆盖 `.env`/`*.env`，未改）。
+  - 后端已按新配置重启验证（`/api/workflow/status` 确认无 run 在跑才重启，符合"杀后端前查 running"的既有纪律），日志干净无报错。
 
 - **面试准备拆成独立 Navigator + 八股/项目分类**（2026-08-09，v2.19.2.16，commit `5b4fe3b`，后端全绿 + 前端 13 passed，build 绿；**在 worktree 分支 `worktree-orktree` 上，尚未合并回 master**）
   - **拆页**：原本是架构页（`StateMachine.tsx`）的第 5 个 tab，和"看懂系统架构"无关，也只能平铺一份内容。改成独立页 `pages/InterviewPrep.tsx` + 侧栏入口 + Topbar 标题映射（`Page` 类型加 `'interview'`，三处映射都要补，最后那处是 tsc 抓出来的）。架构页删掉 prep tab 及其专属组件（`RichText` 整体搬走，`CountPill` 留下——另两个 tab 在用）。

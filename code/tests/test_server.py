@@ -716,6 +716,104 @@ class TestConversations:
         assert cached.reply_text == ""
 
 
+# ── Pending applications（多站点扩展 Layer 2 审批队列）──────────────────────────
+
+def _pending_fields() -> list:
+    return [
+        {"field_id": "name", "label": "姓名", "kind": "demographic", "candidate_value": "张三"},
+        {"field_id": "id_number", "label": "证件号码", "kind": "government_id", "candidate_value": ""},
+    ]
+
+
+class TestPendingApplications:
+    def test_empty_list(self, client):
+        r = client.get("/api/pending-applications")
+        assert r.status_code == 200
+        assert r.json() == {"applications": [], "total": 0}
+
+    def test_list_filters_by_status(self, client):
+        id1 = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+        )
+        app.state.tracker.add_pending_application(
+            site_name="hytera", job_title="测试工程师", fields=_pending_fields(),
+        )
+        app.state.tracker.decide_pending_application(id1, "approved", fields=_pending_fields())
+
+        r = client.get("/api/pending-applications?status=pending")
+        data = r.json()
+        assert data["total"] == 1
+        assert data["applications"][0]["site_name"] == "hytera"
+
+    def test_get_single_application(self, client):
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+        )
+        r = client.get(f"/api/pending-applications/{app_id}")
+        assert r.status_code == 200
+        assert r.json()["site_name"] == "huawei"
+
+    def test_get_nonexistent_returns_404(self, client):
+        r = client.get("/api/pending-applications/999")
+        assert r.status_code == 404
+
+    def test_approve_writes_final_fields(self, client):
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+        )
+        edited = _pending_fields()
+        edited[1]["candidate_value"] = "110101199001011234"
+
+        r = client.post(f"/api/pending-applications/{app_id}/approve", json={"fields": edited})
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+        rec = app.state.tracker.get_pending_application(app_id)
+        assert rec.status == "approved"
+        assert rec.fields[1]["candidate_value"] == "110101199001011234"
+
+    def test_approve_requires_fields_list(self, client):
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+        )
+        r = client.post(f"/api/pending-applications/{app_id}/approve", json={})
+        assert r.status_code == 400
+
+    def test_reject_records_reason(self, client):
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+        )
+        r = client.post(f"/api/pending-applications/{app_id}/reject", json={"reason": "岗位不合适"})
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+        rec = app.state.tracker.get_pending_application(app_id)
+        assert rec.status == "rejected"
+        assert rec.reason == "岗位不合适"
+
+    def test_reject_without_body(self, client):
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+        )
+        r = client.post(f"/api/pending-applications/{app_id}/reject")
+        assert r.status_code == 200
+
+    def test_approve_already_decided_returns_409(self, client):
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+        )
+        app.state.tracker.decide_pending_application(app_id, "rejected")
+
+        r = client.post(f"/api/pending-applications/{app_id}/approve", json={"fields": _pending_fields()})
+        assert r.status_code == 409
+
+    def test_actions_on_nonexistent_return_404(self, client):
+        r = client.post("/api/pending-applications/999/approve", json={"fields": []})
+        assert r.status_code == 404
+        r = client.post("/api/pending-applications/999/reject")
+        assert r.status_code == 404
+
+
 # ── Workflow status / stop / trigger ─────────────────────────────────────────
 
 class TestWorkflow:

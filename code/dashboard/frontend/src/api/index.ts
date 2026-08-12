@@ -96,6 +96,28 @@ export interface PendingReply {
   job_url?: string
 }
 
+export type PendingApplicationFieldKind = 'demographic' | 'open_question' | 'government_id'
+
+export interface PendingApplicationField {
+  field_id: string
+  label: string
+  kind: PendingApplicationFieldKind
+  candidate_value: string
+}
+
+export interface PendingApplication {
+  id: number
+  site_name: string
+  job_title: string
+  company: string
+  job_url: string
+  fields: PendingApplicationField[]
+  status: 'pending' | 'approved' | 'rejected'
+  reason: string | null
+  created_at: string
+  decided_at: string | null
+}
+
 export interface Profile {
   name?: string
   keywords?: string[]
@@ -857,6 +879,22 @@ export const API = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    }),
+  getPendingApplications: (status?: string): Promise<{ applications: PendingApplication[]; total: number }> => {
+    const query = buildQuery({ status })
+    return requestJson(`/api/pending-applications${query}`)
+  },
+  approvePendingApplication: (id: number, fields: PendingApplicationField[]): Promise<{ ok: boolean }> =>
+    requestJson(`/api/pending-applications/${id}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields }),
+    }),
+  rejectPendingApplication: (id: number, reason?: string): Promise<{ ok: boolean }> =>
+    requestJson(`/api/pending-applications/${id}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
     }),
 }
 

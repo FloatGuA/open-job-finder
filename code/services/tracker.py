@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 
-from schemas import AppStatus, ApplicationRecord, HRConversation
+from schemas import AppStatus, ApplicationRecord, HRConversation, PendingApplication
 from services.logger import get_orchestrator_logger
 
 
@@ -218,6 +218,31 @@ class ApplicationTracker:
                 self.conn.execute("ALTER TABLE hr_conversations ADD COLUMN matched_resume TEXT DEFAULT ''")
             if "matched_resume_reason" not in hr_conv_cols:
                 self.conn.execute("ALTER TABLE hr_conversations ADD COLUMN matched_resume_reason TEXT DEFAULT ''")
+            # pending_applications: Layer 2 (人工审批) queue for the multi-site apply
+            # architecture (docs/multi-site-expansion-design.md). Layer 1 does not exist
+            # yet -- rows are seeded manually (scripts/seed_pending_application.py) until
+            # it does. `fields` is a JSON array of {field_id, label, kind, candidate_value};
+            # government_id fields never carry a candidate_value, the reviewer fills them.
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_applications (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_name    TEXT NOT NULL,
+                    job_title    TEXT NOT NULL,
+                    company      TEXT DEFAULT '',
+                    job_url      TEXT DEFAULT '',
+                    fields       TEXT NOT NULL,
+                    status       TEXT NOT NULL DEFAULT 'pending',
+                    reason       TEXT,
+                    created_at   TEXT NOT NULL,
+                    decided_at   TEXT
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pending_applications_status ON pending_applications(status)"
+            )
+
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_hr_conversations_stage ON hr_conversations(stage)"
             )
@@ -1093,6 +1118,96 @@ class ApplicationTracker:
             d = dict(row)
             result[d.pop("conv_id")].append(d)
         return result
+
+    # ── Pending Applications (Layer 2 审批队列) ─────────────────────────────────
+
+    def _row_to_pending_application(self, row: sqlite3.Row) -> PendingApplication:
+        return PendingApplication(
+            id=row["id"],
+            site_name=row["site_name"],
+            job_title=row["job_title"],
+            company=row["company"] or "",
+            job_url=row["job_url"] or "",
+            fields=json.loads(row["fields"]),
+            status=row["status"],
+            reason=row["reason"],
+            created_at=row["created_at"],
+            decided_at=row["decided_at"],
+        )
+
+    def add_pending_application(
+        self,
+        site_name: str,
+        job_title: str,
+        fields: list,
+        company: str = "",
+        job_url: str = "",
+    ) -> int:
+        """Insert a new Layer 1 candidate awaiting Layer 2 approval. Returns the new id."""
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                INSERT INTO pending_applications
+                    (site_name, job_title, company, job_url, fields, status, created_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (site_name, job_title, company, job_url, json.dumps(fields, ensure_ascii=False),
+                 self._utcnow_iso()),
+            )
+            return cur.lastrowid
+
+    def get_pending_applications(self, status: Optional[str] = None) -> List[PendingApplication]:
+        if status:
+            rows = self.conn.execute(
+                "SELECT * FROM pending_applications WHERE status = ? ORDER BY created_at DESC",
+                (status,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM pending_applications ORDER BY created_at DESC",
+            ).fetchall()
+        return [self._row_to_pending_application(row) for row in rows]
+
+    def get_pending_application(self, application_id: int) -> Optional[PendingApplication]:
+        row = self.conn.execute(
+            "SELECT * FROM pending_applications WHERE id = ?",
+            (application_id,),
+        ).fetchone()
+        return self._row_to_pending_application(row) if row else None
+
+    def decide_pending_application(
+        self,
+        application_id: int,
+        decision: str,
+        fields: Optional[list] = None,
+        reason: Optional[str] = None,
+    ) -> int:
+        """Record the reviewer's decision -- the only place the Layer 2 go-signal is
+        written. decision='approved' expects the reviewer-edited `fields` (with any
+        government_id values filled in by hand) as the final values that Layer 3 will
+        act on; decision='rejected' expects an optional `reason`. Returns rows updated."""
+        assert decision in ("approved", "rejected"), f"invalid decision: {decision!r}"
+        with self.conn:
+            if fields is not None:
+                cur = self.conn.execute(
+                    """
+                    UPDATE pending_applications
+                    SET status = ?, fields = ?, reason = ?, decided_at = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (decision, json.dumps(fields, ensure_ascii=False), reason,
+                     self._utcnow_iso(), application_id),
+                )
+            else:
+                cur = self.conn.execute(
+                    """
+                    UPDATE pending_applications
+                    SET status = ?, reason = ?, decided_at = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (decision, reason, self._utcnow_iso(), application_id),
+                )
+            return cur.rowcount
 
     def close(self) -> None:
         self.conn.close()

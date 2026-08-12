@@ -100,6 +100,24 @@ class HRConversation:
 
 
 @dataclass
+class PendingApplication:
+    """Layer 2 (人工审批) record for the multi-site apply architecture. `fields` is a
+    JSON-serializable list of {field_id, label, kind, candidate_value}; kind is one of
+    demographic/open_question/government_id. government_id fields never carry a
+    candidate_value -- Layer 1 only flags them, the reviewer fills them by hand."""
+    id: Optional[int]
+    site_name: str
+    job_title: str
+    fields: list             # [{field_id, label, kind, candidate_value}]
+    company: str = ""
+    job_url: str = ""
+    status: str = "pending"  # pending|approved|rejected
+    reason: Optional[str] = None
+    created_at: str = ""
+    decided_at: Optional[str] = None
+
+
+@dataclass
 class ChatScanResult:
     total_convs: int
     unread_count: int
