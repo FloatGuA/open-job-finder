@@ -7,12 +7,15 @@ from typing import List, Optional
 
 import requests
 import yaml
+from dotenv import load_dotenv
 
 from protocols import LLMProviderProtocol
 from services.exceptions import AllProvidersFailedError
 from services.logger import get_orchestrator_logger
 
 logger = get_orchestrator_logger()
+
+load_dotenv()  # 从项目根目录 .env 读取 API key（DEEPSEEK_API_KEY 等）；不存在则跳过，不报错
 
 
 class ClaudeCLIProvider:

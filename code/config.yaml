@@ -12,21 +12,17 @@ llm:                          # [W1+W2] 模型与 fallback 链，按 capability 
     - type: ollama            # 本地 ollama（快）
       model: qwen3:8b
       base_url: http://localhost:11434
-    balanced:                 # W2 分析（analyze_intent）走此链，仅 ollama、无 CLI 兜底。
-                              # - ollama(qwen3:8b, think=false)：准且快（实测富模板 6/6、~0.9s），本地无配额问题。
-                              #   ollama 断线时诚实退化 unknown（不错判）。
-                              # 为什么不加 CLI 兜底（两个 CLI 都是 agent 壳、非 chat 补全）：
-                              # - codex_cli 走 `codex exec` 是编程 agent（协作式执行任务，会澄清/规划），把要
-                              #   分类的消息当背景素材：实测无 schema 时反问「你想让我干什么」，加 --output-schema
-                              #   只是把反问塞进 JSON 形状→随手填 general/unknown。非 prompt 可修（三种 system ×
-                              #   low/med/high reasoning × ignore-user-config 全错）。
-                              # - claude_cli 走 `claude -p` 忽略 system 且抢主对话 Claude 配额。
-                              # 正道——要用云端大模型判意图，走 chat completions 而非 agent CLI：
-                              # - OpenAI(gpt-5.x)：设 OPENAI_API_KEY + 加 openai_compatible provider。
-                              # - Claude：设 ANTHROPIC_API_KEY + 加 anthropic_api（自带 key、不抢主对话配额）。
-    - type: ollama
-      model: qwen3:8b
-      base_url: http://localhost:11434
+    balanced:                 # 几乎所有业务逻辑走此链（score_job/analyze_intent/generate_reply/
+                              # info_pool/resume_blocks文本/resume_tailor/selfcheck），唯一真正被生产代码
+                              # 调用的能力档（fast/powerful 无生产调用方，见下）。
+                              # 2026-08-12 起改用 DeepSeek（openai_compatible，chat completions，非 agent CLI），
+                              # 不留本地 ollama 兜底——用户已有 DeepSeek API、明确不需要本地模型。
+                              # 为什么不用 CLI（codex_cli/claude_cli）：两者都是 agent 壳、非纯 chat 补全，
+                              # 会把待分类消息当背景素材反问「你想让我干什么」，非 prompt 可修，历史实测全错。
+    - type: openai_compatible
+      model: deepseek-chat
+      base_url: https://api.deepseek.com
+      api_key_env: DEEPSEEK_API_KEY
     powerful:
     - type: claude_cli
     - type: anthropic_api

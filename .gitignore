@@ -11,6 +11,7 @@ code/output/
 code/logs/
 /logs/
 /data/
+/resumes/
 
 # Python
 __pycache__/

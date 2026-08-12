@@ -14,3 +14,4 @@ questionary>=2.0.0
 sse-starlette>=1.6.1
 httpx>=0.24.0
 pytest-cov>=4.0.0
+python-dotenv>=1.0.0          # 从 .env 读取 API key（DEEPSEEK_API_KEY 等），.env 已在 .gitignore
