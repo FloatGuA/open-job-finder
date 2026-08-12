@@ -884,7 +884,7 @@ export const API = {
     const query = buildQuery({ status })
     return requestJson(`/api/pending-applications${query}`)
   },
-  approvePendingApplication: (id: number, fields: PendingApplicationField[]): Promise<{ ok: boolean }> =>
+  approvePendingApplication: (id: number, fields: PendingApplicationField[]): Promise<{ ok: boolean; saved_new_facts: string[] }> =>
     requestJson(`/api/pending-applications/${id}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

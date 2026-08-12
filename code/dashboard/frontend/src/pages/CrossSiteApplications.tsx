@@ -94,6 +94,7 @@ export default function CrossSiteApplications() {
   const [rejecting, setRejecting] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const [saving, setSaving] = useState(false)
+  const [justSavedFacts, setJustSavedFacts] = useState<string[] | null>(null)
 
   const refresh = () => {
     API.getPendingApplications(filter === 'all' ? undefined : filter)
@@ -124,9 +125,13 @@ export default function CrossSiteApplications() {
     setSaving(true)
     try {
       const finalFields: PendingApplicationField[] = selected.fields.map((f) => ({ ...f, candidate_value: editedFields[f.field_id] ?? '' }))
-      await API.approvePendingApplication(selected.id, finalFields)
+      const result = await API.approvePendingApplication(selected.id, finalFields)
       refresh()
       setSelectedId(null)
+      if (result.saved_new_facts.length > 0) {
+        setJustSavedFacts(result.saved_new_facts)
+        window.setTimeout(() => setJustSavedFacts(null), 5000)
+      }
     } finally {
       setSaving(false)
     }
@@ -153,6 +158,12 @@ export default function CrossSiteApplications() {
           <span className="text-text-1">{T_INTRO_A}</span>
           {T_INTRO_B}
         </p>
+
+        {justSavedFacts && (
+          <div className="rounded-lg px-3 py-1.5 text-[13px]" style={{ background: 'rgba(48,209,88,0.12)', color: '#30d158' }}>
+            {'\u5df2\u8bb0\u4f4f\u65b0\u4fe1\u606f\uff1a'}{justSavedFacts.join('\u3001')}
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-1.5">
           {(['pending', 'approved', 'rejected', 'all'] as Filter[]).map((f) => (

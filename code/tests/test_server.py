@@ -772,6 +772,44 @@ class TestPendingApplications:
         assert rec.status == "approved"
         assert rec.fields[1]["candidate_value"] == "110101199001011234"
 
+    def test_approve_saves_new_demographic_fact_to_personal_info(self, client):
+        """审批人填的、personal_info 里原来没有的 demographic 字段，批准时应
+        自动存回 basic.yaml——用户 2026-08-13 提出的自动保存需求。"""
+        app_id = app.state.tracker.add_pending_application(
+            site_name="bambulab", job_title="项目管理", fields=[
+                {"field_id": "学校名称", "label": "学校名称", "kind": "demographic", "candidate_value": "深圳大学"},
+            ],
+        )
+        r = client.post(
+            f"/api/pending-applications/{app_id}/approve",
+            json={"fields": [{"field_id": "学校名称", "label": "学校名称", "kind": "demographic", "candidate_value": "深圳大学"}]},
+        )
+        assert r.status_code == 200
+        assert r.json()["saved_new_facts"] == ["学校名称"]
+
+        from multisite.personal_info_loader import load_personal_info
+        assert load_personal_info(srv.DATA_DIR / "personal_info")["学校名称"] == "深圳大学"
+
+    def test_approve_does_not_save_government_id_or_open_question(self, client):
+        app_id = app.state.tracker.add_pending_application(
+            site_name="bambulab", job_title="项目管理", fields=[
+                {"field_id": "身份证号", "label": "身份证号", "kind": "government_id", "candidate_value": "110101199001011234"},
+                {"field_id": "自我评价", "label": "自我评价", "kind": "open_question", "candidate_value": "熟悉后端开发"},
+            ],
+        )
+        r = client.post(
+            f"/api/pending-applications/{app_id}/approve",
+            json={"fields": [
+                {"field_id": "身份证号", "label": "身份证号", "kind": "government_id", "candidate_value": "110101199001011234"},
+                {"field_id": "自我评价", "label": "自我评价", "kind": "open_question", "candidate_value": "熟悉后端开发"},
+            ]},
+        )
+        assert r.status_code == 200
+        assert r.json()["saved_new_facts"] == []
+
+        from multisite.personal_info_loader import load_personal_info
+        assert load_personal_info(srv.DATA_DIR / "personal_info") == {}
+
     def test_approve_requires_fields_list(self, client):
         app_id = app.state.tracker.add_pending_application(
             site_name="huawei", job_title="后端工程师", fields=_pending_fields(),

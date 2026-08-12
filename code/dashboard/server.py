@@ -1671,7 +1671,15 @@ async def approve_pending_application(application_id: int, body: dict) -> JSONRe
     rowcount = tracker.decide_pending_application(application_id, "approved", fields=fields)
     if rowcount == 0:
         return JSONResponse({"ok": False, "error": "already decided"}, status_code=409)
-    return JSONResponse({"ok": True})
+
+    # 审批人顺手填的、personal_info 里原来没有的 demographic 事实，存回去供以后
+    # 复用（用户 2026-08-13 提出）。government_id/open_question 不碰，已有 key
+    # 不覆盖，见 multisite/personal_info_loader.py::save_new_facts。
+    # 显式传本模块的 DATA_DIR（而非用 save_new_facts 自己的默认值）——测试夹具
+    # 靠 monkeypatch DATA_DIR 隔离文件系统，用默认值会绕过隔离、写到真实用户数据。
+    from multisite.personal_info_loader import save_new_facts
+    saved_new_facts = save_new_facts(fields, DATA_DIR / "personal_info")
+    return JSONResponse({"ok": True, "saved_new_facts": saved_new_facts})
 
 
 @app.post("/api/pending-applications/{application_id}/reject")

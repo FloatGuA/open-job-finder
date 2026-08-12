@@ -5,8 +5,8 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-13（v2.21.0.0 多站点扩展 Layer 1 识别 agent 首次真机跑通——LangGraph + chrome-devtools-mcp + DeepSeek，对拓竹科技（Bambu Lab）真实职位端到端验证成功，写入真实 pending_applications 记录） |
-| 当前版本 | 2.21.0.0                       |
+| 最后更新 | 2026-08-13（v2.21.1.1 Layer 2 审批时自动保存新的 personal_info 事实——人工在审批页填的、之前没见过的 demographic 字段顺手存回 basic.yaml；真机验证过程中发现 8765 端口有个工具权限够不着杀的僵尸进程，已记入 PITFALLS.md，用户计划重启电脑解决） |
+| 当前版本 | 2.21.1.1                       |
 
 ## 待跟进（另开会话）
 
@@ -166,13 +166,20 @@
 
 ## 已完成
 
+- **Layer 2 审批时自动保存新的 personal_info 事实**（2026-08-13，v2.21.0.1→v2.21.1.1，pytest 全量绿含新增 16 例，代码逻辑真机验证正确，前端提示条未肉眼验证——见下方遗留）
+  - **背景**：用户在审批页看到学校名称/学历/专业留空，提出"填写了没见过的字段应该自动保存"。对齐两点：新事实来源="人在 L2 审批页手填时顺便存"（不是 Agent 编）；存储位置="并入 `basic.yaml`"（不新建 education.yaml）。
+  - **交付**：`multisite/personal_info_loader.py` 新增 `save_new_facts(fields, data_dir)`——只存 `kind=demographic` 且非空的字段，government_id/open_question 一律不碰，已存在的 key 不覆盖（`personal_info` 是人工权威资料，不该被某次审批顺带改掉）；`dashboard/server.py` 的 `approve_pending_application` 批准成功后调用它，返回体新增 `saved_new_facts`；前端 `CrossSiteApplications.tsx` 批准成功后如有新字段，显示"已记住新信息：xxx"绿色提示条 5 秒自动消失。
+  - **踩坑**：端点必须显式传 `DATA_DIR / "personal_info"`（server.py 自己的、测试夹具会 monkeypatch 的 `DATA_DIR`），不能用 `save_new_facts` 自己的默认值——写错的话测试会绕过隔离直接写真实用户数据，已发现并修正，测试跑完确认真实 `basic.yaml` 未被污染。
+  - **真机验证过程中意外发现一个比"`--reload` 不触发"更严重的环境问题**（详细记入 `PITFALLS.md`）：8765 端口有个"网络层面活着、但本会话工具权限够不着杀掉"的僵尸进程，反复重启都在无声绑定失败、实际一直是旧进程在服务请求。通过在 8766 端口另起全新实例，直接验证了代码本身完全正确（`curl` 测通、`saved_new_facts` 正确返回、`basic.yaml` 正确写入）。8765 那个僵尸进程留给用户自己处理，用户计划重启电脑解决。
+  - **已知遗留**：前端"已记住新信息"提示条只经过 tsc/vitest 静态验证和逻辑代码审查，没有在真实浏览器里肉眼看过渲染效果（被 8765 僵尸进程问题打断）——下次先看这个。
+
 - **多站点扩展 Layer 1（识别 agent）首次真机跑通**（2026-08-13，v2.21.0.0，pytest 全量绿含新增 26 例，端到端真机验证成功，非 seed 假数据）
   - **背景**：Layer 2 做完但只用 seed 假数据验证过；这轮按用户要求直接搭 LangGraph + chrome-devtools-mcp + DeepSeek（不先用 claude-in-chrome 手动跑一遍再决定），目标站点原计划华为，用户中途改为拓竹科技（Bambu Lab）校招网站（`bambulab.jobs.feishu.cn`，飞书招聘 ATS），给了一个真实职位 URL，用户全程在场并真实登录了自己的账号。
   - **交付**：`code/multisite/` 新包——`personal_info_loader.py`（读 `data/personal_info/` 拍平成 dict）、`chrome_mcp_client.py`（桥接 chrome-devtools-mcp，持久化登录目录按站点分开 `data/browser_profile_multisite/<site>/`）、`layer1_agent.py`（LangGraph 四节点：登录检查→打开申请并上传简历→扫描空字段并分类→写 `pending_applications`；government_id 类字段代码强制清空，工具集里根本不包含"提交"能力，安全边界靠没给这个手段而不是靠指令）。`prompts/classify_field.md` 新 prompt；`scripts/run_layer1.py` CLI 入口（`--site` 必填）。
   - **真机调试过程**（10 轮真跑，每轮定位并修一个具体 bug，全部详细记入 `PITFALLS.md`）：工具返回值内容块提取（list vs str）、MCP session 每次工具调用各开一次导致 `about:blank`（最严重的一个）、SPA 渲染时序、无 accessible name 元素静默漏字段（"学校名称""学历""来源渠道"三个必填 combobox 一度完全没被扫描到）、单选题被拆成 N 个假字段、DeepSeek 结构化输出方法不兼容（需 `method="function_calling"`）、Python 输出缓冲导致后台跑看不到实时进度、阻塞 `input()` 在后台进程里没法用（改成轮询检测登录态）。
   - **最终结果**（`pending_applications` id=6，真实数据）：demographic 字段（姓名/邮箱）正确从 `personal_info` 选中真实值；open_question 字段（来源渠道）生成了合理候选文本；学校名称/学历/专业/毕业时间因 `personal_info` 里没有教育背景数据，正确留空未编造（不是漏洞，是数据源本来没有，见下方遗留）；这张表单本身没有证件号码字段，故没有 government_id 类输出。已在 Dashboard「跨站点投递」页人工确认可正常审批——`DECISION.md`"L2 结构上不可替代"那条记的"从未被真实数据验证过"的缺口，本轮补上了。
   - **测试**：`tests/test_layer1_agent.py` 新增 20 例（用真机捕获的真实、无 PII 的 a11y 快照做 fixture）+ `tests/test_personal_info_loader.py` 6 例。
-  - **已知遗留/下一步**：①`personal_info` 没有教育背景字段（学校/学历/专业），要不要扩充待定；②这次是我用 claude-in-chrome 手动浏览找到的职位 URL 喂给 Layer 1，不是 Layer 1 自己搜索筛选出来的——用户提出希望 Layer 1 未来能按存好的偏好条件（校招/应届生/深圳/运营·产品·Agent开发方向/避免有经验要求）自己搜索匹配，这次为了先验证核心机制没做，是明确的下一步，需要想清楚偏好存哪（`profile.yaml` 已有 cities/degree/experience 可复用，方向关键词要新加）；③Layer 3/4 仍是 0 行代码；④反自动化验证仍未专门做，这次真跑走完整流程没被拦，只是非正式积极信号；⑤`chrome-devtools-mcp` 用 `@latest` 未锁版本，这次验证过的是 1.7.0。
+  - **已知遗留/下一步**：①`personal_info` 没有教育背景字段（学校/学历/专业），要不要扩充待定——**部分缓解**：下面「自动保存新事实」功能上线后，人工审批时填一次就能记住，下次同类字段不用再问；②这次是我用 claude-in-chrome 手动浏览找到的职位 URL 喂给 Layer 1，不是 Layer 1 自己搜索筛选出来的——用户提出希望 Layer 1 未来能按存好的偏好条件（校招/应届生/深圳/运营·产品·Agent开发方向/避免有经验要求）自己搜索匹配，**已获用户批准、是下一个要做的功能**（暂停于自动保存这个插队需求，用户计划重启电脑后继续），需要想清楚偏好存哪（`profile.yaml` 已有 cities/degree/experience 可复用，方向关键词要新加）；③Layer 3/4 仍是 0 行代码；④反自动化验证仍未专门做，这次真跑走完整流程没被拦，只是非正式积极信号；⑤`chrome-devtools-mcp` 用 `@latest` 未锁版本，这次验证过的是 1.7.0；⑥`pending_applications` id=6 已被用户自行在 Dashboard 批准（发生在自动保存功能上线前，未触发保存）。
 
 - **多站点扩展 Layer 2 审批队列最小实现**（2026-08-12，v2.20.0.0→2.20.0.1，pytest 752 passed 退出码0，前端 tsc+50 vitest 全绿+build 成功，真机浏览器全流程验证通过）
   - **背景**：`docs/multi-site-expansion-design.md` 的四层运行时架构（识别→审批→分派→验证）明确建议不要一次性搭整个框架，按风险从高到低分三步，Layer 2 是"唯一不依赖其他任何东西、且不可绕过的必建项"，从这里起步。
