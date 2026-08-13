@@ -319,3 +319,13 @@
 - 否掉了什么，为什么：否掉"复用 ModelRouter，在外面手写一层 LangChain BaseChatModel 包装它"——包装的价值不大，ModelRouter 的 FallbackChain 多 provider 容灾、capability 路由这些能力对 Layer 1 这条独立路径没有实际意义（目前只用一个 provider，不需要 fallback 语义），硬套上去反而要多写一层适配代码。也否掉"继续用项目的 safe_parse_json 手工解析 JSON"——LangChain 原生结构化输出对这个场景更合适，没理由绕远路。
 - 代价 / 已知不足：Layer 1 是目前唯一一处 LLM 调用完全游离于项目 `ModelRouter`/`FallbackChain` 之外的地方，provider_used 追踪、fallback 容灾这些项目级能力在这里都没有——DeepSeek 挂了 Layer 1 就直接失败，没有降级路径。
 - 什么情况下该重新考虑：Layer 1 未来需要支持多 provider 容灾（比如 DeepSeek 限流时切到其他模型）时，需要重新评估要不要把它接回 ModelRouter 体系，或者给 ModelRouter 补一层 LangChain 兼容接口。
+
+## personal_info 与 info_pool 去重：姓名/电话/邮箱唯一真源在 info_pool，身份事实单独存 identity.yaml
+
+- 日期 / 版本：2026-08-13，v2.21.1.2
+- 背景：Layer 1（多站点识别 agent）这次新建了 `data/personal_info/{basic,identity}.yaml` 存自动填表用的身份事实，但项目里早就有一套「信息池」（`data/info_pool.yaml`，简历系统的主库）也存了姓名/电话/邮箱。用户发现前端根本没有「个人信息」这个 Navigator，提出应该做一个，同时指出"这两个做的地方其实高度重合"，要求先讨论怎么实现。
+- 调查发现（先查真实数据再下结论，不是凭概念猜）：两边**只有姓名/电话/邮箱三个字段真正重叠**。`info_pool.basic_info` 有 name/phone/email/city/degree/target_title（简历抬头概念）；`personal_info` 有 name/phone/email + gender/birth_date/id_country/id_type（政府表单身份概念）。gender/birth_date/证件类字段**在 info_pool 的 schema 里完全不存在**（grep「性别/出生/证件」零命中）。而且真实数据里**电话号码只有 personal_info 有、info_pool 是空的**——去重前必须先迁移，不然会丢数据。
+- 选了什么：**分层去重，不是整体合并**。①姓名/电话/邮箱的唯一真源定为 `info_pool.basic_info`，`load_personal_info()` 读的时候去池里取这三个字段，`personal_info/basic.yaml` 整个文件退役删除（迁移时先把真实电话值通过 `info_pool.save_pool` API 写进池，走正规 API 保留快照，不手改 YAML）。②性别/出生日期/证件国家/证件类型等身份事实**继续单独存 `identity.yaml`**，不并进 info_pool。③新建独立的「个人信息」Navigator（`pages/PersonalInfo.tsx`）——姓名/电话/邮箱在这个页面**只读展示**，明确标注"来自简历信息池，去「简历」页编辑"；只有 identity.yaml 那部分可编辑。④审批时自动保存的新事实（`save_new_facts`）也改成一律写 identity.yaml，不碰 info_pool。
+- 否掉了什么，为什么：①**否掉"把身份字段并进 info_pool"**——info_pool 的语义是"简历内容主库"，会被 LLM 读取和整体重写（`build_pool` 让 LLM 重排 sections、`compose` 按 JD 挑块生成简历）；性别/证件类型不是简历内容、不该参与这套 LLM 加工流程。而且 government_id 硬约束之所以好守住，正是因为 personal_info 这个模块足够小、足够独立、跟 LLM 生成流程隔开——混进去会让这条安全边界的守护面积大幅扩大。②**否掉"两边都保留姓名/电话/邮箱，不去重"**——同一份数据两个写入口必然漂移，跟本项目「一个状态转换只能有一份 SQL」是同一条纪律（那条铁律的历史教训是一次审查连抓四例同构漂移）。③**否掉"在新页面里也做姓名/电话/邮箱的编辑"**——那等于又开第二个写入口，跟②同理；info_pool 那边已经有完整编辑 UI + 快照/回滚，新页面没理由重复一套。
+- 代价 / 已知不足：①用户想改姓名/电话/邮箱得去「简历」页，不在「个人信息」页——多一次跳转，换来的是不会出现两处数据打架。②`personal_info_loader` 现在依赖 info_pool 的文件格式（读 `basic_info` 那一节），简历系统未来改 schema 这里会跟着坏——已通过 `_POOL_IDENTITY_KEYS` 常量集中，且有单测覆盖（`test_pool_non_identity_fields_are_not_included` 等）。③identity.yaml 没有 info_pool 那样的快照/回滚，误删只能手动恢复——这次先不做，字段少且页面上删除需要显式点保存才生效。
+- 什么情况下该重新考虑：identity.yaml 的字段数量增长到跟 info_pool 一个量级（比如自动保存积累了几十个字段），或者出现"同一字段两边都有但语义不同"的新情况时，重新评估要不要给 identity 也上快照机制、或干脆把两套存储统一到一个带版本管理的框架下。

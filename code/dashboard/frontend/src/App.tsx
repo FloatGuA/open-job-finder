@@ -12,6 +12,7 @@ import Resume from './pages/Resume'
 import StateMachine from './pages/StateMachine'
 import InterviewPrep from './pages/InterviewPrep'
 import CrossSiteApplications from './pages/CrossSiteApplications'
+import PersonalInfo from './pages/PersonalInfo'
 import Settings from './pages/Settings'
 import { AppContext, type AppContextValue, type Page } from './context/app-context'
 
@@ -25,6 +26,7 @@ const PAGE_COMPONENTS: Record<Page, JSX.Element> = {
   lifecycle: <StateMachine />,
   interview: <InterviewPrep />,
   crosssite: <CrossSiteApplications />,
+  personalinfo: <PersonalInfo />,
   settings: <Settings />,
 }
 

@@ -774,7 +774,7 @@ class TestPendingApplications:
 
     def test_approve_saves_new_demographic_fact_to_personal_info(self, client):
         """审批人填的、personal_info 里原来没有的 demographic 字段，批准时应
-        自动存回 basic.yaml——用户 2026-08-13 提出的自动保存需求。"""
+        自动存回 identity.yaml——用户 2026-08-13 提出的自动保存需求。"""
         app_id = app.state.tracker.add_pending_application(
             site_name="bambulab", job_title="项目管理", fields=[
                 {"field_id": "学校名称", "label": "学校名称", "kind": "demographic", "candidate_value": "深圳大学"},
@@ -788,7 +788,8 @@ class TestPendingApplications:
         assert r.json()["saved_new_facts"] == ["学校名称"]
 
         from multisite.personal_info_loader import load_personal_info
-        assert load_personal_info(srv.DATA_DIR / "personal_info")["学校名称"] == "深圳大学"
+        result = load_personal_info(srv.DATA_DIR / "personal_info", srv.DATA_DIR / "info_pool.yaml")
+        assert result["学校名称"] == "深圳大学"
 
     def test_approve_does_not_save_government_id_or_open_question(self, client):
         app_id = app.state.tracker.add_pending_application(
@@ -808,7 +809,8 @@ class TestPendingApplications:
         assert r.json()["saved_new_facts"] == []
 
         from multisite.personal_info_loader import load_personal_info
-        assert load_personal_info(srv.DATA_DIR / "personal_info") == {}
+        result = load_personal_info(srv.DATA_DIR / "personal_info", srv.DATA_DIR / "info_pool.yaml")
+        assert result == {}
 
     def test_approve_requires_fields_list(self, client):
         app_id = app.state.tracker.add_pending_application(
@@ -850,6 +852,43 @@ class TestPendingApplications:
         assert r.status_code == 404
         r = client.post("/api/pending-applications/999/reject")
         assert r.status_code == 404
+
+
+# ── Personal info（多站点扩展表单填写用的身份事实，跟 info_pool 去重后）──────────
+
+class TestPersonalInfo:
+    def test_empty_state(self, client):
+        r = client.get("/api/personal-info")
+        assert r.status_code == 200
+        assert r.json() == {"basic": {"name": "", "phone": "", "email": ""}, "identity": {}}
+
+    def test_basic_reflects_info_pool(self, client):
+        pool_path = srv.DATA_DIR / "info_pool.yaml"
+        pool_path.parent.mkdir(parents=True, exist_ok=True)
+        pool_path.write_text(
+            yaml.safe_dump({"basic_info": {"name": "张三", "phone": "13800000000", "email": "zhangsan@example.com", "city": "深圳"}}, allow_unicode=True),
+            encoding="utf-8",
+        )
+        r = client.get("/api/personal-info")
+        assert r.status_code == 200
+        assert r.json()["basic"] == {"name": "张三", "phone": "13800000000", "email": "zhangsan@example.com"}
+
+    def test_save_and_reload_identity(self, client):
+        r = client.put("/api/personal-info", json={"identity": {"gender": "男", "birth_date": "2000-01-01"}})
+        assert r.status_code == 200
+        assert r.json()["identity"] == {"gender": "男", "birth_date": "2000-01-01"}
+
+        r = client.get("/api/personal-info")
+        assert r.json()["identity"] == {"gender": "男", "birth_date": "2000-01-01"}
+
+    def test_save_rejects_government_id_field(self, client):
+        r = client.put("/api/personal-info", json={"identity": {"id_number": "110101199001011234"}})
+        assert r.status_code == 400
+        assert client.get("/api/personal-info").json()["identity"] == {}
+
+    def test_save_requires_identity_object(self, client):
+        r = client.put("/api/personal-info", json={})
+        assert r.status_code == 400
 
 
 # ── Workflow status / stop / trigger ─────────────────────────────────────────

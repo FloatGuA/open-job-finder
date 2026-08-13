@@ -1674,11 +1674,12 @@ async def approve_pending_application(application_id: int, body: dict) -> JSONRe
 
     # 审批人顺手填的、personal_info 里原来没有的 demographic 事实，存回去供以后
     # 复用（用户 2026-08-13 提出）。government_id/open_question 不碰，已有 key
-    # 不覆盖，见 multisite/personal_info_loader.py::save_new_facts。
+    # （含 info_pool.basic_info 里的姓名/电话/邮箱）不覆盖，见
+    # multisite/personal_info_loader.py::save_new_facts。
     # 显式传本模块的 DATA_DIR（而非用 save_new_facts 自己的默认值）——测试夹具
     # 靠 monkeypatch DATA_DIR 隔离文件系统，用默认值会绕过隔离、写到真实用户数据。
     from multisite.personal_info_loader import save_new_facts
-    saved_new_facts = save_new_facts(fields, DATA_DIR / "personal_info")
+    saved_new_facts = save_new_facts(fields, DATA_DIR / "personal_info", DATA_DIR / "info_pool.yaml")
     return JSONResponse({"ok": True, "saved_new_facts": saved_new_facts})
 
 
@@ -1694,6 +1695,41 @@ async def reject_pending_application(application_id: int, body: dict | None = No
         return JSONResponse({"ok": False, "error": "already decided"}, status_code=409)
     return JSONResponse({"ok": True})
 
+
+# ── 个人信息（多站点扩展表单填写用的身份事实；2026-08-13 跟 info_pool 去重）──
+# 姓名/电话/邮箱唯一写入口在「简历」页（info_pool.basic_info），这里只读引用，
+# 不重复建编辑入口。这里管的是 identity.yaml——性别/出生日期/证件类型等不属于
+# 简历抬头信息的身份事实，以及 Layer 2 审批时自动记住的新字段
+# （multisite.personal_info_loader.save_new_facts）。
+
+@app.get("/api/personal-info")
+async def get_personal_info() -> JSONResponse:
+    from multisite.personal_info_loader import load_identity
+
+    # 显式传本模块的 DATA_DIR（而非用 personal_info_loader 自己的默认值）——
+    # 测试夹具靠 monkeypatch DATA_DIR 隔离文件系统，用默认值会绕过隔离、读写
+    # 真实用户数据（同一坑之前在 approve 端点已踩过一次）。
+    pool_path = DATA_DIR / "info_pool.yaml"
+    pool_basic: dict = {}
+    if pool_path.exists():
+        with open(pool_path, encoding="utf-8") as f:
+            pool_basic = (yaml.safe_load(f) or {}).get("basic_info") or {}
+    basic = {k: pool_basic.get(k, "") for k in ("name", "phone", "email")}
+    return JSONResponse({"basic": basic, "identity": load_identity(DATA_DIR / "personal_info")})
+
+
+@app.put("/api/personal-info")
+async def save_personal_info(body: dict) -> JSONResponse:
+    from multisite.personal_info_loader import load_identity, save_identity
+
+    identity = body.get("identity")
+    if not isinstance(identity, dict):
+        return JSONResponse({"ok": False, "error": "identity must be an object"}, status_code=400)
+    try:
+        save_identity(identity, DATA_DIR / "personal_info")
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "identity": load_identity(DATA_DIR / "personal_info")})
 
 
 @app.post("/api/conversations/{conv_id}/open-in-browser")

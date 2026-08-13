@@ -118,6 +118,14 @@ export interface PendingApplication {
   decided_at: string | null
 }
 
+export interface PersonalInfo {
+  // 姓名/电话/邮箱的唯一真源是简历系统的信息池（info_pool.basic_info），这里只读展示，
+  // 编辑入口在「简历」页——不重复建第二个写入口。
+  basic: { name: string; phone: string; email: string }
+  // 性别/出生日期/证件类型等身份事实，以及审批时自动记住的新字段；开放式字典，可增删。
+  identity: Record<string, string>
+}
+
 export interface Profile {
   name?: string
   keywords?: string[]
@@ -889,6 +897,13 @@ export const API = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fields }),
+    }),
+  getPersonalInfo: (): Promise<PersonalInfo> => requestJson('/api/personal-info'),
+  savePersonalInfo: (identity: Record<string, string>): Promise<{ ok: boolean; identity: Record<string, string> }> =>
+    requestJson('/api/personal-info', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identity }),
     }),
   rejectPendingApplication: (id: number, reason?: string): Promise<{ ok: boolean }> =>
     requestJson(`/api/pending-applications/${id}/reject`, {

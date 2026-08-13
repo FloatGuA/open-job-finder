@@ -14,6 +14,7 @@ const PAGE_TITLES = {
   lifecycle: '\u67b6\u6784',
   interview: '\u9762\u8bd5\u51c6\u5907',
   crosssite: '\u8de8\u7ad9\u70b9\u6295\u9012',
+  personalinfo: '\u4e2a\u4eba\u4fe1\u606f',
   settings: '\u8bbe\u7f6e',
 } as const
 
