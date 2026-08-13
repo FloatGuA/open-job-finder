@@ -1136,7 +1136,8 @@ async def get_profile() -> JSONResponse:
     if not profile:
         return JSONResponse({"keywords": [], "cities": [], "experience": [], "degree": [], "salary": "", "scale": []})
     return JSONResponse({
-        "name": profile.get("name") or "",
+        # `name` 已于 v2.22.0 从 profile.yaml / Profile / 前端类型一并删除：
+        # 全流程不消费它（Boss 招呼由平台自动发送），保留只会让人以为它是必填的。
         "keywords": profile.get("keywords") or [],
         "cities": profile.get("cities") or [],
         "experience": profile.get("experience") or [],

@@ -1,37 +1,44 @@
 """Layer 1（识别/判断）agent —— docs/multi-site-expansion-design.md 四层架构的第一层。
 
-给一个具体的目标网站职位 URL，跑一遍：登录检查 → 打开申请表并上传简历触发对方
-解析 → 扫描解析后仍为空的表单字段并分类/生成候选值 → 写一条 pending_applications
-记录，交给已经做完的 Layer 2（Dashboard 审批页）人工审批。
+**自主度按层拆分，不是全链路统一**（v2.22.0 与用户重新对齐后的形态，取舍见
+DECISION.md「Layer 1 的导航/找入口/选岗交给 agent 自主决策」）：
 
-**硬边界，写在代码结构里，不是靠 prompt 叮嘱**：
-1. `build_graph()` 只绑定了 navigate_page/take_snapshot/click/upload_file/wait_for
-   这几个只读+局部交互的工具——工具集里根本没有任何"提交/下一步"能力，不是靠
-   指令让 agent 别点，是压根没给它点的手段。
+| 环节 | 谁来决策 | 为什么 |
+|------|---------|--------|
+| 找岗位、翻页、判断岗位符不符合偏好 | **agent** | 每个站点长得都不一样，写死选择器就退化成"每站一个适配器"——正是设计文档否掉的路线 |
+| 找投递入口、上传简历 | **agent** | 同上；入口按钮的叫法/位置各站不同 |
+| 解析快照里哪些是空字段 | 代码 | 结构化解析，没有判断成分 |
+| 字段分类（人口学/开放题/证件） | LLM 单次调用 | 需要语义判断，但不需要多轮自主 |
+| 取 personal_info 的值、写库 | 代码 | 确定性映射 |
+
+**硬边界**（代码强制，不是 prompt 叮嘱）：
+1. **提交类点击被 `safe_tools.make_guarded_click` 拒绝。** 旧版靠"工具集里没有
+   提交能力"守法；agent 拿到自由 `click` 之后那个守法就失效了（同一个工具既能点
+   「申请」也能点「提交」），所以换成点击工具自己拦。见 safe_tools 模块 docstring。
 2. government_id 类字段的候选值在 `_enforce_government_id_blank()` 里被无条件
    清空，不管 LLM 分类节点返回了什么。
+3. 整个 Layer 1 的产出只有一条 `pending_applications` 待审批记录——不做任何对外
+   动作。
 
-只处理"上传简历解析后，第一个可见 wizard 步骤"里的空字段——华为申请表是分步
-表单，不填完当前步就进不去下一步，而 Layer 1 本身不填表单（那是 Layer 3 的
-职责），所以结构上只能看到这一步，见 docs/multi-site-expansion-design.md 和
-DECISION.md 对应记录。
+只处理"上传简历解析后，第一个可见 wizard 步骤"里的空字段——分步表单不填完当前
+步就进不去下一步，而 Layer 1 本身不填表单（那是 Layer 3 的职责），所以结构上只能
+看到这一步。见 docs/multi-site-expansion-design.md 与 DECISION.md 对应记录。
 
-用 LangGraph StateGraph 编排（而不是一路到底的函数）是为了两点：①每个节点独立
-可观测（对应旧 W1/W2 pipeline 里 Step 的价值）；②浏览器自动化容易在任意一步
-失败（登录超时/上传失败/网络抖动），节点划分让失败定位更精确，未来要加断点续跑
-也有自然的挂载点——这次先不做 checkpointer，留着接口。
+用 LangGraph StateGraph 编排最外层（而不是一路到底的函数）是为了：①每个阶段独立
+可观测；②浏览器自动化容易在任意一步失败，节点划分让失败定位更精确；③未来加
+checkpointer 断点续跑有自然的挂载点（这次先不做，留着接口）。**节点内部**才是
+agent 循环——两层结构：外层确定性编排，内层自主决策。
 """
 import asyncio
-import os
 import re
 from pathlib import Path
 from typing import Literal, Optional, TypedDict
 
-from langchain_openai import ChatOpenAI
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from multisite import chrome_mcp_client
+from multisite import agent_runtime, chrome_mcp_client, preferences, safe_tools
 from multisite.personal_info_loader import load_personal_info, match_value
 from services.prompt_manager import PromptManager
 from services.tracker import ApplicationTracker
@@ -55,6 +62,27 @@ class ClassifyFieldsOutput(BaseModel):
     fields: list[FieldClassification]
 
 
+class FoundJob(BaseModel):
+    """选岗 agent 找到的一个候选岗位。`why` 不是装饰——审批页上人要能看出 agent
+    为什么认为它符合条件，否则"选错岗"这类新错误类型无从判断。"""
+    url: str = Field(description="岗位详情页的完整 URL")
+    title: str = Field(default="", description="岗位标题")
+    company: str = Field(default="", description="公司名，页面上没有就留空")
+    why: str = Field(default="", description="一句话说明对上了哪几条求职条件")
+
+
+class FindJobsOutput(BaseModel):
+    jobs: list[FoundJob] = Field(default_factory=list)
+
+
+class OpenApplicationOutput(BaseModel):
+    """导航 agent 的自评。**刻意让 agent 自己报成败**：它比外面的代码更清楚自己
+    卡在哪一步，而这个结论会被下游用来决定要不要继续扫描字段。"""
+    form_opened: bool = Field(description="是否成功打开了申请表")
+    resume_uploaded: bool = Field(description="简历是否上传成功")
+    note: str = Field(default="", description="失败时卡在哪一步、页面上看到什么")
+
+
 class ScannedElement(TypedDict):
     uid: str
     role: str
@@ -70,15 +98,22 @@ _PLACEHOLDER_HINT_RE = re.compile(r"[YyMmDd\-/]+")
 # ── graph state ───────────────────────────────────────────────────────────────
 
 class Layer1State(TypedDict, total=False):
+    # 输入：二选一。给 job_url = 直接处理这一个岗位（调试/复现用）；
+    # 给 search_url = 让选岗 agent 从这个入口自己找（正常用法）。
     job_url: str
+    search_url: str
     resume_pdf_path: str
     site_name: str
     job_title: str
     company: str
+    # 选岗 agent 的产出
+    found_jobs: list[FoundJob]
+    # 导航 agent 的产出
+    open_result: OpenApplicationOutput
     snapshot_text: str
     empty_elements: list[ScannedElement]
     classified_fields: list[FieldClassification]
-    pending_application_id: int
+    pending_application_id: Optional[int]
 
 
 def _parse_empty_input_elements(snapshot_text: str) -> list[ScannedElement]:
@@ -208,38 +243,78 @@ def _looks_logged_out(snapshot_text: str) -> bool:
     return "登录" in snapshot_text or "login" in lowered or "sign in" in lowered
 
 
-def _find_uid_by_label(snapshot_text: str, keywords: list[str], roles: Optional[set] = None) -> Optional[str]:
-    for line in snapshot_text.splitlines():
-        m = _SNAPSHOT_LINE_RE.search(line)
-        if not m:
-            continue
-        if roles and m.group("role") not in roles:
-            continue
-        name = m.group("name") or ""
-        if any(k.lower() in name.lower() for k in keywords):
-            return m.group("uid")
-    return None
+def make_record_job_tool(sink: list) -> "object":
+    """一个让 agent **随时把找到的岗位落袋**的工具，而不是憋到最后一次性输出。
+
+    **这是选岗 agent 能不能收敛的关键**，不是锦上添花。前两次真机跑都死在同一个
+    模式上：agent 每翻一页都说"让我分析当前页面的岗位"，然后又去点下一页，从不
+    产出结论，一路撞到 recursion limit。第一次是在筛选器上打转，加了点击预算后
+    换成在翻页上打转——**换个地方犯同一个错，说明不是预算不够，是"答案必须最后
+    一次性给出"这个结构本身在逼它继续探索**（它永远觉得还没看够）。
+
+    改成随时记录之后有三个好处：
+    1. agent 每记一条就拿到一次正反馈，探索有了明确的进展信号；
+    2. 即使最后超时/超限，已经记下的岗位仍然拿得到（部分结果不再全丢）；
+    3. 不需要它把所有候选一直记在上下文里——这本来就是 DeepSeek 64k 上下文
+       最吃不消的用法。
+    """
+    from langchain_core.tools import StructuredTool
+
+    async def record_job(url: str, title: str = "", company: str = "", why: str = "") -> str:
+        if not url or not url.startswith("http"):
+            return "记录失败：url 必须是完整的 http(s) 链接。请从快照里那一行的 url=\"...\" 取。"
+        if any(j.url == url for j in sink):
+            return f"这个岗位已经记过了（当前共 {len(sink)} 个），不用重复记，继续看下一个。"
+        sink.append(FoundJob(url=url, title=title, company=company, why=why))
+        return (f"已记录第 {len(sink)} 个：{title or url}。"
+                "继续找下一个；如果这一页看完了就翻页，全部看完就直接给出最终结论。")
+
+    return StructuredTool.from_function(
+        coroutine=record_job,
+        name="record_job",
+        description=(
+            "记录一个符合求职条件的岗位。每找到一个就立刻调用一次，不要攒到最后。"
+            "url 必须是完整链接（从快照里 link 行的 url=\"...\" 取）。"
+        ),
+    )
 
 
-def _find_uid_near_text(snapshot_text: str, landmark_keywords: list[str], roles: set) -> Optional[str]:
-    """兜底策略：目标控件本身经常没有可读的 accessible name（真机验证在拓竹
-    的投递表单上撞到过——`<input type=file>` 没有 name/label，`_find_uid_by_label`
-    对它必然无解）。改成先找到附近的文字地标（比如"将你的简历拖拽至此处"这类
-    提示语，它作为普通文本节点是有 name 的），命中地标之后，取文档序里紧跟着的
-    第一个目标 role 元素——不要求这个元素本身可读，只要求它离一段可读的说明文字
-    够近。"""
-    seen_landmark = False
-    for line in snapshot_text.splitlines():
-        m = _SNAPSHOT_LINE_RE.search(line)
-        if not m:
-            continue
-        name = m.group("name") or ""
-        if any(k.lower() in name.lower() for k in landmark_keywords):
-            seen_landmark = True
-            continue
-        if seen_landmark and m.group("role") in roles:
-            return m.group("uid")
-    return None
+def build_agent_toolset(
+    tools: list,
+    snapshot_provider,
+    snapshot_taker,
+) -> list:
+    """agent 能拿到的工具集：原始 `click` 被换成拒绝提交类点击的守法版本，
+    原始 `take_snapshot` 被换成会写快照缓存的版本，其余原样透传。
+
+    **抽成模块级函数（而不是留在 build_graph 的闭包里）就是为了能单测。**
+    整个模块最危险的一条不变量是"agent 拿到的 click 必须是守法版"——守法本身
+    有测试（tests/test_safe_tools.py），但"守法有没有真的接上去"如果测不到，
+    有人把这行改回原始 click 也不会有任何东西变红。
+    """
+    from langchain_core.tools import StructuredTool
+
+    async def _snap() -> str:
+        return await snapshot_taker()
+
+    snap_tool = StructuredTool.from_function(
+        coroutine=_snap,
+        name="take_snapshot",
+        description="给当前页面拍一张可访问性树快照，返回带 uid 的元素列表。点击/导航之后必须重新拍。",
+    )
+    guarded_click = safe_tools.make_guarded_click(
+        chrome_mcp_client.get_tool(tools, "click"),
+        snapshot_provider,
+    )
+    passthrough = [t for t in tools if t.name not in {"take_snapshot", "click"}]
+    return [snap_tool, guarded_click, *passthrough]
+
+
+# 注：`_find_uid_by_label` / `_find_uid_near_text` 于 v2.22.0 删除。它们是旧版
+# "代码写死点哪个 uid"路线的产物——找投递入口/上传控件现在由 agent 自己看页面
+# 决定（DECISION.md 记的方向调整）。按标签定位元素这件事本身在 Layer 3 的"代码
+# 填写"工具里还会需要，但那时的输入是**审批过的字段名**而不是猜出来的关键词，
+# 语义不同，届时重写即可，不留一个没有消费方的函数在这里等着被误用。
 
 
 def _enforce_government_id_blank(fields: list[FieldClassification]) -> list[FieldClassification]:
@@ -250,30 +325,63 @@ def _enforce_government_id_blank(fields: list[FieldClassification]) -> list[Fiel
     return fields
 
 
-def build_graph(tools: list, personal_info: Optional[dict] = None, tracker: Optional[ApplicationTracker] = None):
+def build_graph(
+    tools: list,
+    personal_info: Optional[dict] = None,
+    tracker: Optional[ApplicationTracker] = None,
+    max_pages: int = 3,
+    max_jobs: int = 5,
+    max_filter_clicks: int = 4,
+    select_only: bool = False,
+):
     """组装 Layer 1 的 LangGraph。tools 来自 chrome_mcp_client.get_tools()，通过
-    闭包绑定进各节点——不放进 state（不是可序列化/可 checkpoint 的东西）。"""
-    navigate = chrome_mcp_client.get_tool(tools, "navigate_page")
+    闭包绑定进各节点——不放进 state（不是可序列化/可 checkpoint 的东西）。
+
+    外层是确定性编排，`find_jobs` / `open_application` 两个节点内部才是 agent
+    循环（见模块 docstring 的分工表）。
+    """
     take_snapshot = chrome_mcp_client.get_tool(tools, "take_snapshot")
-    click = chrome_mcp_client.get_tool(tools, "click")
-    upload_file = chrome_mcp_client.get_tool(tools, "upload_file")
-    wait_for = chrome_mcp_client.get_tool(tools, "wait_for")
 
     personal_info = personal_info if personal_info is not None else load_personal_info()
     tracker = tracker or ApplicationTracker()
     pm = PromptManager()
 
-    async def navigate_and_check_login(state: Layer1State) -> dict:
-        await navigate.ainvoke({"type": "url", "url": state["job_url"]})
+    # agent 用的快照缓存：guarded click 需要知道"agent 是基于哪张快照决定点这个
+    # uid 的"。不在守法里自己重新截图——见 safe_tools.make_guarded_click 注释。
+    _latest_snapshot = {"text": ""}
+
+    async def _snapshot_and_cache() -> str:
+        text = _extract_text(await take_snapshot.ainvoke({}))
+        _latest_snapshot["text"] = text
+        return text
+
+    def _agent_tools() -> list:
+        return build_agent_toolset(
+            tools,
+            snapshot_provider=lambda: _latest_snapshot["text"],
+            snapshot_taker=_snapshot_and_cache,
+        )
+
+    async def ensure_ready(state: Layer1State) -> dict:
+        """导航到入口页，等页面真的渲染出来，必要时等人工登录。
+
+        **刻意留在代码里而不是交给 agent**：这两件事都不是判断题，是等待循环。
+        交给 agent 只会让它在一张空白页/登录页上反复截图、烧上下文，最后报一个
+        含糊的失败——而且它没有"等 10 分钟"这种耐心（recursion_limit 会先到）。
+        """
+        entry = state.get("job_url") or state["search_url"]
+        navigate = chrome_mcp_client.get_tool(tools, "navigate_page")
+        await navigate.ainvoke({"type": "url", "url": entry})
+
         # navigate_page 只保证浏览器导航本身完成，不保证 SPA 客户端渲染完成
         # （真机验证撞到过：不等就立刻截图，拿到的是 about:blank，后面所有步骤
         # 都在一张空页面上找元素，必然全部落空）。轮询直到快照不再是空壳。
-        snapshot = _extract_text(await take_snapshot.ainvoke({}))
+        snapshot = await _snapshot_and_cache()
         for _ in range(10):
             if not _looks_blank(snapshot):
                 break
             await asyncio.sleep(1)
-            snapshot = _extract_text(await take_snapshot.ainvoke({}))
+            snapshot = await _snapshot_and_cache()
         else:
             _dump_debug_snapshot("page_still_blank_after_wait", snapshot)
             raise RuntimeError("页面加载后仍是空白（等待 10 秒未渲染），已存快照到 data/multisite_debug/")
@@ -286,7 +394,7 @@ def build_graph(tools: list, personal_info: Optional[dict] = None, tracker: Opti
             print("检测到可能未登录，请在弹出的 Chrome 窗口里手动登录（最多等待 10 分钟）...")
             for _ in range(60):
                 await asyncio.sleep(10)
-                snapshot = _extract_text(await take_snapshot.ainvoke({}))
+                snapshot = await _snapshot_and_cache()
                 if not _looks_logged_out(snapshot):
                     print("检测到登录态，继续。")
                     break
@@ -294,37 +402,75 @@ def build_graph(tools: list, personal_info: Optional[dict] = None, tracker: Opti
                 raise RuntimeError("等待手动登录超时（10 分钟），请重新运行")
         return {"snapshot_text": snapshot}
 
-    async def open_application_and_upload_resume(state: Layer1State) -> dict:
-        snapshot = state["snapshot_text"]
-        apply_uid = _find_uid_by_label(snapshot, ["申请", "apply", "投递"])
-        if apply_uid:
-            await click.ainvoke({"uid": apply_uid})
-            await wait_for.ainvoke({"text": ["上传", "upload", "简历"]})
-            snapshot = _extract_text(await take_snapshot.ainvoke({}))
+    async def find_jobs(state: Layer1State) -> dict:
+        """选岗 agent：从入口页自己浏览、筛选、判断岗位符不符合求职偏好。
 
-        # 先按可读标签找上传控件；找不到就退回"离'简历'相关文字最近的可交互
-        # 元素"（真机验证在拓竹的投递表单上撞到过：<input type=file> 本身没有
-        # accessible name，直接按标签匹配必然落空，见 _find_uid_near_text 注释）。
-        upload_uid = _find_uid_by_label(
-            snapshot, ["简历", "resume", "选择文件", "upload"], roles={"button", "textbox"}
-        ) or _find_uid_near_text(
-            snapshot, ["简历", "resume", "拖拽", "drag"], roles={"button", "textbox"}
+        给了 job_url 就整个跳过——那是"我已经知道要投哪个"的调试/复现路径。
+        """
+        if state.get("job_url"):
+            return {"found_jobs": [FoundJob(url=state["job_url"], title=state.get("job_title", ""),
+                                            company=state.get("company", ""), why="由调用方直接指定")]}
+
+        prompt = pm.render(
+            "layer1_find_jobs",
+            {
+                "constraints": preferences.render_constraints(),
+                "max_pages": str(max_pages),
+                "max_jobs": str(max_jobs),
+                # 筛选器点击预算。第一次真机跑就是死在这里：agent 正确点了
+                # 深圳/产品/研发/日常实习，但每次截图后又去点下一个筛选器，
+                # 始终不收敛，一路撞到 recursion limit。"最多翻 N 页"约束不住
+                # 这种打转——翻页和调筛选器是两件事，必须分别给预算。
+                "max_filter_clicks": str(max_filter_clicks),
+            },
         )
-        if upload_uid is None:
-            _dump_debug_snapshot("upload_uid_not_found", snapshot)
-            raise RuntimeError("找不到简历上传入口，需人工看一下当前页面结构（目标站点表单可能与预期不同，已把快照存到 data/multisite_debug/）")
+        # 岗位随时经 record_job 落到这个 sink 里，不依赖 agent 最后一次性输出。
+        sink: list[FoundJob] = []
+        tools_for_agent = [*_agent_tools(), make_record_job_tool(sink)]
+        agent = agent_runtime.build_agent(tools_for_agent, prompt)
+        try:
+            await agent_runtime.run_agent(agent, f"入口页面：{state['search_url']}\n请开始。")
+        except GraphRecursionError:
+            # 兜圈子超限**不再是全损**：已经 record 下来的岗位照样用。这正是把
+            # 结果外置到工具里的主要收益，别改成向上抛——那等于把"找到 3 个但
+            # 第 4 页开始打转"退化成"什么都没有"。
+            print(f"[layer1] 选岗 agent 达到步数上限，采用已记录的 {len(sink)} 个岗位。", flush=True)
+        return {"found_jobs": sink[:max_jobs]}
 
-        await upload_file.ainvoke({"uid": upload_uid, "filePath": state["resume_pdf_path"]})
-        # 不是所有站点都像华为那样有"解析成功/失败"的文字反馈（DECISION.md「表单
-        # 字段填写简化」已记录这个前提不总成立）——固定等几秒让上传/预览渲染完，
-        # 不强求一个可能压根不存在的成功信号。
-        await asyncio.sleep(3)
+    async def open_application(state: Layer1State) -> dict:
+        """导航 agent：打开第一个候选岗位的申请表并上传简历。
 
-        return {"snapshot_text": _extract_text(await take_snapshot.ainvoke({}))}
+        只处理第一个候选——一次 Layer 1 run 产出一条待审批记录。多岗位批量由
+        调用方循环 run 来做，不在图里展开：那会让"哪个岗位失败了"变得难以定位，
+        而且各岗位之间本来就没有共享状态。
+        """
+        jobs = state.get("found_jobs") or []
+        if not jobs:
+            return {"open_result": OpenApplicationOutput(
+                form_opened=False, resume_uploaded=False, note="没有找到符合条件的岗位")}
+
+        job = jobs[0]
+        prompt = pm.render("layer1_open_application", {"resume_path": state["resume_pdf_path"]})
+        agent = agent_runtime.build_agent(_agent_tools(), prompt, response_format=OpenApplicationOutput)
+        result = await agent_runtime.run_agent(agent, f"岗位详情页：{job.url}\n请开始。")
+        outcome: OpenApplicationOutput = result.get("structured_response") or OpenApplicationOutput(
+            form_opened=False, resume_uploaded=False,
+            note="agent 未给出结构化结论：" + agent_runtime.last_text(result)[:300],
+        )
+        # 字段扫描读的是**代码自己拍的**最后一张快照，不是 agent 的自述——agent
+        # 可能说"打开了"但实际停在别的页面上。快照是唯一可核对的事实来源。
+        snapshot = await _snapshot_and_cache()
+        return {
+            "open_result": outcome,
+            "snapshot_text": snapshot,
+            "job_title": state.get("job_title") or job.title,
+            "company": state.get("company") or job.company,
+            "job_url": job.url,
+        }
 
     async def scan_and_classify_fields(state: Layer1State) -> dict:
-        _dump_debug_snapshot("scan_raw_snapshot", state["snapshot_text"])
-        empty_elements = _parse_empty_input_elements(state["snapshot_text"])
+        _dump_debug_snapshot("scan_raw_snapshot", state.get("snapshot_text", ""))
+        empty_elements = _parse_empty_input_elements(state.get("snapshot_text", ""))
         if not empty_elements:
             return {"empty_elements": [], "classified_fields": []}
 
@@ -339,11 +485,7 @@ def build_graph(tools: list, personal_info: Optional[dict] = None, tracker: Opti
                 "fields": fields_desc,
             },
         )
-        llm = ChatOpenAI(
-            model="deepseek-chat",
-            base_url="https://api.deepseek.com",
-            api_key=os.environ["DEEPSEEK_API_KEY"],
-        )
+        llm = agent_runtime.build_model()
         # method="function_calling"：LangChain 对 with_structured_output 的默认策略
         # 会尝试 OpenAI 较新的 json_schema response_format，DeepSeek 的 API 不支持
         # （真机验证撞到 400 Error: "This response_format type is unavailable
@@ -355,6 +497,11 @@ def build_graph(tools: list, personal_info: Optional[dict] = None, tracker: Opti
         return {"empty_elements": empty_elements, "classified_fields": classified}
 
     async def write_pending_application(state: Layer1State) -> dict:
+        # 一个字段都没扫到就不写记录：一条空的待审批记录对人没有任何信息量，
+        # 只会让审批队列里堆垃圾，还会让人误以为"这个岗位处理过了"。
+        if not state.get("classified_fields"):
+            return {"pending_application_id": None}
+
         fields_payload = [
             {
                 "field_id": f.field_id,
@@ -384,14 +531,24 @@ def build_graph(tools: list, personal_info: Optional[dict] = None, tracker: Opti
         return {"pending_application_id": app_id}
 
     graph = StateGraph(Layer1State)
-    graph.add_node("navigate_and_check_login", navigate_and_check_login)
-    graph.add_node("open_application_and_upload_resume", open_application_and_upload_resume)
+    graph.add_node("ensure_ready", ensure_ready)
+    graph.add_node("find_jobs", find_jobs)
+    graph.add_edge(START, "ensure_ready")
+    graph.add_edge("ensure_ready", "find_jobs")
+
+    if select_only:
+        # 只跑到选岗为止。**整个 Layer 1 里只有选岗是零副作用的**（纯浏览），
+        # 后面上传简历是对真实企业系统的真实动作。把这条短路做成"图里根本没有
+        # 后续节点"而不是"节点里判断一下要不要跳过"——少一条能走到上传的路径，
+        # 就少一个"某个条件写反了就真传上去了"的可能。
+        graph.add_edge("find_jobs", END)
+        return graph.compile()
+
+    graph.add_node("open_application", open_application)
     graph.add_node("scan_and_classify_fields", scan_and_classify_fields)
     graph.add_node("write_pending_application", write_pending_application)
-
-    graph.add_edge(START, "navigate_and_check_login")
-    graph.add_edge("navigate_and_check_login", "open_application_and_upload_resume")
-    graph.add_edge("open_application_and_upload_resume", "scan_and_classify_fields")
+    graph.add_edge("find_jobs", "open_application")
+    graph.add_edge("open_application", "scan_and_classify_fields")
     graph.add_edge("scan_and_classify_fields", "write_pending_application")
     graph.add_edge("write_pending_application", END)
 
@@ -399,21 +556,41 @@ def build_graph(tools: list, personal_info: Optional[dict] = None, tracker: Opti
 
 
 async def run_layer1(
-    job_url: str,
     resume_pdf_path: str,
     site_name: str,
+    job_url: str = "",
+    search_url: str = "",
     headless: bool = False,
     tracker: Optional[ApplicationTracker] = None,
-) -> int:
-    """跑一次 Layer 1，返回写入的 pending_applications id。"""
+    max_pages: int = 3,
+    max_jobs: int = 5,
+    max_filter_clicks: int = 4,
+    select_only: bool = False,
+) -> dict:
+    """跑一次 Layer 1。
+
+    `job_url` 和 `search_url` 二选一：
+      - `search_url`：正常用法，选岗 agent 从这个入口自己按偏好找岗位。
+      - `job_url`：调试/复现用，跳过选岗直接处理指定岗位。
+
+    返回整个 state（不只是 id）——**因为现在有"跑完了但一条记录都没写"的合法
+    结果**（没找到符合条件的岗位、或表单里没有空字段）。只返回一个 id 会把这三
+    种情况压成同一个 None，调用方无从区分是哪一种，也就无从判断该不该重试。
+    """
+    if bool(job_url) == bool(search_url):
+        raise ValueError("job_url 与 search_url 必须且只能给一个")
+
     profile_dir = chrome_mcp_client.profile_dir_for_site(site_name)
     client = chrome_mcp_client.build_client(profile_dir, headless=headless)
     # 必须是同一个 session 贯穿全程（一个 Chrome 实例），不能每次工具调用各开
     # 一个——见 chrome_mcp_client.open_session() 注释，真机验证撞过这个坑。
     async with chrome_mcp_client.open_session(client) as session:
         tools = await chrome_mcp_client.get_tools(session)
-        app = build_graph(tools, tracker=tracker)
-        result = await app.ainvoke(
-            {"job_url": job_url, "resume_pdf_path": resume_pdf_path, "site_name": site_name}
-        )
-    return result["pending_application_id"]
+        app = build_graph(tools, tracker=tracker, max_pages=max_pages, max_jobs=max_jobs,
+                          max_filter_clicks=max_filter_clicks, select_only=select_only)
+        return await app.ainvoke({
+            "job_url": job_url,
+            "search_url": search_url,
+            "resume_pdf_path": resume_pdf_path,
+            "site_name": site_name,
+        })

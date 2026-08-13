@@ -127,7 +127,6 @@ export interface PersonalInfo {
 }
 
 export interface Profile {
-  name?: string
   keywords?: string[]
   cities?: string[]
   experience?: string[]

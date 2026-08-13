@@ -198,3 +198,67 @@
 **真因（两层，叠在一起才会看着像"怎么杀都杀不掉"）**：① `netstat` 能看到端口上一个真实、活跃、有正常 ESTABLISHED 连接（含浏览器标签页连过去的连接）的进程在服务请求；但 `Get-Process`/`Get-CimInstance`/`taskkill` 全都说"这个进程不存在"。直接用 Python `os.kill(pid, signal.SIGTERM)` 去杀，报的是 `[WinError 5] 拒绝访问`——不是"进程不存在"的错误。**"拒绝访问" 和 "进程不存在" 是两种完全不同的信号**：前者说明操作系统层面这个进程真实存在，只是当前工具调用所在的会话/权限边界够不着它，不是它真的死了（怀疑与 Bash 工具每次调用可能处于不同进程组/会话隔离边界有关，尤其是很早之前用 `nohup ... & disown` 启动、已经脱离当次 shell 的后台进程）。② 更隐蔽的是：中途尝试"重新起一个新进程"时，新进程其实从头到尾没能绑定成功——`uvicorn` 日志里有 `[Errno 10048] 通常每个套接字地址只允许使用一次`（端口被占用），绑定失败后自己退出了；但因为是后台起的，没人盯着这行日志，表面看着像是"启动成功"，实际上全程还是那个杀不掉的旧进程在原地继续服务所有请求——这就是为什么"重启"之后还是旧代码行为。
 **正确做法**：①重启后端后不能只看返回状态码/是否 200，必须实际验证新代码带来的具体行为差异（比如新加的返回字段是否真的出现）；②反复重启都不见效时，去检查"新起的进程"自己的 stdout/stderr 日志里有没有 bind 失败的报错，不要无脑重试同一套杀进程流程；③`Get-Process`/`taskkill` 说进程不存在但 `netstat` 显示它在正常服务流量时，用 `os.kill` 测一下区分"拒绝访问"还是"进程不存在"；④确实杀不掉时，换一个端口另起一个全新实例是最快能把"代码本身对不对"和"旧进程能不能杀掉"两件事解耦验证的办法——代码验证过没问题后，"怎么真正杀掉旧进程"这件事交给用户在他们自己权限更高的终端/任务管理器里处理（重启电脑是最彻底的兜底）。
 **判据**：`os.kill` 报 `Access Denied`（而不是"进程不存在"），同时 `netstat` 显示该端口有正常 ESTABLISHED 流量——这个组合就是这条坑，别继续在原地重试同一套杀进程手法。
+
+## 一次重启就能让 W1/W2 全线瘫痪：Windows 保留端口段吃掉 9222，而报错指向的是"浏览器"
+
+**现象**（2026-08-13 真实发生，W1/W2 连续多次触发全失败）：`schedule_log.jsonl` 里 apply/check 全部 `result: error`，`summary` 是 DrissionPage 的
+
+```
+浏览器连接失败。地址: 127.0.0.1:9222
+提示: 1、用户文件夹没有和已打开的浏览器冲突 2、如为无界面系统，请添加'--headless=new' ...
+```
+
+每次固定 32 秒超时。8-09 的冒烟还全绿，中间没有任何相关代码改动。
+
+**为什么极易误诊**：DrissionPage 这段提示把人往"浏览器/用户文件夹冲突"引，于是自然会去杀残留 Chrome、删 LOCK、怀疑 Chrome 自动升级（本机确实 8-12 升到了 151）。**这些全是错的方向**，而且每一步都会"看起来有点道理"：
+- 杀光所有占用 profile 的 Chrome 之后**依然复现** → 排除残留进程/锁文件；
+- 换全新干净 profile、换 `--headless=new`/`old`/有头三种模式**全都复现**；
+- 换 Edge 151、换 Playwright 自带的 Chromium 145 **也全都复现** → 这一步很容易得出"Chromium 上游把 TCP 远程调试禁了"的错误结论。**实际上是我随手挑的验证端口 9231/9241/9251/9261/9271 全都落在同一个保留段里**，属于用错误的实验证实了错误的假设。
+
+**真因**：Chrome 自己的 stderr（`--enable-logging=stderr --v=1`）才给出唯一有效信号：
+
+```
+ERROR:net\socket\tcp_socket_win.cc:530] bind() returned an error: (0x271D)
+ERROR:content\browser\devtools\devtools_http_handler.cc:311] Cannot start http server for devtools.
+```
+
+`0x271D` = `WSAEACCES(10013)`，是**操作系统拒绝 bind**。Windows 的 Hyper-V/WinNAT 会在**每次开机时动态保留若干 TCP 端口段**，落在段内的 bind 一律失败：
+
+```
+netsh interface ipv4 show excludedportrange protocol=tcp
+      9211        9310       ← 9222 在里面
+```
+
+**而 Chrome 遇到这个错不会退出**——它照常把浏览器跑起来，只是没有调试端口，于是 DrissionPage 干等到超时。**"进程活着"因此完全不能作为"启动成功"的证据**：判据是 profile 目录里有没有生成 `DevToolsActivePort` 文件，以及 `curl http://127.0.0.1:<port>/json/version` 通不通。
+
+**关键性质：保留段每次重启都会挪。** 这意味着 ①故障来得毫无预兆，不需要任何代码或 Chrome 变更，重启一次就可能中招；②**任何硬编码端口都不是安全的**，包括换一个"看起来没人用"的数字。
+
+**正确做法**：启动前用 `socket.bind()` 探一个本机真能绑上的端口（普通 bind 复现的正是 Chrome 即将做的那次检查，保留段会自然被过滤掉），已实现为 `services/browser_context.py::pick_debug_port()`，`open_browser` 与 `resume_tailor.render_html_to_pdf` 共用这一份——**端口选择只能有一份实现**，否则就是"同一外部契约散多处必漂移"的又一例（`render_html_to_pdf` 原本硬编码 9920，纯属运气好没落进保留段）。
+
+**故障窗口（用证据钉准，别凭感觉说"多久没发现"）**：最后一次真正跑完的 run 是 **8-12 23:00**（check，352s）→ **8-13 12:56 重启**（`(Get-CimInstance Win32_OperatingSystem).LastBootUpTime`，保留端口段就是在这一刻重新分配的）→ **8-13 15:19 第一次失败**，也正是重启后第一次真跑。**故障是重启那一刻产生的，2 小时 23 分后被首次触发**——不是"停摆了好几天"。冒烟自 8-09 起就没再跑（`schedule.yaml` 的 `selfcheck.enabled: false`）是另一件事，两者不要混成一句话说。
+
+## `schedule_log.jsonl` 里 71% 的 "success" 是幻影，判据是 `duration_seconds > 0`
+
+**现象**：想回答"这个功能上一次真的正常是什么时候"，翻 `schedule_log.jsonl` 会看到密密麻麻的 `result: "success"`，于是得出"一直好好的"的错误结论。
+
+**真相**：2631 条记录里 **1883 条是 `duration_seconds: 0` 且 `summary: "ok"` 的 `trigger_type: manual`**，它们**没有对应的 run 日志**——即 `logs/runs/` 里根本没有那次运行的记录，pipeline 压根没跑。交叉验证很干净：8-13 当天 `logs/runs/` 有 11 条 run 记录，而 `schedule_log` 当天 `duration>0` 的条目也正好 11 条，**1:1 对上**；剩下那些 dur=0 的 success 一条都对不上。
+
+**为什么会误导人**：真跑和空转写进的是**同一个日志、同一个 `result` 字段**，只有 `duration_seconds` 能区分。真实的 W1/W2 跑一次是几十秒到几百秒（`round(time.monotonic() - start_time)`），**不可能是 0**；而且这些幻影条目经常成对出现在同一秒（`apply` 和 `check` 同一时刻各一条），真跑绝无可能。
+
+**判据**：读这个日志找"上次真的成功"，**必须先过滤 `duration_seconds > 0`**，或者直接去 `logs/runs/`（注意是**仓库根**的 `logs/runs/`，不是 `code/logs/runs/`——`run_diagnostics.RUNS_DIR` 用的是 `parent.parent.parent`）交叉验证。
+
+**注意**：`logs/runs/` 才是 run 的权威数据源（[[regression-diagnostics]] 已记"JSONL 是完整数据源"），`schedule_log` 只是触发流水账，两者定位不同——问题在于它没有把"接受了请求"和"真的跑完了"区分开。
+
+## 浏览器 agent 不肯收尾：症状是 GraphRecursionError，真因是"答案只能最后一次性给出"
+
+**现象**（2026-08-14 Layer 1 自主选岗真机跑，连撞两次）：agent 在招聘站上正确地点了「深圳」「产品」「研发」「日常实习」几个筛选器，每次截图后都说"让我分析当前页面的岗位"，然后**又去点下一个筛选器**，一路撞到 `GraphRecursionError: Recursion limit of 52 reached`。
+
+**为什么容易误诊成 prompt 不够严**：第一反应是加约束。加了"最多点 N 次筛选器"之后，它确实不碰筛选器了——**改成在翻页上打转**：2→3→4→2→4→2……，每次仍然说"让我分析当前页面的岗位"然后翻页。**换个地方犯同一个错，说明不是预算不够。**
+
+**真因**：结构问题不是措辞问题。当"答案必须在最后一次性输出"时，模型永远可以认为"我还没看够"，于是每一轮都选择继续探索而不是收尾——尤其是能力较弱的模型（这里是 DeepSeek）。约束只是把打转的位置从一个维度挪到另一个维度。
+
+**正确做法**：**把结果收集外置成一个工具**（`record_job`），让 agent 边看边记，而不是憋到最后。三个收益：①每记一条就有一次明确的进展信号，收尾变成自然行为；②即使最后仍然超限，已记录的部分**不再全丢**（在 `find_jobs` 里 catch `GraphRecursionError` 并采用已记录结果）；③不必把所有候选一直留在上下文里，正好避开小上下文模型最吃不消的用法。改完当次真机就干净收尾（EXIT=0，6 个岗位全部经独立抓页面核对无误）。
+
+**顺带两条**：
+- **agent 循环必须自带逐步追踪**，否则失败时只有一个 `GraphRecursionError`，完全不说明它在哪兜圈子。第一次真机跑的 226 行日志里除了 MCP 噪音和 traceback 什么都没有。追踪实现在 `agent_runtime.run_agent`（用 `astream` 逐条打工具调用与结果长度）。
+- **Windows 上 stdout 重定向到文件默认走 GBK**，追踪里的中文岗位名会被写成不可逆的替换字符，日志等于白打。`scripts/run_layer1.py` 启动时强制 `sys.stdout.reconfigure(encoding="utf-8")`。

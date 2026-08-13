@@ -215,15 +215,25 @@ li {{ margin-bottom: 2px; }}
 </body></html>"""
 
 
-def render_html_to_pdf(html: str, out_path: str, port: int = 9920) -> str:
+def render_html_to_pdf(html: str, out_path: str, port: int = 0) -> str:
     """用一次性无头 Chromium 把 HTML 渲染成 PDF（CDP Page.printToPDF）。
 
     复用项目已有的 DrissionPage/Chromium，避开 WeasyPrint 的 GTK 系统依赖。
     用独立调试端口 + 临时 profile，绝不碰 Boss 登录浏览器。
+
+    port=0（默认）表示探测一个本机真能 bind 的端口 —— 端口选择只有
+    browser_context.pick_debug_port 一份实现，别在这里再写死一个数字：
+    Windows 的保留端口段每次重启都会挪，硬编码的端口迟早会落进去
+    （2026-08-13 就是这样把 9222 上的 W1/W2 全打死的）。
     """
     import base64
 
     from DrissionPage import ChromiumPage, ChromiumOptions
+
+    from services.browser_context import pick_debug_port
+
+    if not port:
+        port = pick_debug_port()
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     html_path = os.path.abspath(out_path + ".html")

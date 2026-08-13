@@ -9,8 +9,6 @@ from multisite.layer1_agent import (
     FieldClassification,
     _enforce_government_id_blank,
     _extract_text,
-    _find_uid_by_label,
-    _find_uid_near_text,
     _looks_blank,
     _looks_logged_out,
     _parse_empty_input_elements,
@@ -96,21 +94,9 @@ class TestLooksLoggedOut:
         assert _looks_logged_out(REAL_FORM_SNAPSHOT) is False
 
 
-class TestFindUidByLabel:
-    def test_finds_submit_button(self):
-        assert _find_uid_by_label(REAL_FORM_SNAPSHOT, ["提交", "submit"]) == "2_59"
-
-    def test_returns_none_when_not_found(self):
-        assert _find_uid_by_label(REAL_FORM_SNAPSHOT, ["不存在的关键词"]) is None
-
-
-class TestFindUidNearText:
-    def test_finds_button_after_resume_landmark(self):
-        # 落地地标本身（"将你的简历拖拽至此处..."）就带"简历"/"拖拽"字样，命中
-        # 地标后继续找下一个 button——找到的是嵌套在里面的"选择文件"按钮，
-        # 这正是实际要点击上传的那个元素。
-        uid = _find_uid_near_text(REAL_FORM_SNAPSHOT, ["简历", "拖拽"], roles={"button"})
-        assert uid == "2_22"
+# 注：`TestFindUidByLabel` / `TestFindUidNearText` 随被测函数一起于 v2.22.0 删除
+# ——找投递入口/上传控件改由 agent 自主决定，这两个函数没有消费方了。留着测试
+# 断言一个已经不存在的行为，比没有测试更糟。
 
 
 class TestParseEmptyInputElements:

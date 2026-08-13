@@ -5,6 +5,7 @@ Extracted from BrowserAgent.start() / stop() so that w1_runner and w2_runner
 can open/close a DrissionPage ChromiumPage without importing BrowserAgent.
 """
 import logging
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -117,6 +118,36 @@ def _kill_stale_chrome(profile_dir: Path) -> None:
         logger.debug("_kill_stale_chrome: %s", exc)
 
 
+# Windows (Hyper-V / WinNAT) dynamically reserves large TCP port ranges at boot.
+# A bind inside one fails with WSAEACCES (0x271D) — and Chrome does NOT abort on
+# that: it logs "Cannot start http server for devtools" and keeps running with no
+# debug port, so DrissionPage just times out after ~32s with BrowserConnectError
+# ("浏览器连接失败。地址: 127.0.0.1:9222"). The failure therefore looks like a
+# browser/profile problem while the real cause is the OS refusing the bind.
+#
+# Critically, the reserved ranges MOVE on every reboot
+# (`netsh interface ipv4 show excludedportrange protocol=tcp`), so DrissionPage's
+# default 9222 is not safe to hardcode — 2026-08-13 a reboot put 9211-9310 into
+# the reserved set and killed every W1/W2 run. Probe for a port we can actually
+# bind instead: a plain bind() is exactly the check Chrome is about to make.
+_PORT_CANDIDATES = (9222,) + tuple(range(9311, 9411)) + tuple(range(9900, 9990))
+
+
+def pick_debug_port(candidates=_PORT_CANDIDATES) -> int:
+    """Return the first CDP port we can actually bind on this machine."""
+    for port in candidates:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
+    raise RuntimeError(
+        "No bindable CDP port found. Check reserved ranges with: "
+        "netsh interface ipv4 show excludedportrange protocol=tcp"
+    )
+
+
 def open_browser(data_dir: Path, headless: bool = True) -> ChromiumPage:
     """Open a DrissionPage browser and return the ChromiumPage object."""
     profile_dir = data_dir / "browser_profile"
@@ -139,6 +170,15 @@ def open_browser(data_dir: Path, headless: bool = True) -> ChromiumPage:
     options = ChromiumOptions()
     options.set_user_data_path(str(profile_dir))
     options.headless(headless)
+
+    # Never rely on DrissionPage's default 9222 — see _PORT_CANDIDATES above.
+    port = pick_debug_port()
+    options.set_local_port(port)
+    if port != _PORT_CANDIDATES[0]:
+        logger.warning(
+            "CDP port %s unavailable (likely a Windows reserved range); using %s instead",
+            _PORT_CANDIDATES[0], port,
+        )
 
     # Anti-bot: remove Chrome automation fingerprints that Boss detects.
     options.set_argument("--disable-blink-features=AutomationControlled")
