@@ -32,7 +32,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
 from multisite import chrome_mcp_client
-from multisite.personal_info_loader import load_personal_info
+from multisite.personal_info_loader import load_personal_info, match_value
 from services.prompt_manager import PromptManager
 from services.tracker import ApplicationTracker
 
@@ -360,9 +360,15 @@ def build_graph(tools: list, personal_info: Optional[dict] = None, tracker: Opti
                 "field_id": f.field_id,
                 "label": f.field_id,
                 "kind": f.kind,
+                # demographic 的值只能原样来自 personal_info，不许 LLM 编。取值走
+                # match_value 的同义解析而不是 dict.get：LLM 挑的 key 可能是页面
+                # 上的叫法（「生日」）而存储里是 birth_date，直接 get 会静默返回
+                # 空值——字段留空、但没有任何地方能看出是"没匹配上"还是"确实没
+                # 这份资料"。这里也兜住 LLM 没给 demographic_key 的情况：退回用
+                # 字段名本身去解析。
                 "candidate_value": (
-                    personal_info.get(f.demographic_key, "")
-                    if f.kind == "demographic" and f.demographic_key
+                    match_value(f.demographic_key or f.field_id, personal_info)
+                    if f.kind == "demographic"
                     else f.candidate_value
                 ),
             }

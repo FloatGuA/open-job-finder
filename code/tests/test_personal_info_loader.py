@@ -2,7 +2,14 @@
 import yaml
 import pytest
 
-from multisite.personal_info_loader import load_identity, load_personal_info, save_identity, save_new_facts
+from multisite.personal_info_loader import (
+    load_identity,
+    load_personal_info,
+    match_value,
+    resolve_key,
+    save_identity,
+    save_new_facts,
+)
 
 
 def _write(path, content):
@@ -238,3 +245,110 @@ class TestSaveIdentity:
         with pytest.raises(ValueError, match="政府证件号码"):
             save_identity({"id_number": "110101199001011234"}, data_dir)
         assert not (data_dir / "identity.yaml").exists()  # 拒绝时不该留下文件
+
+
+class TestResolveKey:
+    """字段名同义归一：不同网站对同一个事实叫法不同，必须都能落到同一个 key。"""
+
+    KNOWN = ["name", "phone", "email", "gender", "birth_date"]
+
+    def test_exact_match(self):
+        assert resolve_key("birth_date", self.KNOWN) == "birth_date"
+
+    @pytest.mark.parametrize("label", ["生日", "出生日期", "出生年月", "birthday", "Date of Birth", "DOB"])
+    def test_birth_date_synonyms(self, label):
+        assert resolve_key(label, self.KNOWN) == "birth_date"
+
+    @pytest.mark.parametrize("label", ["手机号码", "联系电话", "手机", "Mobile", "phone_number"])
+    def test_phone_synonyms(self, label):
+        assert resolve_key(label, self.KNOWN) == "phone"
+
+    @pytest.mark.parametrize("label", ["姓名 *", "姓名*", " 姓名 ", "姓名：", "Full Name"])
+    def test_normalization_strips_required_marker_and_spacing(self, label):
+        """真机扫到的 label 经常带 ` *`（必填标记）或全角冒号。"""
+        assert resolve_key(label, self.KNOWN) == "name"
+
+    def test_unknown_label_returns_none(self):
+        assert resolve_key("最高学历院校排名", self.KNOWN) is None
+
+    def test_empty_label_returns_none(self):
+        assert resolve_key("", self.KNOWN) is None
+
+    def test_resolves_when_stored_key_is_itself_a_synonym(self):
+        """存储里存的可能是中文别名（审批时人工存进去的），用英文规范名也要能查到。"""
+        assert resolve_key("birth_date", ["生日", "gender"]) == "生日"
+        assert resolve_key("出生年月", ["生日", "gender"]) == "生日"
+
+    def test_does_not_match_across_different_facts(self):
+        assert resolve_key("性别", ["birth_date"]) is None
+
+
+class TestMatchValue:
+    def test_returns_value_via_synonym(self):
+        info = {"birth_date": "2000-01-01", "name": "张三"}
+        assert match_value("生日", info) == "2000-01-01"
+        assert match_value("出生年月", info) == "2000-01-01"
+
+    def test_returns_empty_when_no_match(self):
+        assert match_value("最高学历院校排名", {"name": "张三"}) == ""
+
+    def test_returns_empty_for_empty_info(self):
+        assert match_value("生日", {}) == ""
+
+
+class TestSaveNewFactsSynonymDedup:
+    """同义字段不该被当成新字段重复保存——否则 identity.yaml 会越攒越乱。"""
+
+    def test_synonym_of_existing_key_is_not_saved_again(self, tmp_path):
+        data_dir = tmp_path / "personal_info"
+        pool_path = tmp_path / "info_pool.yaml"
+        _write(data_dir / "identity.yaml", "birth_date: '2000-01-01'\n")
+
+        saved = save_new_facts(
+            [{"field_id": "生日", "kind": "demographic", "candidate_value": "2000-01-01"}],
+            data_dir, pool_path,
+        )
+
+        assert saved == []
+        assert load_identity(data_dir) == {"birth_date": "2000-01-01"}
+
+    def test_synonym_of_pool_key_is_not_saved_again(self, tmp_path):
+        """姓名的真源在 info_pool，表单叫「姓名」时不该在 identity.yaml 里再存一份。"""
+        data_dir = tmp_path / "personal_info"
+        pool_path = tmp_path / "info_pool.yaml"
+        _write_pool(pool_path, {"name": "张三"})
+
+        saved = save_new_facts(
+            [{"field_id": "姓名", "kind": "demographic", "candidate_value": "张三"}],
+            data_dir, pool_path,
+        )
+
+        assert saved == []
+        assert not (data_dir / "identity.yaml").exists()
+
+    def test_two_synonyms_in_same_batch_save_only_once(self, tmp_path):
+        data_dir = tmp_path / "personal_info"
+        pool_path = tmp_path / "info_pool.yaml"
+
+        saved = save_new_facts(
+            [
+                {"field_id": "生日", "kind": "demographic", "candidate_value": "2000-01-01"},
+                {"field_id": "出生日期", "kind": "demographic", "candidate_value": "2000-01-01"},
+            ],
+            data_dir, pool_path,
+        )
+
+        assert saved == ["生日"]
+        assert load_identity(data_dir) == {"生日": "2000-01-01"}
+
+    def test_genuinely_new_field_still_saved(self, tmp_path):
+        data_dir = tmp_path / "personal_info"
+        pool_path = tmp_path / "info_pool.yaml"
+        _write(data_dir / "identity.yaml", "birth_date: '2000-01-01'\n")
+
+        saved = save_new_facts(
+            [{"field_id": "英语能力", "kind": "demographic", "candidate_value": "CET-6"}],
+            data_dir, pool_path,
+        )
+
+        assert saved == ["英语能力"]

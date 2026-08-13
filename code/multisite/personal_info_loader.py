@@ -29,6 +29,96 @@ _POOL_IDENTITY_KEYS = ("name", "phone", "email")
 # 而不是让它悄悄流进 demographic 候选值。
 _FORBIDDEN_KEYS = {"id_number", "id_no", "passport_number", "national_id"}
 
+# 同义字段名归一表：不同网站对同一个事实的叫法不一样（「生日」/「出生日期」/
+# 「出生年月」/ birthday 都是 birth_date）。没有这层归一会有两个后果，且都是
+# 静默的：①填表时 `personal_info.get("生日")` 查不到 birth_date，字段留空但没人
+# 知道为什么；②`save_new_facts` 把「生日」当成没见过的新字段又存一份，identity.yaml
+# 里同一个事实攒出好几个 key，越用越乱。
+#
+# 刻意用确定性规则表而不是 LLM：这正是 docs/multi-site-expansion-design.md 定的
+# 「人口学字段规则映射、开放问题才用 LLM」分工（调研牛客网申助手也验证了同一划分
+# ——它的实现就是"字段名映射库 + 同义词归一化"，纯规则）。新增同义词直接往这里加。
+_KEY_ALIASES: Dict[str, str] = {
+    # name
+    "姓名": "name", "名字": "name", "真实姓名": "name", "本人姓名": "name",
+    "fullname": "name", "yourname": "name",
+    # phone
+    "电话": "phone", "手机": "phone", "手机号": "phone", "手机号码": "phone",
+    "联系电话": "phone", "联系方式": "phone", "移动电话": "phone",
+    "mobile": "phone", "telephone": "phone", "phonenumber": "phone", "tel": "phone",
+    # email
+    "邮箱": "email", "电子邮箱": "email", "电子邮件": "email", "邮件": "email",
+    "常用邮箱": "email", "mail": "email", "emailaddress": "email",
+    # gender
+    "性别": "gender", "sex": "gender",
+    # birth_date
+    "生日": "birth_date", "出生日期": "birth_date", "出生年月": "birth_date",
+    "出生年月日": "birth_date", "出生日": "birth_date",
+    "birthday": "birth_date", "dateofbirth": "birth_date", "dob": "birth_date",
+    # id_country
+    "证件签发国家": "id_country", "证件签发国家地区": "id_country",
+    "签发国家": "id_country", "证件国家": "id_country", "国籍": "id_country",
+    # id_type
+    "证件类型": "id_type", "证件种类": "id_type", "idtype": "id_type",
+}
+
+
+def _normalize_key(raw: str) -> str:  # noqa: E302  (紧跟别名表，便于对照阅读)
+    """把字段名归一到可比较的形态：去空白/下划线/连字符、去必填星号和冒号、
+    ASCII 转小写。目的是让「手机号码 *」「Phone Number」「phone_number」这些
+    写法落到同一个串上——真机扫到的 label 经常带 ` *` 后缀（必填标记）。"""
+    s = (raw or "").strip()
+    for ch in ("*", "＊", "：", ":", " ", "　", "_", "-", "(", ")", "（", "）"):
+        s = s.replace(ch, "")
+    return s.lower()
+
+
+# 归一形态 → 规范名。**规范名自己也要能查到自己**（`birth_date` 归一成
+# `birthdate`，它不在别名表的 key 里）——否则"用规范名去找存成中文别名的 key"
+# 这个方向查不通，单测 test_resolves_when_stored_key_is_itself_a_synonym 抓到过。
+_CANONICAL_BY_NORMALIZED: Dict[str, str] = {
+    _normalize_key(alias): canonical for alias, canonical in _KEY_ALIASES.items()
+}
+for _canonical in set(_KEY_ALIASES.values()):
+    _CANONICAL_BY_NORMALIZED.setdefault(_normalize_key(_canonical), _canonical)
+
+
+def resolve_key(label: str, known_keys) -> Optional[str]:
+    """把一个表单字段名解析成 personal_info 里实际存在的 key，解析不出返回 None。
+
+    三级匹配，逐级放宽：①原样命中；②归一化后命中（吃掉星号/空格/大小写差异）；
+    ③过同义表拿到规范名，再正反两个方向找（label 是别名而存储用规范名，或反过来
+    存储里存的就是中文别名）。三级都不中说明这确实是个没见过的字段，交给调用方
+    处理（填表时留空等人工填，保存时当新事实存）。
+    """
+    if not label:
+        return None
+    known = list(known_keys)
+    if label in known:
+        return label
+
+    normalized = _normalize_key(label)
+    by_normalized = {_normalize_key(k): k for k in known}
+    if normalized in by_normalized:
+        return by_normalized[normalized]
+
+    canonical = _CANONICAL_BY_NORMALIZED.get(normalized)
+    if canonical:
+        if canonical in known:
+            return canonical
+        # 存储里的 key 本身也可能是某个同义词（比如审批时人工存成了「生日」），
+        # 那就反查：哪个已有 key 跟这个 label 归一到同一个规范名。
+        for key in known:
+            if _CANONICAL_BY_NORMALIZED.get(_normalize_key(key)) == canonical:
+                return key
+    return None
+
+
+def match_value(label: str, personal_info: Dict[str, str]) -> str:
+    """按字段名取值，取不到返回空字符串（不编造）。填表路径的唯一取值入口。"""
+    key = resolve_key(label, personal_info.keys())
+    return personal_info.get(key, "") if key else ""
+
 
 def load_personal_info(data_dir: Path = DATA_DIR, pool_path: Path = POOL_PATH) -> Dict[str, str]:
     """把 info_pool.basic_info（姓名/电话/邮箱）+ identity.yaml 拍平成一个
@@ -89,7 +179,15 @@ def save_new_facts(fields: List[dict], data_dir: Path = DATA_DIR, pool_path: Pat
             continue
         key = (f.get("field_id") or f.get("label") or "").strip()
         value = (f.get("candidate_value") or "").strip()
-        if not key or not value or key in existing or key in _FORBIDDEN_KEYS:
+        if not key or not value or key in _FORBIDDEN_KEYS:
+            continue
+        # 走同义解析而不是 `key in existing`：某个网站把生日叫「生日」、存储里
+        # 存的是 birth_date，直接判 in 会认为这是没见过的新字段又存一份，
+        # identity.yaml 里同一个事实攒出多个 key。解析得出说明已经有了 → 跳过。
+        if resolve_key(key, existing.keys()) is not None:
+            continue
+        # 同一批里的同义字段也只留第一个（表单上「生日」「出生日期」同时出现时）。
+        if resolve_key(key, new_facts.keys()) is not None:
             continue
         new_facts[key] = value
 
