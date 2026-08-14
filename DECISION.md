@@ -367,3 +367,43 @@
 - 否掉了什么，为什么：①**否掉"靠 prompt 叮嘱 agent 别点提交"**——项目里反复记过安全边界靠不给能力、不靠指令约束；prompt 里也写了，但那是第二道，不是唯一一道。②**否掉"关键词表里放「申请」「投递」「apply」"**——这些是**入口**词，拦掉它 Layer 1 连表单都进不去，表现为"什么都识别不到"，比拦不住更难查；表里只放终局短语（「确认投递」「立即投递」在，光「投递」不在）。特别地 `apply now` 刻意不加：英文招聘站上它通常是入口按钮。③**否掉 fail-closed**（取不到 label 就拒绝）——a11y 快照里大量可交互元素压根没有 accessible name（上传按钮和三个必填 combobox 都是），fail-closed 会让 agent 寸步难行。
 - 代价 / 已知不足：①**fail-open**：uid 不在快照里、或元素没有名字时放行。真正的兜底是四层架构本身——Layer 1 的产出只是一条待审批记录。②关键词表是中英文硬编码，遇到别的语言的站点会漏；③宁可误伤：如果哪个站点的入口按钮真叫「确认申请」，Layer 1 会进不去那个站，需要人看日志里的 `REFUSED` 才知道。
 - 什么情况下该重新考虑：接入非中英文站点时，或出现"入口按钮被误拦"的真实案例时，需要把关键词表改成可按站点配置。
+
+## Layer 1 是「纯执行 agent」：刻意不接全局 prompt 注入、不接 system.md
+
+- **日期 / 版本**：2026-08-14，v2.22.1
+- **背景**：查证发现 Layer 1 的 prompt 链路跟项目其余部分是断开的——`multisite/layer1_agent.py` 里是裸的 `PromptManager()`，而 `w1_runner.py` / `w2_runner.py` 都是 `PromptManager(injection=profile.prompt_injection)`。后果：①用户在设置页写的**全局注入对 Layer 1 一个字都没进去**；②三个 Layer 1 模板（`layer1_find_jobs` / `layer1_open_application` / `classify_field`）不在 `EDITABLE_PROMPTS` 白名单里，前端编辑不到；③`system.md` 只有 `tools/llm/score_job.py` 和 `analyze_intent.py` 通过 `load_system()` 加载，Layer 1 从没调用过。**这个现状原本是疏漏，不是设计**——写 Layer 1 时没接这条链。
+- **选了什么**：**保持不接，并把它转为有意的设计**（用户 2026-08-14 拍板）。用户的判断：「这条链路其实是一个纯粹的执行 Agent，整个项目应该做成多 Agent 合作的模式，这个 Agent 不管别的很多东西，只用专注于选岗即可。」即：Layer 1 的 agent 只需要"求职偏好 + 当前页面"两样输入，不需要项目级的人设/语气/全局补充指令——那些是给对外沟通类 agent（W2 回复 HR、简历生成）用的。
+- **否掉了什么，为什么**：①**否掉"顺手补上 `injection=`"**（一行改动，很有诱惑力）——全局注入的内容是用户为**对 HR 说话**写的（语气、强调什么、别提什么），灌进一个浏览器操作 agent 只会挤占本来就紧张的 64k 上下文，还可能干扰它的工具调用决策；改完还得重新真机验证 agent 行为，成本远大于"少了个功能"。②**否掉"把三个模板加进 `EDITABLE_PROMPTS`"**（这轮）——`save_override` 的占位符校验会拿它当普通模板管，但 `layer1_find_jobs.md` 里的 `{{max_filter_clicks}}` 之类是**运行参数**不是上下文，让用户在 prompt 编辑器里改它会和未来的"参数面板"打架，两个入口改同一个东西就是分叉。③**否掉"把 Layer 1 也接进 `system.md`"**——`system.md` 是 Boss 直聘求职助手的人设，跟"在企业招聘站上翻页选岗"不是同一个角色。
+- **代价 / 已知不足**：①用户想调 Layer 1 的行为，目前**只能改 `prompts/*.md` 源文件**，没有前端入口，也没有"恢复默认"；②"多 Agent 合作模式"目前只是方向，没有任何承载它的结构（没有 agent 注册表、没有各 agent 的能力/输入声明），所以"这个 agent 只管选岗"现在靠的是**没接线**而不是**有边界**；③项目里因此存在两套 prompt 治理方式（W1/W2/简历走 PromptManager 全套；Layer 1 只用它读文件），看代码的人会以为是漏了。**本来打算在前端「跨站点投递」页把"全局注入：未接入（有意）"标出来，但那个页面已被用户回滚**（2026-08-14，理由：架构讨论走 CLI 更直接），所以现在唯一的提示就是这条决策记录和 `multisite/layer1_agent.py` 的模块 docstring——**下一个人极可能"顺手补上 injection="**，这是已知且未消除的风险。
+- **什么情况下该重新考虑**：①真的开始做多 Agent 合作结构时（那时"每个 agent 吃什么 prompt"应该有统一声明，不再是各接各的）；②出现"确实需要跨 agent 生效的全局约束"时（比如某条法律/隐私红线要所有 agent 都遵守）——那种东西不该走用户自由文本注入，应该是代码级约束，参见 `make_guarded_click` 的做法。
+
+## Layer 1 的 MCP 工具从黑名单透传改为按节点分发的白名单
+
+- **日期 / 版本**：2026-08-14，v2.22.1
+- **背景**：用户问"纯 DeepSeek 没有多模态，agent 怎么判断图片"，顺着查实际工具面才发现的。dump 出来的事实：`chrome-devtools-mcp` 暴露 **29 个**工具，`build_agent_toolset` 的透传写法是黑名单 `[t for t in tools if t.name not in {"take_snapshot", "click"}]`，于是**其余 27 个全部交给了 agent**。
+- **问题**：①`evaluate_script`（任意 JS）一行 `document.querySelector(...).click()` 就绕过 `make_guarded_click`——守法点击形同虚设；②`press_key` 在输入框里回车通常等于提交；③`take_screenshot` 返回图像块，**DeepSeek 没有视觉**，而且 `agent_runtime._BULKY_TOOLS` 里没有它，图像块一旦进历史就永远不会被裁剪，卡死 64k 上下文；④`fill`/`fill_form`/`type_text`/`upload_file` 在选岗阶段完全不该有（prompt 里写了"不要填写任何表单"，但那是叮嘱不是边界）。
+- **为什么这条重要**：上一条决策（守法 click）和 `layer1_agent.py` 模块 docstring 都声称"提交防线是**代码强制**，不是 prompt 叮嘱"。**在修掉之前那句话是不成立的**——不是 guarded click 有问题（它有测试、做过变异验证），是它旁边开着 `evaluate_script` 这扇门。**黑名单挡不住"同一件事换个工具做"，而且 MCP 上游每加一个新工具，黑名单就自动漏一个。**
+- **选了什么**：改**白名单**，且**按节点分发**——`_PASSTHROUGH_FIND_JOBS = (navigate_page, wait_for)`；`_PASSTHROUGH_OPEN_APPLICATION = (navigate_page, wait_for, upload_file)`。两个节点都拿不到 `evaluate_script`。白名单取工具走 `chrome_mcp_client.get_tool`（点名取、取不到就抛）而不是过滤，这样 MCP 改工具名会当场炸，而不是静默少给一个工具、表现为"agent 莫名其妙不会翻页了"。
+- **否掉了什么，为什么**：①**否掉"两个节点共用一份白名单"**——`upload_file` 是对真实企业系统的真实动作，选岗阶段（纯浏览、零副作用）不该具备这个能力；共用一份就等于把"select-only 是零副作用"这个保证降级成了运气。②**否掉"保留黑名单，只把 evaluate_script 加进去"**——那只堵了今天知道的那个洞，`chrome-devtools-mcp` 下次升级加的工具照样自动漏进来。③**否掉"给 open_application 也放 fill/type_text"**——它只需要上传简历，填表是 Layer 3 审批之后的事；真需要时再加，比先给了再收回安全。
+- **代价 / 已知不足**：①**`open_application` 节点从来没真机验证过**（`--select-only` 只跑到 find_jobs），这次又收窄了它的工具集——**下次真机跑如果它卡住，第一个要怀疑的就是缺了某个工具**，`get_tool` 的报错帮不上忙（它只在名字不存在时抛，不在"agent 想要但没给"时抛）。②白名单是手维护的，加节点时容易忘配。③`hover` / `list_pages` 之类可能在某些站点确实需要，现在一律没有。
+- **验证**：`tests/test_safe_tools.py::TestAgentToolsetWiring` 加了 6 个断言（含 6 个危险工具的参数化拒绝测试、两个白名单精确相等、`upload_file` 只在导航节点、未知名字要抛）。**做了变异验证**：把 `allowed = [...]` 改回黑名单，测试退出码 1、`evaluate_script`/`take_screenshot` 等当场变红；还原后全绿。
+- **什么情况下该重新考虑**：真机跑 `open_application` 时如果 agent 明确卡在"我需要 X 工具但没有"，按需往对应白名单加**一个**，并在这里补记为什么需要它——不要图省事改回黑名单。
+
+## AI 方向的产品经理归 AI NATIVE，不归产品
+
+- **日期 / 版本**：2026-08-14，v2.23.0（**用户拍板**）
+- **背景**：给选岗 agent 加了"职责出现 LLM / 大模型 / Agent / 多模态 / AIGC 就归 AI NATIVE"的消歧规则之后，真机跑时它把「CyberBrick 产品经理 - 软件AI方向」从「产品」拉到了「AI NATIVE」。这是规则的副作用，不是 bug，但需要人来定这算不算对。
+- **选了什么**：**算对**。AI 方向的产品岗归 AI NATIVE，「产品」那一类留给不带 AI 的常规产品岗。规则写进 `prompts/layer1_find_jobs.md`。
+- **否掉了什么，为什么**：①**否掉"AI NATIVE 只放技术岗"**——那样这一类就退化成"算法工程师"的同义词，而用户设这一类是按**做的事情属于 AI 原生方向**划的，不是按职能划的。②**否掉"两边都算，占两份名额"**——名额是互斥分配的，一个岗位占两个类别的额度会让配额彻底失去意义。
+- **代价 / 已知不足**：「产品」这一类会明显变小（拓竹站上 3 个产品经理里至少 1 个被划走）。如果以后发现常规产品岗因此被挤没了，说明这条规则太宽，要收窄成"职责主体是 AI 能力本身"而不是"提到了 AI"。
+- **什么情况下该重新考虑**：产品类长期招不满而 AI NATIVE 长期溢出时；或用户开始把这两类投向不同公司时（那说明它们在用户心里是两条独立赛道，划分标准要重新谈）。
+
+## Layer 1 的 agent 步数耗尽必须显式检测，不能靠 GraphRecursionError
+
+- **日期 / 版本**：2026-08-14，v2.23.0
+- **背景**：`layer1_agent.find_jobs` 一直有个 `except GraphRecursionError` 兜底，注释还写着"兜圈子超限不再是全损"。第四次真机跑才发现**这个分支从来没执行过**：LangGraph 的 `create_react_agent` 在步数快用完时**不抛异常**，而是往 messages 里塞一句固定文案 `"Sorry, need more steps to process this request."` 然后正常返回（`langgraph/prebuilt/chat_agent_executor.py:689/716`，已核对安装的包，不是从日志猜的）。
+- **后果有多严重**：两种结局的返回值**结构完全相同**——都是正常返回、最后一条是 AI 文本消息。所以"所有分类桶都扫完了"和"扫到第二个桶第 4 页没步数了"在日志里长得一模一样。**前三次真机跑得出的"agent 主动收尾"结论因此全都不可靠**，其中至少第三次实际上是半途而废（产品/运营 0 个不是站上没有，是压根没扫到）。
+- **选了什么**：`agent_runtime.hit_step_limit(state)` 显式匹配那句 sentinel，`run_agent` 检测到就打 `[!!]` 警告，`find_jobs` 再补一句"名额没满的类别可能只是没扫到，不代表站上没有"。`MAX_STEPS` 40 → 60。
+- **否掉了什么，为什么**：①**否掉"只调大 MAX_STEPS 就算了"**——调多大都可能不够，真正的问题是**不知道够没够**；能观测比能跑完更重要。②**否掉"自己数轮次判断"**——LangGraph 的 `_are_more_steps_needed` 还会看模型是否要调工具，自己数会跟它的判定错位，出现"我以为没超它以为超了"。③**否掉"删掉那个 except 分支"**——留着当第二道，万一上游换回抛异常的实现，已记录的岗位仍然不能全丢。
+- **代价 / 已知不足**：**耦合了 LangGraph 的内部文案**，升级版本时可能失效——而失效的表现正是它要修的那个坑（静默截断）。缓解：`tests/test_agent_runtime.py::TestHitStepLimit` 用字面量断言，字符串变了会红；但那只在我们跑测试时才发现，不是运行时保护。
+- **什么情况下该重新考虑**：LangGraph 升级后测试变红时；或它以后提供了正式的"是否达到步数上限"API（那时应该立刻换过去）。

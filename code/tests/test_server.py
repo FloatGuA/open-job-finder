@@ -1061,3 +1061,276 @@ class TestPreviewSearch:
             r = client.post("/api/preview/search")
 
         assert "Python" in r.json()["url"]
+
+
+# ── Checkpoint 1：选岗审批（pending_jobs）─────────────────────────────────────
+
+def _add_job(url="https://x/1", category="产品", **kw):
+    return app.state.tracker.add_pending_job(site_name="bambulab", url=url, category=category, **kw)
+
+
+class TestCheckpoint1Jobs:
+    def test_empty_list_still_returns_categories(self, client):
+        """列表空的时候类别表也必须有——前端的类别下拉靠它渲染，返回空列表会让
+        "还没跑过选岗"表现成"下拉是空的"，两种完全不同的情况长得一样。"""
+        r = client.get("/api/checkpoint1/jobs")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["jobs"] == [] and data["total"] == 0
+        assert isinstance(data["categories"], list)
+
+    def test_list_returns_both_category_columns(self, client):
+        _add_job(category="产品", title="产品经理")
+        job = client.get("/api/checkpoint1/jobs").json()["jobs"][0]
+        assert job["category"] == "产品"
+        assert job["category_agent"] == "产品"
+
+    def test_list_filters_by_status(self, client):
+        a = _add_job(url="https://x/1")
+        _add_job(url="https://x/2")
+        app.state.tracker.decide_pending_job(a, "approved")
+
+        assert client.get("/api/checkpoint1/jobs").json()["total"] == 2
+        assert client.get("/api/checkpoint1/jobs?status=pending").json()["total"] == 1
+        assert client.get("/api/checkpoint1/jobs?status=approved").json()["total"] == 1
+
+    def test_approve_without_category_keeps_agent_value(self, client):
+        job_id = _add_job(category="产品")
+        r = client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={})
+        assert r.status_code == 200 and r.json()["ok"] is True
+
+        job = app.state.tracker.get_pending_job(job_id)
+        assert job.status == "approved"
+        assert job.category == "产品" and job.category_agent == "产品"
+
+    def test_approve_with_corrected_category_never_touches_agent_value(self, client):
+        """整条链上唯一的归类纠错点。改完还要能看出 agent 当初报的是什么，
+        否则纠错信号当场蒸发（用户 2026-08-14 要求留作训练数据）。"""
+        job_id = _add_job(category="开发")
+        r = client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={"category": "AI NATIVE"})
+        assert r.status_code == 200
+
+        job = app.state.tracker.get_pending_job(job_id)
+        assert job.category == "AI NATIVE"
+        assert job.category_agent == "开发"
+
+    def test_reject_records_reason(self, client):
+        job_id = _add_job()
+        r = client.post(f"/api/checkpoint1/jobs/{job_id}/reject", json={"reason": "其实是客服岗"})
+        assert r.status_code == 200
+
+        job = app.state.tracker.get_pending_job(job_id)
+        assert job.status == "rejected" and job.reason == "其实是客服岗"
+
+    def test_missing_job_is_404(self, client):
+        assert client.post("/api/checkpoint1/jobs/9999/approve", json={}).status_code == 404
+        assert client.post("/api/checkpoint1/jobs/9999/reject", json={}).status_code == 404
+
+    def test_deciding_twice_is_409(self, client):
+        job_id = _add_job()
+        assert client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={}).status_code == 200
+        assert client.post(f"/api/checkpoint1/jobs/{job_id}/reject", json={}).status_code == 409
+
+
+class TestCheckpoint1Batch:
+    def test_batch_approve_applies_per_job_categories(self, client):
+        a = _add_job(url="https://x/1", category="开发")
+        b = _add_job(url="https://x/2", category="开发")
+
+        r = client.post("/api/checkpoint1/batch", json={
+            "decision": "approved", "ids": [a, b],
+            "categories": {str(a): "AI NATIVE"},
+        })
+        assert r.status_code == 200
+        assert sorted(r.json()["decided"]) == sorted([a, b])
+
+        assert app.state.tracker.get_pending_job(a).category == "AI NATIVE"
+        assert app.state.tracker.get_pending_job(b).category == "开发"
+        # 两条的 agent 原值都得留着
+        assert app.state.tracker.get_pending_job(a).category_agent == "开发"
+
+    def test_already_decided_rows_are_skipped_not_fatal(self, client):
+        """批量的语义是"把这些都处理掉"。一条冲突就整批打回，会留下一半已处理
+        一半没处理的状态，比跳过更难收拾。"""
+        a = _add_job(url="https://x/1")
+        b = _add_job(url="https://x/2")
+        app.state.tracker.decide_pending_job(a, "approved")
+
+        r = client.post("/api/checkpoint1/batch", json={"decision": "approved", "ids": [a, b]})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["decided"] == [b]
+        assert data["skipped"] == [a]
+
+    def test_nonexistent_ids_are_skipped(self, client):
+        a = _add_job()
+        r = client.post("/api/checkpoint1/batch", json={"decision": "approved", "ids": [a, 9999]})
+        assert r.json()["decided"] == [a] and r.json()["skipped"] == [9999]
+
+    def test_batch_reject_records_shared_reason(self, client):
+        a = _add_job(url="https://x/1")
+        b = _add_job(url="https://x/2")
+        client.post("/api/checkpoint1/batch", json={
+            "decision": "rejected", "ids": [a, b], "reason": "方向不符",
+        })
+        for job_id in (a, b):
+            job = app.state.tracker.get_pending_job(job_id)
+            assert job.status == "rejected" and job.reason == "方向不符"
+
+    def test_invalid_decision_is_400(self, client):
+        assert client.post("/api/checkpoint1/batch",
+                           json={"decision": "maybe", "ids": [1]}).status_code == 400
+
+    def test_empty_ids_is_400(self, client):
+        assert client.post("/api/checkpoint1/batch",
+                           json={"decision": "approved", "ids": []}).status_code == 400
+
+
+class TestCheckpoint1Review:
+    def test_review_corrects_category_without_deciding(self, client):
+        """改类别和批准是两件事：批准之前先纠正、或批准之后才发现归错了，
+        都得能单独做。"""
+        job_id = _add_job(category="开发")
+        r = client.post(f"/api/checkpoint1/jobs/{job_id}/review", json={"category": "AI NATIVE"})
+        assert r.status_code == 200
+
+        job = app.state.tracker.get_pending_job(job_id)
+        assert job.category == "AI NATIVE"
+        assert job.category_agent == "开发"
+        assert job.status == "pending", "review 不该动审批状态"
+
+    def test_marking_golden_returns_the_updated_row(self, client):
+        # 前端拿返回值直接替换本地那一行，不重新拉整个列表。
+        job_id = _add_job(category="开发")
+        r = client.post(f"/api/checkpoint1/jobs/{job_id}/review",
+                        json={"category": "AI NATIVE", "is_golden": True})
+        assert r.json()["job"]["is_golden"] is True
+        assert r.json()["job"]["category"] == "AI NATIVE"
+
+    def test_golden_row_reaches_the_prompt(self, client):
+        """端到端：页面上点"确认"之后，这条纠正真的会出现在选岗 agent 的 prompt 里。
+        少了这一环，整个 golden set 就只是个没人读的标记。"""
+        from multisite.preferences import render_golden_examples
+
+        job_id = _add_job(category="开发", title="数据算法工程师")
+        client.post(f"/api/checkpoint1/jobs/{job_id}/review",
+                    json={"category": "AI NATIVE", "is_golden": True})
+
+        text = render_golden_examples(app.state.tracker)
+        assert "数据算法工程师" in text
+        assert "AI NATIVE" in text and "开发" in text
+
+    def test_unconfirmed_correction_stays_out_of_the_prompt(self, client):
+        from multisite.preferences import render_golden_examples
+
+        job_id = _add_job(category="开发", title="仿真算法工程师")
+        client.post(f"/api/checkpoint1/jobs/{job_id}/review", json={"category": "AI NATIVE"})
+
+        assert "仿真算法工程师" not in render_golden_examples(app.state.tracker)
+
+    def test_undo_golden(self, client):
+        from multisite.preferences import render_golden_examples
+
+        job_id = _add_job(category="开发", title="图形算法工程师")
+        client.post(f"/api/checkpoint1/jobs/{job_id}/review",
+                    json={"category": "AI NATIVE", "is_golden": True})
+        client.post(f"/api/checkpoint1/jobs/{job_id}/review", json={"is_golden": False})
+
+        assert app.state.tracker.get_pending_job(job_id).category == "AI NATIVE", \
+            "撤销 golden 不该把类别也退回去"
+        assert "图形算法工程师" not in render_golden_examples(app.state.tracker)
+
+    def test_empty_patch_is_400(self, client):
+        job_id = _add_job()
+        assert client.post(f"/api/checkpoint1/jobs/{job_id}/review", json={}).status_code == 400
+
+    def test_missing_job_is_404(self, client):
+        assert client.post("/api/checkpoint1/jobs/9999/review",
+                           json={"is_golden": True}).status_code == 404
+
+
+class TestCheckpoint1SiteLimits:
+    def test_unknown_site_still_appears_with_unknown_status(self, client):
+        """有岗位但没读到上限时，前端也得拿到这一条并显示"未知"。
+        整个 key 缺失的话前端就什么都不显示，看起来跟"没有限制"一样。"""
+        _add_job()
+        limits = client.get("/api/checkpoint1/jobs").json()["site_limits"]
+        assert limits["bambulab"]["status"] == "unknown"
+        assert limits["bambulab"]["max_applications"] is None
+
+    def test_returns_the_recorded_limit_and_evidence(self, client):
+        _add_job()
+        app.state.tracker.upsert_site_limit("bambulab", "limited", max_applications=3,
+                                            applied_count=1, evidence="每人最多投递3个岗位")
+        info = client.get("/api/checkpoint1/jobs").json()["site_limits"]["bambulab"]
+        assert info["status"] == "limited" and info["max_applications"] == 3
+        assert info["applied_count"] == 1
+        assert info["evidence"] == "每人最多投递3个岗位"
+
+    def test_approved_count_is_global_not_filtered(self, client):
+        """**这条守的是一个真会犯的错**：approved_here 如果数的是过滤后的列表，
+        看「待审批」页时分母恒为 0，超额告警永远不会亮——而那正是最该看到它的时候。
+        """
+        a = _add_job(url="https://x/1")
+        _add_job(url="https://x/2")
+        app.state.tracker.decide_pending_job(a, "approved")
+
+        r = client.get("/api/checkpoint1/jobs?status=pending").json()
+        assert len(r["jobs"]) == 1, "列表本身仍然只给待审批的"
+        assert r["site_limits"]["bambulab"]["approved_here"] == 1, \
+            "已批准数必须统计全量，不受列表过滤影响"
+
+    def test_counts_are_per_site(self, client):
+        a = app.state.tracker.add_pending_job(site_name="siteA", url="https://a/1")
+        app.state.tracker.add_pending_job(site_name="siteB", url="https://b/1")
+        app.state.tracker.decide_pending_job(a, "approved")
+
+        limits = client.get("/api/checkpoint1/jobs").json()["site_limits"]
+        assert limits["siteA"]["approved_here"] == 1
+        assert limits["siteB"]["approved_here"] == 0
+
+
+class TestCheckpoint1ManualSiteLimit:
+    """人工填写上限。
+
+    存在理由：**不能假设 agent 一定拿得到我们以为它拿得到的信息**
+    （用户 2026-08-14）。三态保证了“没找到”不会被伪装成“没有限制”，
+    但只做到诚实不够——人得有地方把自己知道的填进去。
+    """
+
+    def test_set_a_limit_manually(self, client):
+        r = client.put("/api/checkpoint1/site-limit/bambulab",
+                       json={"status": "limited", "max_applications": 3, "evidence": "我自己看的"})
+        assert r.status_code == 200
+        got = app.state.tracker.get_site_limit("bambulab")
+        assert got.status == "limited" and got.max_applications == 3
+        assert got.evidence == "我自己看的"
+
+    def test_set_no_limit(self, client):
+        client.put("/api/checkpoint1/site-limit/s", json={"status": "no_limit"})
+        got = app.state.tracker.get_site_limit("s")
+        assert got.status == "no_limit" and got.max_applications is None
+
+    def test_reset_to_unknown_actually_clears_it(self, client):
+        """人主动退回未知必须真的清掉。tracker 里那条
+        “unknown 不覆盖已知”保护是防 agent 用无知覆盖已知，
+        不该拦住人的主动重置。"""
+        client.put("/api/checkpoint1/site-limit/s", json={"status": "limited", "max_applications": 3})
+        client.put("/api/checkpoint1/site-limit/s", json={"status": "unknown"})
+        assert app.state.tracker.get_site_limit("s") is None
+
+    def test_limited_without_a_number_is_400(self, client):
+        r = client.put("/api/checkpoint1/site-limit/s", json={"status": "limited"})
+        assert r.status_code == 400
+        assert app.state.tracker.get_site_limit("s") is None
+
+    def test_bad_status_is_400(self, client):
+        assert client.put("/api/checkpoint1/site-limit/s",
+                          json={"status": "maybe"}).status_code == 400
+
+    def test_manual_value_shows_up_in_the_list_response(self, client):
+        _add_job()
+        client.put("/api/checkpoint1/site-limit/bambulab",
+                   json={"status": "limited", "max_applications": 3})
+        info = client.get("/api/checkpoint1/jobs").json()["site_limits"]["bambulab"]
+        assert info["status"] == "limited" and info["max_applications"] == 3

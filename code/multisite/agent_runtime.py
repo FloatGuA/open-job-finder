@@ -26,7 +26,23 @@ from langgraph.prebuilt import create_react_agent
 
 # 一次 agent 循环最多允许的模型轮次。超过就当这一步失败——比让它烧穿上下文再
 # 报一个看不懂的错要好定位得多。
-MAX_STEPS = 24
+#
+# 24 → 40（v2.23.0）：配额上线后选岗任务变长了。2026-08-14 真机跑用 43 步找齐
+# 12 个岗位（开发 5/5、产品 3/3、运营 3/3 全部记满），效率没问题，但六个类别里
+# AI NATIVE 0/3、游戏 0/2、测试 1/2 还差着就被上限砍断了——**它不是在兜圈子，
+# 是活儿本来就没干完**。上一版 24 是给"只找 5 个岗位"定的，那个前提已经不在了。
+#
+# 40 → 60（同日，第四次真机跑）：分桶扫描上线后要覆盖站点的多个顶层分类桶
+# （拓竹是 研发类 / 非研发类），每个桶各翻到底。第四次跑在第二个桶的第 4 页
+# 步数用完。上下文不是瓶颈——pre_model_hook 只保留最近一张快照，轮次多了也不涨。
+MAX_STEPS = 60
+
+# LangGraph 的 `create_react_agent` 在步数快用完时**不抛异常**：它往 messages 里塞
+# 这条固定文案然后"正常"返回。我们原本 `except GraphRecursionError` 的兜底因此
+# 一次都没触发过——run 静默地半途而废，日志里跟正常收尾长得一模一样
+# （2026-08-14 第四次真机跑才发现，此前三次的"主动收尾"结论都得打问号）。
+# 这是耦合 LangGraph 内部文案的检测，升级版本时要复查；但静默截断比这点耦合危险得多。
+_STEP_LIMIT_SENTINEL = "Sorry, need more steps to process this request."
 
 # 单条工具结果保留的字符上限（只作用于被判定为"陈旧"的那些）。
 _STALE_TOOL_PLACEHOLDER = "[已省略：这是较早的页面快照，页面此后已经变化，不要再用它里面的 uid]"
@@ -125,13 +141,20 @@ def _trace(msg: BaseMessage, step: int) -> None:
 async def run_agent(agent, user_message: str, max_steps: int = MAX_STEPS, trace: bool = True) -> dict:
     """跑一次 agent 循环并返回最终 state。
 
-    `recursion_limit` 是 LangGraph 对图节点执行次数的硬上限（一次模型轮次 = 模型
-    节点 + 工具节点两跳），乘 2 再留一点余量。超限 LangGraph 会抛
-    GraphRecursionError——**刻意不吞掉它**：让"agent 兜圈子兜到超限"以异常形式
-    暴露在最早的地方，比默默返回一个半成品结果要诚实。但**超限前的轨迹必须已经
-    打出来**，否则异常本身什么线索都不给（见 `_trace`）。
+    `recursion_limit` 是 LangGraph 对图 superstep 数的硬上限，而**一次模型轮次是
+    三跳不是两跳**：`pre_model_hook → agent → tools`。`pre_model_hook` 是
+    `create_react_agent` 真的往图里加的一个节点（chat_agent_executor.py:796-798），
+    不是回调——我们用它做上下文裁剪，等于每轮多一跳。
+
+    这里原本乘的是 2，于是 `MAX_STEPS=60` 实际只买到约 41 轮，**这个常量的名字
+    一直在骗人**（2026-08-14 逐行读 LangGraph 源码时发现）。改成乘 3。
+
+    另外注意：真正先触发的**不是**这个硬上限，而是 `create_react_agent` 内建的
+    软着陆——`remaining_steps < 2 且模型还想调工具`时它直接返回一句固定文案
+    （见 `_STEP_LIMIT_SENTINEL`）。所以下面那个 GraphRecursionError 基本不会抛，
+    判断"跑完没跑完"必须用 `hit_step_limit()`。
     """
-    config = {"recursion_limit": max_steps * 2 + 4}
+    config = {"recursion_limit": max_steps * 3 + 4}
     payload = {"messages": [{"role": "user", "content": user_message}]}
     if not trace:
         return await agent.ainvoke(payload, config=config)
@@ -145,7 +168,24 @@ async def run_agent(agent, user_message: str, max_steps: int = MAX_STEPS, trace:
         while step < len(msgs):
             _trace(msgs[step], step)
             step += 1
+    if hit_step_limit(final):
+        # 大声说出来。这条路径是"没干完"，不是"干完了"，而两者的返回值一模一样。
+        print(f"  [!!] agent 步数耗尽（MAX_STEPS={max_steps}），任务未完成就返回了。"
+              f"结果是部分的。", flush=True)
     return final
+
+
+def hit_step_limit(state: dict) -> bool:
+    """这次 agent 循环是不是因为步数耗尽才停的。
+
+    **区分"干完了"和"没干完"**：两者的 state 长得一样（都是正常返回、最后一条是
+    AI 文本消息），只有文案不同。不检测的话，"扫完所有桶"和"扫到一半没步数了"
+    在日志里完全无法区分——第四次真机跑就是这么把一次半途而废读成了主动收尾。
+    """
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, AIMessage):
+            return isinstance(msg.content, str) and _STEP_LIMIT_SENTINEL in msg.content
+    return False
 
 
 def last_text(state: dict) -> str:

@@ -118,6 +118,61 @@ class PendingApplication:
 
 
 @dataclass
+class PendingJob:
+    """Checkpoint 1 记录：选岗 agent 找到的一个候选岗位，等人工审批。
+
+    这是四层架构里**第一个**人工确认点（第二个是 PendingApplication 的字段审批）。
+    拆成两个 checkpoint 的理由：选错岗和填错字段是两类完全不同的错误，混在一条
+    记录里审，人就得同时判断"这岗位该不该投"和"这些值填得对不对"，前者一旦判错
+    后者审得再仔细也没用。
+
+    **`category` 与 `category_agent` 是两列，不是冗余**：`category_agent` 是选岗
+    agent 最初自报的类别、永不覆写；`category` 是当前值（人改过就是人改的）。只留
+    一列的话，人一改，"agent 原本报的是什么"当场蒸发——而两列不等的行正好是一批
+    带标注的纠错样本。配额是按类别算的，而类别只能由 agent 自报（只有它看过页面），
+    所以它归错类就能占掉别的类的额度；人工纠正是这条链上唯一的纠错点。
+    """
+    id: Optional[int]
+    site_name: str
+    url: str
+    title: str = ""
+    company: str = ""
+    category: str = ""        # 当前类别（人可改）
+    category_agent: str = ""  # agent 最初自报，永不覆写
+    why: str = ""             # 一句话说明对上了哪几条条件
+    status: str = "pending"   # pending|approved|rejected
+    reason: Optional[str] = None
+    found_at: str = ""
+    decided_at: Optional[str] = None
+    # 审批人确认"这条纠正是对的，拿去教 agent"。跟"顺手改了个类别"刻意分开：
+    # 随手一改不见得是标准案例，只有确认过的才够格进 prompt。
+    is_golden: bool = False
+
+
+@dataclass
+class SiteLimit:
+    """某个站点对"一个人最多能投几个岗位"的限制，由选岗 agent 在浏览时顺带发现。
+
+    **`status` 是三态，不是"limit 为空就代表没限制"**。这是本类存在的全部理由：
+    如果只存一个数字，`None` 会同时意味着"这个站不限量"和"我们没找到相关说明"，
+    页面上就会显示成"无限制"，然后人放心批准十个——而真实上限可能是 3。
+    找不到就是 unknown，必须跟 no_limit 分开显示。
+
+    `evidence` 存页面原文，不是 agent 的转述："agent 说上限是 3"和"页面上写着
+    「校招每人最多投递 3 个岗位」"是两回事，前者没法核对。
+
+    `applied_count` 是机会性的（很多站会把"已投递 1/3"跟上限写在一起）：-1 表示
+    没看到。它会随时间变化，看到的那一刻起就在过期，只作参考不作依据。
+    """
+    site_name: str
+    status: str = "unknown"          # unknown | no_limit | limited
+    max_applications: Optional[int] = None   # 只在 status='limited' 时有意义
+    applied_count: int = -1          # -1 = 没看到
+    evidence: str = ""               # 页面原文
+    seen_at: str = ""
+
+
+@dataclass
 class ChatScanResult:
     total_convs: int
     unread_count: int

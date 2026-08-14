@@ -67,3 +67,47 @@ class TestTrimStaleSnapshots:
 
     def test_empty_input(self):
         assert trim_stale_snapshots([]) == []
+
+
+class TestHitStepLimit:
+    """区分“干完了”和“没干完”。
+
+    LangGraph 的 create_react_agent 在步数耗尽时**不抛异常**，只往 messages
+    里塞一句固定文案就正常返回。两种结局的 state 长得一模一样，所以
+    不检测的话，“扫完所有桶”和“扫到一半断了”在日志里无法区分——
+    2026-08-14 第四次真机跑就是这么把一次半途而废读成了主动收尾。
+    """
+
+    @staticmethod
+    def _state(*contents):
+        from langchain_core.messages import AIMessage
+        return {"messages": [AIMessage(content=c) for c in contents]}
+
+    def test_detects_the_sentinel(self):
+        from multisite.agent_runtime import hit_step_limit
+        assert hit_step_limit(self._state("Sorry, need more steps to process this request."))
+
+    def test_normal_finish_is_not_a_step_limit(self):
+        from multisite.agent_runtime import hit_step_limit
+        assert not hit_step_limit(self._state("找完了，共记录 5 个。"))
+
+    def test_only_the_last_ai_message_counts(self):
+        """早期消息里碰巧出现这句话（比如 agent 引用了它）不算——
+        真正的信号总是最后一条。"""
+        from multisite.agent_runtime import hit_step_limit
+        assert not hit_step_limit(
+            self._state("Sorry, need more steps to process this request.", "搞定了。"))
+
+    def test_empty_state_is_not_a_step_limit(self):
+        from multisite.agent_runtime import hit_step_limit
+        assert not hit_step_limit({"messages": []})
+        assert not hit_step_limit({})
+
+    def test_tool_messages_do_not_confuse_it(self):
+        from langchain_core.messages import AIMessage, ToolMessage
+        from multisite.agent_runtime import hit_step_limit
+        state = {"messages": [
+            AIMessage(content="Sorry, need more steps to process this request."),
+            ToolMessage(content="x", tool_call_id="t", name="take_snapshot"),
+        ]}
+        assert hit_step_limit(state), "最后一条 AI 消息才是信号源"

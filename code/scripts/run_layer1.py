@@ -32,6 +32,7 @@ import argparse
 import asyncio
 import io
 import sys
+from collections import Counter
 from pathlib import Path
 
 # 脚本在 code/scripts/ 内，把 code/ 加入 import 路径
@@ -64,6 +65,23 @@ def _default_resume_path() -> str:
     return str(Path(store.exports_dir) / exports[0]["file"])
 
 
+def _parse_quota_overrides(items):
+    """`--category 产品:3` × N → {"产品": 3}。没给就返回 None（用 profile 的默认）。
+
+    格式错就 SystemExit 而不是忽略：一个写错的 --category 如果被静默跳过，表现是
+    "agent 莫名其妙不找这一类"，跟配置漏写完全一样，查起来极费劲。
+    """
+    if not items:
+        return None
+    quotas = {}
+    for item in items:
+        name, sep, num = item.rpartition(":")
+        if not sep or not name.strip() or not num.strip().isdigit():
+            raise SystemExit(f"--category 格式应为 名称:数量（如 产品:3），收到：{item!r}")
+        quotas[name.strip()] = int(num)
+    return quotas
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     # 二选一：给入口页让 agent 自己选岗（正常用法），或直接指定岗位（调试/复现）。
@@ -73,13 +91,20 @@ def main() -> int:
     parser.add_argument("--site", required=True, help="站点标识（如 huawei / bambulab），决定用哪个持久化登录目录")
     parser.add_argument("--resume", default=None, help="简历 PDF 路径（默认用最新导出的那份）")
     parser.add_argument("--headless", action="store_true", help="无头模式（仅在已确认登录态持久化后使用）")
-    parser.add_argument("--max-pages", type=int, default=3, help="选岗时最多翻几页（默认 3）")
-    parser.add_argument("--max-jobs", type=int, default=5, help="最多收集几个候选岗位（默认 5）")
+    parser.add_argument("--max-pages", type=int, default=8,
+                        help="每个分类桶最多翻几页（默认 8）")
+    parser.add_argument(
+        "--category", action="append", default=None, metavar="名称:数量",
+        help="覆盖本次的类别名额，可重复：--category 产品:3 --category 开发:5。"
+             "不给就用 profile.yaml 的 job_seeking.categories。",
+    )
     parser.add_argument("--select-only", action="store_true",
-                        help="只跑选岗（纯浏览、零副作用），不上传简历也不写库。用来核对 agent 选岗准不准")
+                        help="只跑到 Checkpoint 1（选岗+落库），不上传简历。对外零副作用")
     args = parser.parse_args()
 
     from multisite import preferences
+
+    quotas = _parse_quota_overrides(args.category)
 
     resume_path = args.resume or _default_resume_path()
     mode = "指定岗位" if args.job_url else "自主选岗"
@@ -90,6 +115,10 @@ def main() -> int:
         # 跑之前把 agent 实际在按什么条件筛打出来——这是"agent 选错岗"这类新错误
         # 最便宜的排查入口，比事后翻日志猜它理解成了什么强。
         print(f"[layer1] 求职偏好: {preferences.describe_for_log()}")
+        # 按站点解析后的名额——跟上面那行的全局名额可能不同（site_overrides 会
+        # 去掉本站没有的类别）。打出来免得事后纳闷"我明明配了游戏怎么没找"。
+        eff = quotas or preferences.load_profile().job_seeking.quotas_for_site(args.site)
+        print(f"[layer1] 本站生效名额: {eff}")
 
     from multisite.layer1_agent import run_layer1
 
@@ -101,7 +130,7 @@ def main() -> int:
             search_url=args.search_url or "",
             headless=args.headless,
             max_pages=args.max_pages,
-            max_jobs=args.max_jobs,
+            quotas=quotas,
             select_only=args.select_only,
         )
     )
@@ -109,13 +138,19 @@ def main() -> int:
     # 三种结果分别打印，不要压成一句"成功/失败"——"没找到符合条件的岗位"和
     # "找到了但表单没有需要填的字段"都是合法结果，跟真失败要能区分开。
     jobs = state.get("found_jobs") or []
-    print(f"[layer1] 候选岗位 {len(jobs)} 个：")
+    by_cat = Counter(j.category for j in jobs)
+    print(f"[layer1] 候选岗位 {len(jobs)} 个，按类别：{dict(by_cat) or '(无)'}")
     for j in jobs:
-        print(f"          - {j.title or '(无标题)'} | {j.company or '(无公司)'} | {j.why}")
+        print(f"          - [{j.category or '未分类'}] {j.title or '(无标题)'} "
+              f"| {j.company or '(无公司)'} | {j.why}")
         print(f"            {j.url}")
 
+    new_ids = state.get("pending_job_ids") or []
+    print(f"[layer1] 写入 pending_jobs {len(new_ids)} 条待审批"
+          f"（{len(jobs) - len(new_ids)} 条因 url 重复跳过）")
+
     if args.select_only:
-        print("[layer1] --select-only：到此为止，未上传简历、未写库。")
+        print("[layer1] --select-only：到此为止，未上传简历。去审批 Checkpoint 1 再走填表。")
         return 0
 
     outcome = state.get("open_result")

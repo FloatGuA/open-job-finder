@@ -1640,6 +1640,184 @@ async def mark_sent(conv_id: str) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+# ── Checkpoint 1：选岗审批（pending_jobs）────────────────────────────────────
+# 这是两个人工确认点里的**第一个**：确认"这些岗位该不该投"。第二个是下面的
+# pending-applications（确认"这些字段填得对不对"）。拆开是因为选错岗和填错字段
+# 是两类错误，前者判错的话后者审得再仔细也没用。
+#
+# 注意函数名不要叫 delete_pending_jobs / list_pending_jobs 之外的通用名——
+# 本文件里已经有个 `delete_pending_jobs`（DELETE /api/jobs/pending，删的是
+# applications 表里 W1 的非 APPLIED 记录），跟这里完全无关，重名会读错。
+
+@app.get("/api/checkpoint1/jobs")
+async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
+    """候选岗位 + 可选类别表。
+
+    类别表跟列表一起返回而不是单开一个端点：前端要渲染类别下拉必须有它，分两次请求
+    只会让"下拉是空的"变成一种可能的中间状态。
+    """
+    _initialize_state()
+    from multisite import preferences
+
+    tracker = app.state.tracker
+    items = tracker.get_pending_jobs(status=status)
+    categories = preferences.load_profile().job_seeking.category_names
+
+    # 站点投递上限 + 该站已批准数，一起返回给前端算告警。
+    # **已批准数在这里统计（而不是数上面的 items）**：上面按 status 过滤过，
+    # 看「待审批」时 items 里一条已批准的都没有，拿它当分母告警永远不会触发。
+    all_jobs = tracker.get_pending_jobs()
+    sites = sorted({j.site_name for j in all_jobs if j.site_name})
+    site_limits = {}
+    for site in sites:
+        limit = tracker.get_site_limit(site)
+        site_limits[site] = {
+            **(vars(limit) if limit else {"site_name": site, "status": "unknown",
+                                          "max_applications": None, "applied_count": -1,
+                                          "evidence": "", "seen_at": ""}),
+            "approved_here": sum(1 for j in all_jobs
+                                 if j.site_name == site and j.status == "approved"),
+        }
+    return JSONResponse({
+        "jobs": [vars(j) for j in items],
+        "total": len(items),
+        "categories": categories,
+        "site_limits": site_limits,
+    })
+
+
+@app.put("/api/checkpoint1/site-limit/{site_name}")
+async def set_checkpoint1_site_limit(site_name: str, body: dict) -> JSONResponse:
+    """人工填写/修正本站的投递数量上限。
+
+    **存在理由**：不能假设 agent 一定拿得到我们以为它拿得到的信息（用户
+    2026-08-14）。三态设计保证了"没找到"不会被伪装成"没有限制"，但只做到诚实
+    不够——人看见「上限未知」之后得有地方把自己知道的填进去。
+
+    `evidence` 在这里是人写的（"我自己在投递须知里看到的"），跟 agent 抄的原文
+    存在同一列：两者都是"这个数字凭什么"的说明，语义相同，没必要分列。
+    """
+    _initialize_state()
+    status = body.get("status")
+    if status not in ("unknown", "no_limit", "limited"):
+        return JSONResponse({"ok": False, "error": "status must be unknown/no_limit/limited"},
+                            status_code=400)
+    limit = body.get("max_applications")
+    if status == "limited" and not isinstance(limit, int):
+        return JSONResponse({"ok": False, "error": "limited requires an integer max_applications"},
+                            status_code=400)
+    if status == "unknown":
+        # 人工清空 = 真的把它退回未知，这里要绕过 upsert 的"unknown 不覆盖已知"
+        # 保护（那条是防 agent 用无知覆盖已知，不该拦住人主动重置）。
+        with app.state.tracker.conn as conn:
+            conn.execute("DELETE FROM site_limits WHERE site_name = ?", (site_name,))
+        return JSONResponse({"ok": True, "limit": None})
+
+    app.state.tracker.upsert_site_limit(
+        site_name=site_name,
+        status=status,
+        max_applications=limit if status == "limited" else None,
+        applied_count=body.get("applied_count", -1),
+        evidence=str(body.get("evidence") or "")[:500],
+    )
+    return JSONResponse({"ok": True, "limit": vars(app.state.tracker.get_site_limit(site_name))})
+
+
+@app.post("/api/checkpoint1/jobs/{job_id}/review")
+async def review_checkpoint1_job(job_id: int, body: dict) -> JSONResponse:
+    """纠正类别 / 标记为 golden 案例。**不改审批状态。**
+
+    跟 approve 拆开是因为它们写的是不同的列：这里写 `category` + `is_golden`，
+    approve 写 `status/reason/decided_at`。合成一个端点就会出现两条写 `category`
+    的路径，正是本项目连抓四例漂移的形状。
+
+    golden = 审批人确认"这条纠正拿去教 agent"，会被渲染进选岗 prompt
+    （multisite.preferences.render_golden_examples）。它跟"顺手改了个类别"分开：
+    随手一改不见得是标准案例，没确认过的例子进 prompt 只会教偏。
+    """
+    _initialize_state()
+    tracker = app.state.tracker
+    if tracker.get_pending_job(job_id) is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    category = body.get("category")
+    is_golden = body.get("is_golden")
+    if category is None and is_golden is None:
+        return JSONResponse({"ok": False, "error": "nothing to update"}, status_code=400)
+    tracker.set_pending_job_review(job_id, category=category, is_golden=is_golden)
+    job = tracker.get_pending_job(job_id)
+    return JSONResponse({"ok": True, "job": vars(job)})
+
+
+@app.post("/api/checkpoint1/jobs/{job_id}/approve")
+async def approve_checkpoint1_job(job_id: int, body: dict | None = None) -> JSONResponse:
+    """Checkpoint 1 的 go 信号。
+
+    `category` 是审批人纠正后的类别（不传 = 保留现有值）。端点层可以调两个
+    tracker 方法把"改类别"和"批准"一次做完——薄接线是端点的职责；但**列的写入
+    实现仍然各只有一份**，这里没有第二段 SQL。
+    """
+    _initialize_state()
+    tracker = app.state.tracker
+    if tracker.get_pending_job(job_id) is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    category = (body or {}).get("category")
+    if category is not None:
+        tracker.set_pending_job_review(job_id, category=category)
+    rowcount = tracker.decide_pending_job(job_id, "approved")
+    if rowcount == 0:
+        return JSONResponse({"ok": False, "error": "already decided"}, status_code=409)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/checkpoint1/jobs/{job_id}/reject")
+async def reject_checkpoint1_job(job_id: int, body: dict | None = None) -> JSONResponse:
+    _initialize_state()
+    tracker = app.state.tracker
+    if tracker.get_pending_job(job_id) is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    rowcount = tracker.decide_pending_job(job_id, "rejected", reason=(body or {}).get("reason"))
+    if rowcount == 0:
+        return JSONResponse({"ok": False, "error": "already decided"}, status_code=409)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/checkpoint1/batch")
+async def decide_checkpoint1_batch(body: dict) -> JSONResponse:
+    """批量审批。一次选岗能出十几个候选，逐个点太费事。
+
+    **逐条独立处理、不整体回滚**：已经被别处决定过的行返回 0 行，这里记进 skipped
+    继续走下一条，而不是让一条冲突把整批打回。批量审批的语义是"把这些都处理掉"，
+    中途失败留下一半已处理一半没处理，反而更难收拾。
+    """
+    _initialize_state()
+    tracker = app.state.tracker
+    decision = body.get("decision")
+    if decision not in ("approved", "rejected"):
+        return JSONResponse({"ok": False, "error": "decision must be approved/rejected"},
+                            status_code=400)
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids:
+        return JSONResponse({"ok": False, "error": "ids must be a non-empty list"}, status_code=400)
+
+    # {id: 纠正后的类别}，只在 approved 时有意义
+    categories = body.get("categories") or {}
+    reason = body.get("reason")
+    decided, skipped = [], []
+    for job_id in ids:
+        if tracker.get_pending_job(job_id) is None:
+            skipped.append(job_id)
+            continue
+        if decision == "approved":
+            corrected = categories.get(str(job_id))
+            if corrected is not None:
+                tracker.set_pending_job_review(job_id, category=corrected)
+        rowcount = tracker.decide_pending_job(
+            job_id, decision, reason=reason if decision == "rejected" else None,
+        )
+        (decided if rowcount else skipped).append(job_id)
+    return JSONResponse({"ok": True, "decided": decided, "skipped": skipped})
+
+
 # ── 跨站点投递审批（多站点扩展 Layer 2；见 docs/multi-site-expansion-design.md）──
 
 @app.get("/api/pending-applications")

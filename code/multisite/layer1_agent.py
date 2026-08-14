@@ -15,9 +15,15 @@ DECISION.md「Layer 1 的导航/找入口/选岗交给 agent 自主决策」）�
 1. **提交类点击被 `safe_tools.make_guarded_click` 拒绝。** 旧版靠"工具集里没有
    提交能力"守法；agent 拿到自由 `click` 之后那个守法就失效了（同一个工具既能点
    「申请」也能点「提交」），所以换成点击工具自己拦。见 safe_tools 模块 docstring。
-2. government_id 类字段的候选值在 `_enforce_government_id_blank()` 里被无条件
+   **这条只有配合下面第 2 条才成立**——守法点击拦得住 `click`，拦不住"换个工具做
+   同一件事"。
+2. **agent 只拿得到白名单里的 MCP 工具**（`_PASSTHROUGH_*`，按节点分开）。这在
+   v2.22.1 之前是黑名单，于是 `evaluate_script`（任意 JS，一行就绕过守法点击）、
+   `press_key`、`take_screenshot` 等 27 个工具全在 agent 手上，上面那条"代码强制"
+   实际上是不成立的。见 DECISION.md 对应条目。
+3. government_id 类字段的候选值在 `_enforce_government_id_blank()` 里被无条件
    清空，不管 LLM 分类节点返回了什么。
-3. 整个 Layer 1 的产出只有一条 `pending_applications` 待审批记录——不做任何对外
+4. 整个 Layer 1 的产出只有一条 `pending_applications` 待审批记录——不做任何对外
    动作。
 
 只处理"上传简历解析后，第一个可见 wizard 步骤"里的空字段——分步表单不填完当前
@@ -31,6 +37,7 @@ agent 循环——两层结构：外层确定性编排，内层自主决策。
 """
 import asyncio
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Literal, Optional, TypedDict
 
@@ -68,6 +75,7 @@ class FoundJob(BaseModel):
     url: str = Field(description="岗位详情页的完整 URL")
     title: str = Field(default="", description="岗位标题")
     company: str = Field(default="", description="公司名，页面上没有就留空")
+    category: str = Field(default="", description="归到哪个方向，必须是 profile 里配置的类别之一")
     why: str = Field(default="", description="一句话说明对上了哪几条求职条件")
 
 
@@ -108,6 +116,7 @@ class Layer1State(TypedDict, total=False):
     company: str
     # 选岗 agent 的产出
     found_jobs: list[FoundJob]
+    pending_job_ids: list[int]   # Checkpoint 1 落库后的 id（重复 url 不在内）
     # 导航 agent 的产出
     open_result: OpenApplicationOutput
     snapshot_text: str
@@ -243,7 +252,27 @@ def _looks_logged_out(snapshot_text: str) -> bool:
     return "登录" in snapshot_text or "login" in lowered or "sign in" in lowered
 
 
-def make_record_job_tool(sink: list) -> "object":
+def remaining_quota(quotas: dict, sink: list) -> dict:
+    """各类别还差几个。纯函数，单独抽出来是为了能单测配额算术。"""
+    counts = Counter(j.category for j in sink)
+    return {name: cap - counts.get(name, 0) for name, cap in quotas.items()}
+
+
+def describe_progress(quotas: dict, sink: list) -> str:
+    """给 agent 看的进度播报：各类 已记/上限，以及还差哪些。
+
+    **这段文字是选岗 agent 的主要导航信号**，不是日志。它同时回答了 agent 每一步
+    都在问的两个问题："我还要不要继续"和"该找什么"。
+    """
+    counts = Counter(j.category for j in sink)
+    done = "、".join(f"{name} {counts.get(name, 0)}/{cap}" for name, cap in quotas.items())
+    missing = [f"{name} {n} 个" for name, n in remaining_quota(quotas, sink).items() if n > 0]
+    if not missing:
+        return f"当前进度：{done}。**所有名额已满，立刻停止翻页并给出最终结论。**"
+    return f"当前进度：{done}。还差：{('、'.join(missing))}。"
+
+
+def make_record_job_tool(sink: list, quotas: dict, known_urls: Optional[set] = None) -> "object":
     """一个让 agent **随时把找到的岗位落袋**的工具，而不是憋到最后一次性输出。
 
     **这是选岗 agent 能不能收敛的关键**，不是锦上添花。前两次真机跑都死在同一个
@@ -257,24 +286,120 @@ def make_record_job_tool(sink: list) -> "object":
     2. 即使最后超时/超限，已经记下的岗位仍然拿得到（部分结果不再全丢）；
     3. 不需要它把所有候选一直记在上下文里——这本来就是 DeepSeek 64k 上下文
        最吃不消的用法。
+
+    **配额（v2.23.0 新增）解决的是另一个问题：偏斜。** 上一版只有一个总数上限，
+    真机跑回来 5 个名额全被"运营"占满，产品/开发/日常实习一个都没有——而且这种
+    失败在结果里完全看不出来，因为每一条单看都符合条件。按类别分名额之后，
+    "还差什么"变成每次调用都会收到的显式信号，终止条件也从"翻够 N 页"变成
+    "名额全满"（更准确，且不再依赖翻页数这个跟目标无关的代理指标）。
+
+    `category` 走枚举校验而不是自由文本：不然 agent 报一个新类别名就绕过了配额。
+
+    **`known_urls`（库里已在待审批/已处理的岗位）不吃配额**（v2.23.0 真机第三次跑
+    暴露的）：agent 跨 run 没有记忆，重跑同一个站必然重新找到上次那批岗位。之前它们
+    照样占名额，结果那一轮找回 10 个、5 个是旧的，「开发 5/5」里 3 个名额花在已经
+    躺在审批队列里的岗位上，真正的新岗位反而被配额挡在门外——**等于每跑一次，能
+    发现的新东西就少一截**。现在命中 known_urls 直接告诉它跳过、不计数。
     """
     from langchain_core.tools import StructuredTool
 
-    async def record_job(url: str, title: str = "", company: str = "", why: str = "") -> str:
+    known = known_urls or set()
+
+    async def record_job(url: str, category: str, title: str = "", company: str = "",
+                         why: str = "") -> str:
         if not url or not url.startswith("http"):
             return "记录失败：url 必须是完整的 http(s) 链接。请从快照里那一行的 url=\"...\" 取。"
+        category = (category or "").strip()
+        if category not in quotas:
+            return (f"记录失败：「{category}」不是有效类别。只能从这些里选："
+                    f"{('、'.join(quotas))}。如果这个岗位不属于任何一类，就不要记它。")
+        if url in known:
+            # 不计入配额：它已经在待审批队列里了，再占一个名额没有任何收益。
+            # 措辞要写清"不占名额"——第四次真机跑时 agent 看到「已收录」而进度还是
+            # 0/3，愣了一下（"Wait, that's confusing"）。它没算错，是这句话有歧义。
+            return (f"这个岗位**上一次已经收录过了，不占名额**（所以下面的进度不会变）。"
+                    f"跳过它，继续找还没收录过的。{describe_progress(quotas, sink)}")
         if any(j.url == url for j in sink):
-            return f"这个岗位已经记过了（当前共 {len(sink)} 个），不用重复记，继续看下一个。"
-        sink.append(FoundJob(url=url, title=title, company=company, why=why))
-        return (f"已记录第 {len(sink)} 个：{title or url}。"
-                "继续找下一个；如果这一页看完了就翻页，全部看完就直接给出最终结论。")
+            return f"这个岗位已经记过了。{describe_progress(quotas, sink)}"
+        if remaining_quota(quotas, sink)[category] <= 0:
+            return (f"记录失败：{category} 的 {quotas[category]} 个名额已经满了，不要再记这一类。"
+                    f"{describe_progress(quotas, sink)}")
+        sink.append(FoundJob(url=url, title=title, company=company, why=why, category=category))
+        return f"已记录：{title or url}（{category}）。{describe_progress(quotas, sink)}"
 
     return StructuredTool.from_function(
         coroutine=record_job,
         name="record_job",
         description=(
             "记录一个符合求职条件的岗位。每找到一个就立刻调用一次，不要攒到最后。"
-            "url 必须是完整链接（从快照里 link 行的 url=\"...\" 取）。"
+            "url 必须是完整链接（从快照里 link 行的 url=\"...\" 取）；"
+            f"category 必须从这些里选：{('、'.join(quotas)) or '(未配置)'}。"
+        ),
+    )
+
+
+# ── MCP 原生工具白名单，按节点分开 ────────────────────────────────────────────
+#
+# **必须是白名单，不能是黑名单。** 这里原本写的是
+# `[t for t in tools if t.name not in {"take_snapshot", "click"}]`，
+# 结果 chrome-devtools-mcp 那 29 个工具里的另外 27 个全交给了 agent，其中：
+#   - `evaluate_script`：任意 JS，`document.querySelector(...).click()` 一行就
+#     绕过 make_guarded_click，"提交防线是代码强制"这句话直接不成立；
+#   - `press_key`：输入框里回车在多数表单上等于提交；
+#   - `take_screenshot`：DeepSeek 没有视觉，返回的图像块不但白烧一步，还因为不在
+#     `agent_runtime._BULKY_TOOLS` 里而永远不会被裁剪，卡死 64k 上下文；
+#   - `fill` / `fill_form` / `type_text`：选岗阶段根本不该填任何东西。
+# 黑名单挡不住"同一件事换个工具做"——每次 MCP 上游加一个新工具，黑名单就自动漏一个。
+# 详见 DECISION.md 对应条目。
+_PASSTHROUGH_FIND_JOBS = ("navigate_page", "wait_for")
+_PASSTHROUGH_OPEN_APPLICATION = ("navigate_page", "wait_for", "upload_file")
+
+
+def make_record_site_limit_tool(tracker, site_name: str) -> "object":
+    """让 agent 把"这个站最多能投几个"报回来。
+
+    **为什么是机会性发现、不专门去找**：不是每个站都有这类限制；专门加一步"翻投递
+    须知"在没有限制的站上是纯浪费步数，而且找不到时**依然分不清"没有限制"和"没
+    找到"**——多花的步数买不到确定性。
+
+    `evidence` 必填且要求原文：「agent 说上限是 3」和「页面上写着"校招每人最多投递
+    3 个岗位"」是两回事，前者没法核对。理由跟 record_job 外置结果完全一样。
+
+    直接写库而不是像 record_job 那样先进 sink：这是一次按站点 upsert 的幂等写入，
+    没有批量、没有审批语义，也不需要跟 run 的其他产出一起提交，穿一个 sink 过两个
+    节点只是多一层。
+    """
+    from langchain_core.tools import StructuredTool
+
+    async def record_site_limit(status: str, evidence: str, limit: int = 0,
+                                applied_count: int = -1) -> str:
+        status = (status or "").strip()
+        if status not in ("no_limit", "limited"):
+            return ("记录失败：status 只能是 'limited'（看到了具体数量上限）或 "
+                    "'no_limit'（明确写了不限量）。**没看到相关说明就根本不要调用这个工具**，"
+                    "不用报 unknown。")
+        if not (evidence or "").strip():
+            return "记录失败：evidence 必须是页面上的原文，照抄那句话，不要自己转述。"
+        if status == "limited" and limit < 1:
+            return "记录失败：status='limited' 时 limit 必须是页面上写的那个数字（>=1）。"
+        tracker.upsert_site_limit(
+            site_name=site_name,
+            status=status,
+            max_applications=limit if status == "limited" else None,
+            applied_count=applied_count,
+            evidence=evidence.strip()[:500],
+        )
+        shown = f"最多 {limit} 个" if status == "limited" else "不限量"
+        return f"已记下本站投递限制：{shown}。继续找岗位，这条不用再报第二次。"
+
+    return StructuredTool.from_function(
+        coroutine=record_site_limit,
+        name="record_site_limit",
+        description=(
+            "看到本站关于「一个人最多能投递几个岗位」的说明时调用一次。"
+            "status='limited' 并给出 limit 数字，或 status='no_limit'（页面明确写了不限）。"
+            "evidence 照抄页面原文。如果页面还写了已投递数量，一并填 applied_count。"
+            "没看到就不要调用。"
         ),
     )
 
@@ -283,14 +408,19 @@ def build_agent_toolset(
     tools: list,
     snapshot_provider,
     snapshot_taker,
+    passthrough: tuple,
 ) -> list:
-    """agent 能拿到的工具集：原始 `click` 被换成拒绝提交类点击的守法版本，
-    原始 `take_snapshot` 被换成会写快照缓存的版本，其余原样透传。
+    """agent 能拿到的工具集：受控的 `take_snapshot` + 守法的 `click` + `passthrough`
+    里点名的那几个 MCP 原生工具，**别的一律不给**。
+
+    `passthrough` 走 `chrome_mcp_client.get_tool`（点名取，取不到就抛）而不是过滤，
+    这样 MCP 上游改了工具名会在这里当场炸掉，而不是静默少给 agent 一个工具、
+    表现为"agent 莫名其妙不会翻页了"。
 
     **抽成模块级函数（而不是留在 build_graph 的闭包里）就是为了能单测。**
-    整个模块最危险的一条不变量是"agent 拿到的 click 必须是守法版"——守法本身
-    有测试（tests/test_safe_tools.py），但"守法有没有真的接上去"如果测不到，
-    有人把这行改回原始 click 也不会有任何东西变红。
+    整个模块最危险的一条不变量是"agent 拿到的 click 必须是守法版、且没有别的
+    路子绕过它"——守法本身有测试（tests/test_safe_tools.py），但"守法有没有真的
+    接上去""有没有从别的工具漏出去"如果测不到，改坏了不会有任何东西变红。
     """
     from langchain_core.tools import StructuredTool
 
@@ -306,8 +436,8 @@ def build_agent_toolset(
         chrome_mcp_client.get_tool(tools, "click"),
         snapshot_provider,
     )
-    passthrough = [t for t in tools if t.name not in {"take_snapshot", "click"}]
-    return [snap_tool, guarded_click, *passthrough]
+    allowed = [chrome_mcp_client.get_tool(tools, name) for name in passthrough]
+    return [snap_tool, guarded_click, *allowed]
 
 
 # 注：`_find_uid_by_label` / `_find_uid_near_text` 于 v2.22.0 删除。它们是旧版
@@ -329,8 +459,8 @@ def build_graph(
     tools: list,
     personal_info: Optional[dict] = None,
     tracker: Optional[ApplicationTracker] = None,
-    max_pages: int = 3,
-    max_jobs: int = 5,
+    quotas: Optional[dict] = None,
+    max_pages: int = 8,
     max_filter_clicks: int = 4,
     select_only: bool = False,
 ):
@@ -339,11 +469,19 @@ def build_graph(
 
     外层是确定性编排，`find_jobs` / `open_application` 两个节点内部才是 agent
     循环（见模块 docstring 的分工表）。
+
+    `quotas` = {类别: 最多几个}，默认读 profile.yaml 的 job_seeking.categories。
+    它同时是 `record_job` 的枚举约束和选岗的终止条件。
     """
     take_snapshot = chrome_mcp_client.get_tool(tools, "take_snapshot")
 
     personal_info = personal_info if personal_info is not None else load_personal_info()
     tracker = tracker or ApplicationTracker()
+    # 名额按站点解析：profile 里 site_overrides.<site>.skip 列出的类别直接不参与。
+    # 本站不存在的类别会让"所有名额已满"这个主终止条件永远不成立，见 JobSeeking。
+    # 但 build_graph 拿不到 site_name（它在 state 里），所以这里只能给全局默认，
+    # 按站点的解析在 run_layer1 里做完再传进来。
+    quotas = quotas if quotas is not None else preferences.load_profile().job_seeking.quotas
     pm = PromptManager()
 
     # agent 用的快照缓存：guarded click 需要知道"agent 是基于哪张快照决定点这个
@@ -355,11 +493,12 @@ def build_graph(
         _latest_snapshot["text"] = text
         return text
 
-    def _agent_tools() -> list:
+    def _agent_tools(passthrough: tuple) -> list:
         return build_agent_toolset(
             tools,
             snapshot_provider=lambda: _latest_snapshot["text"],
             snapshot_taker=_snapshot_and_cache,
+            passthrough=passthrough,
         )
 
     async def ensure_ready(state: Layer1State) -> dict:
@@ -416,7 +555,9 @@ def build_graph(
             {
                 "constraints": preferences.render_constraints(),
                 "max_pages": str(max_pages),
-                "max_jobs": str(max_jobs),
+                "quota_table": "、".join(f"{n} {c} 个" for n, c in quotas.items()) or "（未配置）",
+                # 人工确认过的归类纠正。传同一个 tracker，别让它自己再开一份连接。
+                "golden_examples": preferences.render_golden_examples(tracker),
                 # 筛选器点击预算。第一次真机跑就是死在这里：agent 正确点了
                 # 深圳/产品/研发/日常实习，但每次截图后又去点下一个筛选器，
                 # 始终不收敛，一路撞到 recursion limit。"最多翻 N 页"约束不住
@@ -426,16 +567,59 @@ def build_graph(
         )
         # 岗位随时经 record_job 落到这个 sink 里，不依赖 agent 最后一次性输出。
         sink: list[FoundJob] = []
-        tools_for_agent = [*_agent_tools(), make_record_job_tool(sink)]
+        # 库里已经收录过的岗位不该再占本次名额，见 make_record_job_tool 的说明。
+        known_urls = {j.url for j in tracker.get_pending_jobs()}
+        tools_for_agent = [
+            *_agent_tools(_PASSTHROUGH_FIND_JOBS),
+            make_record_job_tool(sink, quotas, known_urls=known_urls),
+            make_record_site_limit_tool(tracker, state.get("site_name", "")),
+        ]
         agent = agent_runtime.build_agent(tools_for_agent, prompt)
         try:
-            await agent_runtime.run_agent(agent, f"入口页面：{state['search_url']}\n请开始。")
+            result = await agent_runtime.run_agent(
+                agent, f"入口页面：{state['search_url']}\n请开始。")
+            if agent_runtime.hit_step_limit(result):
+                # `create_react_agent` 步数耗尽时不抛异常、只塞一句固定文案就返回，
+                # 所以下面那个 except 分支其实从没走到过（见 agent_runtime 的说明）。
+                # 这里必须显式提示：否则"扫完了"和"扫到一半断了"在日志里一样。
+                print(f"[layer1] ⚠ 选岗未跑完就耗尽步数，只采用已记录的 {len(sink)} 个岗位。"
+                      f"名额没满的类别可能只是没扫到，不代表站上没有。", flush=True)
         except GraphRecursionError:
-            # 兜圈子超限**不再是全损**：已经 record 下来的岗位照样用。这正是把
-            # 结果外置到工具里的主要收益，别改成向上抛——那等于把"找到 3 个但
-            # 第 4 页开始打转"退化成"什么都没有"。
+            # 理论上到不了这儿（LangGraph 走的是 remaining_steps 软着陆），保留是因为
+            # 万一它换了实现，超限**不该是全损**：已经 record 下来的岗位照样要带出去。
             print(f"[layer1] 选岗 agent 达到步数上限，采用已记录的 {len(sink)} 个岗位。", flush=True)
-        return {"found_jobs": sink[:max_jobs]}
+        # 不再按总数截断：配额已经在 record_job 里按类别拦过了，这里再截一刀只会
+        # 悄悄砍掉某一类刚记满的名额（截断按记录顺序，跟类别无关）。
+        return {"found_jobs": list(sink)}
+
+    async def write_pending_jobs(state: Layer1State) -> dict:
+        """Checkpoint 1：把候选岗位落库，然后**结束这次 run**。
+
+        为什么是"写库+结束"而不是 LangGraph 的 interrupt()：审批是人的动作，时间
+        尺度是分钟到小时，而 interrupt 要求整个进程和那个 Chrome 实例一直挂着等。
+        更要命的是**浏览器状态不可序列化**——checkpointer 存得下 messages，存不下
+        Chrome；恢复之后 agent 手里的 uid 全部过期，还是得重新截图。岗位详情页有
+        自己的 URL，存进库里下一阶段直接从 URL 开始，比恢复现场干净得多。
+        """
+        jobs = state.get("found_jobs") or []
+        ids: list[int] = []
+        skipped = 0
+        for job in jobs:
+            new_id = tracker.add_pending_job(
+                site_name=state.get("site_name", ""),
+                url=job.url,
+                title=job.title,
+                company=job.company,
+                category=job.category,
+                why=job.why,
+            )
+            if new_id is None:
+                skipped += 1  # 这个 url 已经在待审批表里了，正常情况不是错误
+            else:
+                ids.append(new_id)
+        if skipped:
+            print(f"[layer1] {skipped} 个岗位此前已入库（url 去重），跳过。", flush=True)
+        return {"pending_job_ids": ids}
 
     async def open_application(state: Layer1State) -> dict:
         """导航 agent：打开第一个候选岗位的申请表并上传简历。
@@ -451,7 +635,17 @@ def build_graph(
 
         job = jobs[0]
         prompt = pm.render("layer1_open_application", {"resume_path": state["resume_pdf_path"]})
-        agent = agent_runtime.build_agent(_agent_tools(), prompt, response_format=OpenApplicationOutput)
+        # 注意这里**不给** record_job：那是选岗阶段的工具，导航阶段拿到它只会
+        # 诱导它去"记录"而不是去打开表单。
+        # record_site_limit 反而要给：投递须知那类文字最常出现在申请页上，而不是
+        # 岗位列表页——只在选岗阶段给它，最可能出现的位置正好错过。
+        tools_for_agent = [
+            *_agent_tools(_PASSTHROUGH_OPEN_APPLICATION),
+            make_record_site_limit_tool(tracker, state.get("site_name", "")),
+        ]
+        agent = agent_runtime.build_agent(
+            tools_for_agent, prompt, response_format=OpenApplicationOutput
+        )
         result = await agent_runtime.run_agent(agent, f"岗位详情页：{job.url}\n请开始。")
         outcome: OpenApplicationOutput = result.get("structured_response") or OpenApplicationOutput(
             form_opened=False, resume_uploaded=False,
@@ -533,21 +727,25 @@ def build_graph(
     graph = StateGraph(Layer1State)
     graph.add_node("ensure_ready", ensure_ready)
     graph.add_node("find_jobs", find_jobs)
+    graph.add_node("write_pending_jobs", write_pending_jobs)
     graph.add_edge(START, "ensure_ready")
     graph.add_edge("ensure_ready", "find_jobs")
+    # 候选岗位**总是**落库，不管后面还跑不跑——Checkpoint 1 的记录是这次选岗的
+    # 唯一留存物，agent 跨 run 没有记忆，不落库就只剩 stdout 里那几行。
+    graph.add_edge("find_jobs", "write_pending_jobs")
 
     if select_only:
-        # 只跑到选岗为止。**整个 Layer 1 里只有选岗是零副作用的**（纯浏览），
-        # 后面上传简历是对真实企业系统的真实动作。把这条短路做成"图里根本没有
-        # 后续节点"而不是"节点里判断一下要不要跳过"——少一条能走到上传的路径，
+        # 只跑到选岗为止。**整个 Layer 1 里只有选岗是零副作用的**（纯浏览 + 写自己
+        # 的库），后面上传简历是对真实企业系统的真实动作。把这条短路做成"图里根本
+        # 没有后续节点"而不是"节点里判断一下要不要跳过"——少一条能走到上传的路径，
         # 就少一个"某个条件写反了就真传上去了"的可能。
-        graph.add_edge("find_jobs", END)
+        graph.add_edge("write_pending_jobs", END)
         return graph.compile()
 
     graph.add_node("open_application", open_application)
     graph.add_node("scan_and_classify_fields", scan_and_classify_fields)
     graph.add_node("write_pending_application", write_pending_application)
-    graph.add_edge("find_jobs", "open_application")
+    graph.add_edge("write_pending_jobs", "open_application")
     graph.add_edge("open_application", "scan_and_classify_fields")
     graph.add_edge("scan_and_classify_fields", "write_pending_application")
     graph.add_edge("write_pending_application", END)
@@ -562,8 +760,8 @@ async def run_layer1(
     search_url: str = "",
     headless: bool = False,
     tracker: Optional[ApplicationTracker] = None,
-    max_pages: int = 3,
-    max_jobs: int = 5,
+    quotas: Optional[dict] = None,
+    max_pages: int = 8,
     max_filter_clicks: int = 4,
     select_only: bool = False,
 ) -> dict:
@@ -580,13 +778,19 @@ async def run_layer1(
     if bool(job_url) == bool(search_url):
         raise ValueError("job_url 与 search_url 必须且只能给一个")
 
+    # 按站点解析名额（去掉 site_overrides 里标记本站没有的类别）。调用方显式传了
+    # quotas 就以调用方为准——CLI 的 --category 是"我这次就要找这些"，不该被
+    # profile 的站点配置二次过滤。
+    if quotas is None:
+        quotas = preferences.load_profile().job_seeking.quotas_for_site(site_name)
+
     profile_dir = chrome_mcp_client.profile_dir_for_site(site_name)
     client = chrome_mcp_client.build_client(profile_dir, headless=headless)
     # 必须是同一个 session 贯穿全程（一个 Chrome 实例），不能每次工具调用各开
     # 一个——见 chrome_mcp_client.open_session() 注释，真机验证撞过这个坑。
     async with chrome_mcp_client.open_session(client) as session:
         tools = await chrome_mcp_client.get_tools(session)
-        app = build_graph(tools, tracker=tracker, max_pages=max_pages, max_jobs=max_jobs,
+        app = build_graph(tools, tracker=tracker, quotas=quotas, max_pages=max_pages,
                           max_filter_clicks=max_filter_clicks, select_only=select_only)
         return await app.ainvoke({
             "job_url": job_url,

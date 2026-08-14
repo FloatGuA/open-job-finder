@@ -6,7 +6,9 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 
-from schemas import AppStatus, ApplicationRecord, HRConversation, PendingApplication
+from schemas import (
+    AppStatus, ApplicationRecord, HRConversation, PendingApplication, PendingJob, SiteLimit,
+)
 from services.logger import get_orchestrator_logger
 
 
@@ -241,6 +243,65 @@ class ApplicationTracker:
             )
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_pending_applications_status ON pending_applications(status)"
+            )
+            # Migration: link a field-approval record back to the job-selection record
+            # it came from (Checkpoint 1 -> Checkpoint 2 is 1:N). NULL on legacy rows
+            # and on any run that skipped job selection (--job-url debugging path).
+            pa_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(pending_applications)")}
+            if "source_job_id" not in pa_cols:
+                self.conn.execute("ALTER TABLE pending_applications ADD COLUMN source_job_id INTEGER")
+
+            # pending_jobs: Checkpoint 1 -- candidates the selection agent found,
+            # awaiting human approval before anything touches an application form.
+            # `url` is UNIQUE so re-running selection can't queue the same job twice
+            # (the agent has no memory across runs; dedup has to live here).
+            # category vs category_agent: see schemas.PendingJob -- two columns on
+            # purpose, the diff between them is the human-correction signal.
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_jobs (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_name      TEXT NOT NULL,
+                    url            TEXT NOT NULL UNIQUE,
+                    title          TEXT DEFAULT '',
+                    company        TEXT DEFAULT '',
+                    category       TEXT DEFAULT '',
+                    category_agent TEXT DEFAULT '',
+                    why            TEXT DEFAULT '',
+                    status         TEXT NOT NULL DEFAULT 'pending',
+                    reason         TEXT,
+                    found_at       TEXT NOT NULL,
+                    decided_at     TEXT
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pending_jobs_status ON pending_jobs(status)"
+            )
+            # Migration: is_golden marks a human category correction the reviewer
+            # explicitly confirmed as a teaching example, fed back into the selection
+            # agent's prompt (see multisite.preferences.render_golden_examples).
+            # Separate from "the reviewer changed the category": a casual edit is not
+            # necessarily a canonical case, and only confirmed ones belong in a prompt.
+            pj_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(pending_jobs)")}
+            if "is_golden" not in pj_cols:
+                self.conn.execute("ALTER TABLE pending_jobs ADD COLUMN is_golden INTEGER NOT NULL DEFAULT 0")
+
+            # site_limits: how many positions one person may apply to on a given site,
+            # discovered opportunistically by the selection agent. `status` is a THREE-way
+            # value (unknown / no_limit / limited) -- see schemas.SiteLimit for why a bare
+            # nullable number is not good enough here.
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS site_limits (
+                    site_name        TEXT PRIMARY KEY,
+                    status           TEXT NOT NULL DEFAULT 'unknown',
+                    max_applications INTEGER,
+                    applied_count    INTEGER NOT NULL DEFAULT -1,
+                    evidence         TEXT DEFAULT '',
+                    seen_at          TEXT NOT NULL
+                )
+                """
             )
 
             self.conn.execute(
@@ -1142,19 +1203,215 @@ class ApplicationTracker:
         fields: list,
         company: str = "",
         job_url: str = "",
+        source_job_id: Optional[int] = None,
     ) -> int:
         """Insert a new Layer 1 candidate awaiting Layer 2 approval. Returns the new id."""
         with self.conn:
             cur = self.conn.execute(
                 """
                 INSERT INTO pending_applications
-                    (site_name, job_title, company, job_url, fields, status, created_at)
-                VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                    (site_name, job_title, company, job_url, fields, status, created_at, source_job_id)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
                 """,
                 (site_name, job_title, company, job_url, json.dumps(fields, ensure_ascii=False),
-                 self._utcnow_iso()),
+                 self._utcnow_iso(), source_job_id),
             )
             return cur.lastrowid
+
+    # -- Checkpoint 1: pending_jobs (job selection approval) --------------------
+
+    @staticmethod
+    def _row_to_pending_job(row) -> PendingJob:
+        return PendingJob(
+            id=row["id"],
+            site_name=row["site_name"],
+            url=row["url"],
+            title=row["title"] or "",
+            company=row["company"] or "",
+            category=row["category"] or "",
+            category_agent=row["category_agent"] or "",
+            why=row["why"] or "",
+            status=row["status"],
+            reason=row["reason"],
+            found_at=row["found_at"],
+            decided_at=row["decided_at"],
+            is_golden=bool(row["is_golden"]),
+        )
+
+    def add_pending_job(
+        self,
+        site_name: str,
+        url: str,
+        title: str = "",
+        company: str = "",
+        category: str = "",
+        why: str = "",
+    ) -> Optional[int]:
+        """Record one candidate job for Checkpoint 1. Returns the new id, or None if
+        this url is already in the table.
+
+        `category_agent` is seeded from the same value as `category` and never written
+        again -- the pair is what makes a later human correction visible (see
+        schemas.PendingJob).
+
+        Returning None (rather than raising) on a duplicate url is deliberate: the
+        selection agent has no memory across runs, so re-running selection on the same
+        site WILL re-find jobs already awaiting approval. That is normal, not an error.
+        """
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                INSERT OR IGNORE INTO pending_jobs
+                    (site_name, url, title, company, category, category_agent, why, status, found_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (site_name, url, title, company, category, category, why, self._utcnow_iso()),
+            )
+            return cur.lastrowid if cur.rowcount else None
+
+    def get_pending_jobs(self, status: Optional[str] = None) -> List[PendingJob]:
+        if status:
+            rows = self.conn.execute(
+                "SELECT * FROM pending_jobs WHERE status = ? ORDER BY found_at DESC", (status,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM pending_jobs ORDER BY found_at DESC",
+            ).fetchall()
+        return [self._row_to_pending_job(row) for row in rows]
+
+    def get_pending_job(self, job_id: int) -> Optional[PendingJob]:
+        row = self.conn.execute("SELECT * FROM pending_jobs WHERE id = ?", (job_id,)).fetchone()
+        return self._row_to_pending_job(row) if row else None
+
+    def decide_pending_job(self, job_id: int, decision: str, reason: Optional[str] = None) -> int:
+        """Record the Checkpoint 1 approve/reject -- the only writer of status/reason/
+        decided_at on this table.
+
+        **Deliberately does NOT write `category`.** Category (and is_golden) belong to
+        `set_pending_job_review`, so each column has exactly one writer. An earlier
+        version took a `category` here too; that is the same shape as the four
+        same-column-two-writers drifts this project already got bitten by (see
+        docs/audit-remediation-log.md), so it was split before it could rot.
+
+        `WHERE status = 'pending'` makes a double-decide a no-op returning 0 rather than
+        re-deciding a job that already went to the fill stage.
+        """
+        assert decision in ("approved", "rejected"), f"invalid decision: {decision!r}"
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                UPDATE pending_jobs SET status = ?, reason = ?, decided_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (decision, reason, self._utcnow_iso(), job_id),
+            )
+            return cur.rowcount
+
+    def set_pending_job_review(
+        self,
+        job_id: int,
+        category: Optional[str] = None,
+        is_golden: Optional[bool] = None,
+    ) -> int:
+        """The only writer of `category` and `is_golden` on pending_jobs.
+
+        Both args are tri-state: None = leave that column alone. This lets the UI
+        confirm a golden without re-sending the category, and vice versa.
+
+        `category_agent` is never touched here (or anywhere after insert) -- the
+        difference between the two columns IS the correction signal.
+
+        Deliberately **not** gated on `status = 'pending'`, unlike decide_pending_job:
+        noticing a misclassification after approving is normal, and curating the golden
+        set is independent of the approval lifecycle.
+        """
+        sets, params = [], []
+        if category is not None:
+            sets.append("category = ?")
+            params.append(category)
+        if is_golden is not None:
+            sets.append("is_golden = ?")
+            params.append(1 if is_golden else 0)
+        if not sets:
+            return 0
+        params.append(job_id)
+        with self.conn:
+            cur = self.conn.execute(
+                f"UPDATE pending_jobs SET {', '.join(sets)} WHERE id = ?", params,
+            )
+            return cur.rowcount
+
+    # -- site application limits ----------------------------------------------
+
+    _SITE_LIMIT_STATUSES = ("unknown", "no_limit", "limited")
+
+    def upsert_site_limit(
+        self,
+        site_name: str,
+        status: str,
+        max_applications: Optional[int] = None,
+        applied_count: int = -1,
+        evidence: str = "",
+    ) -> None:
+        """记下某站点的投递数量限制。同一站点后来居上（覆盖）。
+
+        **`status='unknown'` 不会覆盖已知结果**：agent 每次跑都可能没看到那段说明
+        （它是机会性发现的），如果"这次没看见"能把上次真读到的 `limited(3)` 冲掉，
+        那这张表就永远停在 unknown——已知信息被无知覆盖是净损失。
+        """
+        assert status in self._SITE_LIMIT_STATUSES, f"invalid status: {status!r}"
+        if status == "unknown":
+            existing = self.get_site_limit(site_name)
+            if existing is not None and existing.status != "unknown":
+                return
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO site_limits
+                    (site_name, status, max_applications, applied_count, evidence, seen_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(site_name) DO UPDATE SET
+                    status = excluded.status,
+                    max_applications = excluded.max_applications,
+                    applied_count = excluded.applied_count,
+                    evidence = excluded.evidence,
+                    seen_at = excluded.seen_at
+                """,
+                (site_name, status, max_applications, applied_count, evidence, self._utcnow_iso()),
+            )
+
+    def get_site_limit(self, site_name: str) -> Optional[SiteLimit]:
+        row = self.conn.execute(
+            "SELECT * FROM site_limits WHERE site_name = ?", (site_name,)
+        ).fetchone()
+        if row is None:
+            return None
+        return SiteLimit(
+            site_name=row["site_name"],
+            status=row["status"],
+            max_applications=row["max_applications"],
+            applied_count=row["applied_count"],
+            evidence=row["evidence"] or "",
+            seen_at=row["seen_at"],
+        )
+
+    def get_golden_category_examples(self, limit: int = 20) -> List[PendingJob]:
+        """人工确认过的归类纠正，喂回选岗 agent 的 prompt。
+
+        只取 `category != category_agent` 的：确认了但类别没变的行是"agent 判对了"，
+        当正例塞进 prompt 只是占上下文。倒序取最近的——归类口径会随用户偏好漂移，
+        新的纠正比旧的更能代表当前标准。
+        """
+        rows = self.conn.execute(
+            """
+            SELECT * FROM pending_jobs
+            WHERE is_golden = 1 AND category_agent != '' AND category != category_agent
+            ORDER BY id DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [self._row_to_pending_job(row) for row in rows]
 
     def get_pending_applications(self, status: Optional[str] = None) -> List[PendingApplication]:
         if status:

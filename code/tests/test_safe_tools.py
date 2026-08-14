@@ -119,25 +119,33 @@ class TestGuardedClick:
 
 
 class TestAgentToolsetWiring:
-    """守"守法有没有真的接到 agent 手上"。
+    """守"守法有没有真的接到 agent 手上"，以及"有没有从别的工具漏出去"。
 
     make_guarded_click 自己的行为在上面测过了，但那不能保证 build_agent_toolset
     真的用了它——如果有人把那一行改回透传原始 click，上面所有测试照样全绿，而
-    agent 就拿到了一个能点提交的工具。这一组就是为了让那种改动变红。
+    agent 就拿到了一个能点提交的工具。
+
+    更要命的是**旁路**：工具集原本用黑名单透传，于是 `evaluate_script`（任意 JS）
+    也在 agent 手上，一行 `document.querySelector(...).click()` 就绕过守法点击，
+    守法有没有接上根本不重要了。所以这一组同时守两件事：守法接上了，且没有第二条路。
     """
 
-    @staticmethod
-    def _fake_mcp_tools():
+    # 覆盖真实 chrome-devtools-mcp 工具面里的危险子集 + 需要放行的那几个。
+    # 危险的必须真的出现在"可选池"里，否则"没漏出去"这个断言是空的。
+    DANGEROUS = ("evaluate_script", "take_screenshot", "press_key", "fill", "fill_form", "type_text")
+
+    @classmethod
+    def _fake_mcp_tools(cls):
         from langchain_core.tools import StructuredTool
 
         async def _noop(**kw):
             return "RAW-CLICK-RAN"
 
-        names = ["navigate_page", "take_snapshot", "click", "upload_file", "wait_for", "fill"]
+        names = ["navigate_page", "take_snapshot", "click", "upload_file", "wait_for", *cls.DANGEROUS]
         return [StructuredTool.from_function(coroutine=_noop, name=n, description=n) for n in names]
 
-    def _toolset(self):
-        from multisite.layer1_agent import build_agent_toolset
+    def _toolset(self, passthrough=None):
+        from multisite.layer1_agent import build_agent_toolset, _PASSTHROUGH_FIND_JOBS
 
         async def _snap():
             return REAL_FORM_SNAPSHOT
@@ -146,6 +154,7 @@ class TestAgentToolsetWiring:
             self._fake_mcp_tools(),
             snapshot_provider=lambda: REAL_FORM_SNAPSHOT,
             snapshot_taker=_snap,
+            passthrough=_PASSTHROUGH_FIND_JOBS if passthrough is None else passthrough,
         )
 
     def test_click_in_agent_toolset_refuses_submit(self):
@@ -165,7 +174,38 @@ class TestAgentToolsetWiring:
         assert names.count("click") == 1
         assert names.count("take_snapshot") == 1
 
-    def test_other_tools_are_passed_through(self):
-        names = {t.name for t in self._toolset()}
-        for expected in ("navigate_page", "upload_file", "wait_for", "fill"):
-            assert expected in names
+    @pytest.mark.parametrize("tool_name", DANGEROUS)
+    def test_dangerous_tools_never_reach_the_agent(self, tool_name):
+        """这条是白名单的意义所在。
+
+        `evaluate_script` 能绕过守法点击、`press_key` 回车常等于提交、
+        `take_screenshot` 给没有视觉的 DeepSeek 塞永不被裁剪的图像块、
+        `fill`/`fill_form`/`type_text` 在 Layer 1 任何阶段都不该出现
+        （填表是 Layer 3 审批之后的事）。
+        改回黑名单透传的话，这一组会全红。
+        """
+        from multisite.layer1_agent import _PASSTHROUGH_FIND_JOBS, _PASSTHROUGH_OPEN_APPLICATION
+
+        for passthrough in (_PASSTHROUGH_FIND_JOBS, _PASSTHROUGH_OPEN_APPLICATION):
+            names = {t.name for t in self._toolset(passthrough)}
+            assert tool_name not in names, f"{tool_name} 漏进了 {passthrough}"
+
+    def test_find_jobs_toolset_is_exactly_the_allowlist(self):
+        from multisite.layer1_agent import _PASSTHROUGH_FIND_JOBS
+
+        names = {t.name for t in self._toolset(_PASSTHROUGH_FIND_JOBS)}
+        # record_job 由 find_jobs 节点单独追加，不在 build_agent_toolset 的职责里。
+        assert names == {"take_snapshot", "click", "navigate_page", "wait_for"}
+
+    def test_only_open_application_gets_upload_file(self):
+        """上传简历是对真实企业系统的真实动作，选岗阶段（纯浏览）不该有这个能力。"""
+        from multisite.layer1_agent import _PASSTHROUGH_FIND_JOBS, _PASSTHROUGH_OPEN_APPLICATION
+
+        assert "upload_file" not in {t.name for t in self._toolset(_PASSTHROUGH_FIND_JOBS)}
+        assert "upload_file" in {t.name for t in self._toolset(_PASSTHROUGH_OPEN_APPLICATION)}
+
+    def test_unknown_passthrough_name_fails_loudly(self):
+        """MCP 上游改了工具名时要当场炸，而不是静默少给 agent 一个工具——
+        后者的表现是"agent 莫名其妙不会翻页了"，极难定位。"""
+        with pytest.raises(RuntimeError, match="does not expose"):
+            self._toolset(("navigate_page", "no_such_tool"))

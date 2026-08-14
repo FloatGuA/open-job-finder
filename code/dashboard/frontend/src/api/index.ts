@@ -118,6 +118,38 @@ export interface PendingApplication {
   decided_at: string | null
 }
 
+export interface PendingJob {
+  id: number
+  site_name: string
+  url: string
+  title: string
+  company: string
+  // category = 当前值（审批人改过就是人改的）；category_agent = agent 最初自报，
+  // 永不覆写。两者不等的行就是一次 agent 归类纠错，别把它们当成同一个字段。
+  category: string
+  category_agent: string
+  why: string
+  status: 'pending' | 'approved' | 'rejected'
+  reason: string | null
+  found_at: string
+  decided_at: string | null
+  // 审批人确认过"这条纠正拿去教 agent"。确认过的会被渲染进选岗 prompt 当例子；
+  // 只是改了类别但没确认的不会——随手一改不见得是标准案例。
+  is_golden: boolean
+}
+
+export interface SiteLimitInfo {
+  site_name: string
+  // 三态：unknown = 没找到相关说明（**不等于**没有限制）；no_limit = 页面明确写了不限；
+  // limited = 看到了具体数字。把 unknown 显示成"无限制"会让人放心批一堆然后超额。
+  status: 'unknown' | 'no_limit' | 'limited'
+  max_applications: number | null
+  applied_count: number // -1 = 页面上没看到
+  evidence: string // 页面原文，不是 agent 的转述
+  seen_at: string
+  approved_here: number // 这个站已批准了几个（后端统计全量，不受列表过滤影响）
+}
+
 export interface PersonalInfo {
   // 姓名/电话/邮箱的唯一真源是简历系统的信息池（info_pool.basic_info），这里只读展示，
   // 编辑入口在「简历」页——不重复建第二个写入口。
@@ -909,6 +941,55 @@ export const API = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason }),
+    }),
+  // ── Checkpoint 1：选岗审批 ──
+  // categories 跟列表一起返回：前端渲染类别下拉必须有它，分两次请求只会多出一种
+  // “下拉是空的”的中间状态。
+  getCheckpoint1Jobs: (status?: string): Promise<{ jobs: PendingJob[]; total: number; categories: string[]; site_limits: Record<string, SiteLimitInfo> }> => {
+    const query = buildQuery({ status })
+    return requestJson(`/api/checkpoint1/jobs${query}`)
+  },
+  // 人工填/改本站投递上限。不能假设 agent 一定拿得到这条信息，所以人得有入口。
+  setCheckpoint1SiteLimit: (
+    site: string,
+    patch: { status: 'unknown' | 'no_limit' | 'limited'; max_applications?: number; evidence?: string },
+  ): Promise<{ ok: boolean }> =>
+    requestJson(`/api/checkpoint1/site-limit/${encodeURIComponent(site)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+  // 纠正类别 / 标记 golden。不改审批状态——写的列跟 approve 不同，刻意分开端点。
+  reviewCheckpoint1Job: (
+    id: number,
+    patch: { category?: string; is_golden?: boolean },
+  ): Promise<{ ok: boolean; job: PendingJob }> =>
+    requestJson(`/api/checkpoint1/jobs/${id}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+  approveCheckpoint1Job: (id: number, category?: string): Promise<{ ok: boolean }> =>
+    requestJson(`/api/checkpoint1/jobs/${id}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category }),
+    }),
+  rejectCheckpoint1Job: (id: number, reason?: string): Promise<{ ok: boolean }> =>
+    requestJson(`/api/checkpoint1/jobs/${id}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    }),
+  decideCheckpoint1Batch: (
+    decision: 'approved' | 'rejected',
+    ids: number[],
+    opts?: { categories?: Record<string, string>; reason?: string },
+  ): Promise<{ ok: boolean; decided: number[]; skipped: number[] }> =>
+    requestJson('/api/checkpoint1/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, ids, ...opts }),
     }),
 }
 
