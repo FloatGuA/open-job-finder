@@ -71,7 +71,11 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 1. **`pending_jobs` 没有"已填表"这个终态**：m2 跑完之后那一行仍然停在 `approved`，分不出"排队等填表"和"表已填、待 Checkpoint 2 审批"。现在靠 `pending_applications.source_job_id`（本轮刚接上）能间接推出来，但那是查出来的不是记下来的。要不要加一个状态、加在哪一层，得先想清楚跟 Layer 3 的关系——Layer 3 落地时这条链路还会再长一截，现在定容易返工。
 2. ~~**m1 只能从命令行起**~~ —— **v2.24.7 已做**（控制台 M1 组 + 「开始选岗」，入口页 URL 走「设为默认」记住；取舍见 `DECISION.md`「m1 的控制台入口」）。剩下的是：`site` 还是自由文本框，填错无提示；控制台刻意不放 M2（重跑需求未出现）。
 
-> **本轮未验证的**：所有改动都是静态检查 + 单测 + 变异验证，**m1/m2 没有真机跑过**。风险最低的验证顺序是：先 `--select-only` 跑一次 m1（对外零副作用），确认 `logs/runs/m1_*.jsonl` 有六个节点的 step 记录、队列页能正常显示 M1 徽章；再考虑 m2。
+> **本轮未验证的**：所有改动都是静态检查 + 单测 + 变异验证，**m1/m2 没有真机跑过**。风险最低的验证顺序是：先 `--select-only` 跑一次 m1（对外零副作用），确认 `logs/runs/m1_*.jsonl` 有阶段级 step 记录、队列页能正常显示 M1 徽章；再考虑 m2。
+>
+> **2026-08-16：四张多站点表已清空，从白纸开始验证**（`scripts/reset_multisite.py --yes`，备份在 `data/backups/multisite_20260815_201228.json`，19 + 2 + 1 + 0 行）。截图与调试快照一并清了；**登录态 `browser_profile_multisite/bambulab/` 未动**。Boss 那条线（applications 968 / hr_conversations 1072 / hr_messages 3637）一行没碰。
+> ⚠️ 清库**不撤销已经发生的事**：被删的那条 `pending_applications` 意味着 8-15 那次 m2 已经把简历传进过那个企业申请表（未提交），重跑会再传一次。
+> 📌 顺带一个待观察：`site_briefs` 清空前就是 0 条——`record_site_brief` **从来没成功写过一次**，重跑时留意 agent 收尾前会不会调用它。
 
 ### 📌 `schedule_log.jsonl` 把"接受了请求"和"真的跑完了"混成同一个 success（2026-08-13 发现，未修）
 
