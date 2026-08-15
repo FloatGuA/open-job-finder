@@ -643,6 +643,13 @@ export interface ResumePlan {
 // 这个类型建的 Record，漏一个就是运行时 undefined → 整个 SPA 白屏。
 export type WorkflowId = 'w1' | 'w2' | 'w3' | 'm1' | 'm2'
 
+// Which workflows have parameters worth remembering between runs. The backend
+// keeps the same list (server._DEFAULTABLE_WORKFLOWS); w3 and m2 have none --
+// w3 sends whatever is approved, m2's job differs every time.
+export type DefaultableWorkflow = 'w1' | 'w2' | 'm1'
+
+export type WorkflowDefaults = Record<DefaultableWorkflow, Record<string, unknown>>
+
 export interface QueueItem {
   id: string
   workflow: WorkflowId
@@ -880,12 +887,11 @@ export const API = {
   resetPrompt: (name: string): Promise<{ ok: boolean; modified: boolean }> =>
     requestJson(`/api/prompts/${encodeURIComponent(name)}/reset`, { method: 'POST' }),
   getWorkflowStatus: (): Promise<WorkflowStatus> => requestJson('/api/workflow/status'),
-  getWorkflowDefaults: (): Promise<{ w1: Record<string, unknown>; w2: Record<string, unknown> }> =>
-    requestJson('/api/workflow/defaults'),
+  getWorkflowDefaults: (): Promise<WorkflowDefaults> => requestJson('/api/workflow/defaults'),
   saveWorkflowDefault: (
-    workflow: 'w1' | 'w2',
+    workflow: DefaultableWorkflow,
     updates: Record<string, unknown>,
-  ): Promise<{ w1: Record<string, unknown>; w2: Record<string, unknown> }> =>
+  ): Promise<WorkflowDefaults> =>
     requestJson('/api/workflow/defaults', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

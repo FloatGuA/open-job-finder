@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { API } from '@/api'
+import { API, type DefaultableWorkflow } from '@/api'
+import { checkM1Form } from '@/lib/m1Form'
 import { useAppContext } from '@/context/app-context'
 import DevLabel from '@/components/dev/DevLabel'
 
@@ -19,22 +20,30 @@ export default function WorkflowPanel() {
   const [checkInterval, setCheckInterval] = useState(0) // minutes; 0 = disabled
   const [headless, setHeadless] = useState(true)
   const [debug, setDebug] = useState(true)
-  const [pending, setPending] = useState<'apply' | 'check' | 'all' | 'reply' | null>(null)
+  const [pending, setPending] = useState<'apply' | 'check' | 'all' | 'reply' | 'select' | null>(null)
   const [stopping, setStopping] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearConfirm, setClearConfirm] = useState(false)
   const clearConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
-  const [savingDefault, setSavingDefault] = useState<'w1' | 'w2' | null>(null)
-  const [savedDefault, setSavedDefault] = useState<'w1' | 'w2' | null>(null)
+  const [savingDefault, setSavingDefault] = useState<DefaultableWorkflow | null>(null)
+  const [savedDefault, setSavedDefault] = useState<DefaultableWorkflow | null>(null)
+  // m1 = \u591a\u7ad9\u70b9\u9009\u5c97\u3002\u7ad9\u70b9\u4e0e\u5165\u53e3\u9875\u6bcf\u6b21\u90fd\u4e00\u6837\uff0c\u6240\u4ee5\u8d70\u8ddf W1/W2 \u540c\u4e00\u5957\u300c\u8bbe\u4e3a\u9ed8\u8ba4\u300d\u3002
+  const [m1Site, setM1Site] = useState('')
+  const [m1SearchUrl, setM1SearchUrl] = useState('')
+  const [m1MaxPages, setM1MaxPages] = useState(8)
+  const m1Issues = checkM1Form(m1Site, m1SearchUrl)
 
   // Backfill from resolved Layer-3 defaults (config.yaml < user_settings.yaml) so
   // the panel opens with the user's saved defaults, not hardcoded JS values.
   // debug / auto_interval / search_url aren't persisted defaults \u2014 left as-is.
   useEffect(() => {
     void API.getWorkflowDefaults()
-      .then(({ w1, w2 }) => {
+      .then(({ w1, w2, m1 }) => {
+        if (m1?.site != null) setM1Site(String(m1.site))
+        if (m1?.search_url != null) setM1SearchUrl(String(m1.search_url))
+        if (m1?.max_pages != null) setM1MaxPages(Number(m1.max_pages))
         if (w1?.score_threshold != null) setScoreThreshold(Number(w1.score_threshold))
         if (w1?.max_cards != null) setApplyLimit(Number(w1.max_cards))
         if (w1?.dry_run != null) setDryRun(Boolean(w1.dry_run))
@@ -45,14 +54,16 @@ export default function WorkflowPanel() {
       .catch(() => {})
   }, [])
 
-  const handleSaveDefault = async (wf: 'w1' | 'w2') => {
+  const handleSaveDefault = async (wf: DefaultableWorkflow) => {
     setSavingDefault(wf)
     setError(null)
     try {
       const updates =
         wf === 'w1'
           ? { score_threshold: scoreThreshold, max_cards: applyLimit, dry_run: dryRun, headless }
-          : { max_conversations: maxConversations, no_response_days: days, headless }
+          : wf === 'm1'
+            ? { site: m1Site.trim(), search_url: m1SearchUrl.trim(), max_pages: m1MaxPages }
+            : { max_conversations: maxConversations, no_response_days: days, headless }
       await API.saveWorkflowDefault(wf, updates)
       setSavedDefault(wf)
       window.setTimeout(() => setSavedDefault((p) => (p === wf ? null : p)), 1500)
@@ -63,7 +74,7 @@ export default function WorkflowPanel() {
     }
   }
 
-  const renderSaveDefault = (wf: 'w1' | 'w2') => (
+  const renderSaveDefault = (wf: DefaultableWorkflow) => (
     <button
       type="button"
       onClick={() => void handleSaveDefault(wf)}
@@ -163,6 +174,25 @@ export default function WorkflowPanel() {
     try {
       const res = (await API.triggerReplyWorkflow({ headless, debug })) as { status?: string }
       flashInfo(res?.status === 'started' ? '\u5df2\u5f00\u59cb\u53d1\u9001' : '\u5df2\u6392\u5165\u961f\u5217')
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setPending(null)
+    }
+  }
+
+  const handleSelect = async () => {
+    setError(null)
+    setInfo(null)
+    setPending('select')
+    try {
+      const res = (await API.enqueueWorkflow('m1', {
+        site: m1Site.trim(),
+        search_url: m1SearchUrl.trim(),
+        max_pages: m1MaxPages,
+        headless,
+      })) as { status?: string }
+      flashInfo(res?.status === 'started' ? '\u5df2\u5f00\u59cb\u9009\u5c97' : '\u5df2\u6392\u5165\u961f\u5217')
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -298,6 +328,29 @@ export default function WorkflowPanel() {
 
       <div className="my-4 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
 
+      {/* M1 group -- multi-site job selection (Checkpoint 1). Zero outward side
+          effects: it only browses and writes our own approval queue. */}
+      <div className="flex items-center gap-2">
+        <GroupHeader wf="m1" title={'\u9009\u5c97\u53c2\u6570'} inline />
+        {renderSaveDefault('m1')}
+      </div>
+      <div className="mt-3 space-y-2.5">
+        <FieldText label={'\u7ad9\u70b9\u6807\u8bc6'} value={m1Site} onChange={setM1Site} placeholder="bambulab" />
+        <FieldText
+          label={'\u5165\u53e3\u9875 URL'}
+          value={m1SearchUrl}
+          onChange={setM1SearchUrl}
+          placeholder="https://xxx.jobs.feishu.cn/campus/"
+        />
+        <FieldNum label="max_pages" value={m1MaxPages} onChange={setM1MaxPages} min={1} max={30} />
+        <p className="text-xs text-text-3">{'\u5165\u53e3\u9875\u586b\u62db\u8058\u9996\u9875\uff0c\u522b\u5e26\u7b5b\u9009\u53c2\u6570\u2014\u2014\u7b5b\u9009\u6761\u4ef6\u7531 profile \u7684\u6c42\u804c\u504f\u597d\u8868\u8fbe\uff0cagent \u81ea\u5df1\u53bb\u9875\u9762\u4e0a\u627e'}</p>
+        {m1Issues.warning && (
+          <p className="rounded-lg bg-signal-amber/10 px-3 py-2 text-xs text-signal-amber">{m1Issues.warning}</p>
+        )}
+      </div>
+
+      <div className="my-4 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
+
       {/* Runtime */}
       <div className="flex flex-wrap gap-x-6 gap-y-2.5">
         <FieldToggle label={'headless'} checked={headless} onChange={setHeadless} compact />
@@ -323,6 +376,16 @@ export default function WorkflowPanel() {
         >
           <span className="h-1.5 w-1.5 rounded-full bg-signal-purple" style={{ boxShadow: '0 0 8px #bf5af2' }} />
           {pending === 'check' ? '\u626b\u63cf\u4e2d\u2026' : '\u626b\u63cf\u56de\u590d'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleSelect()}
+          disabled={disabled || Boolean(m1Issues.blocking)}
+          title={m1Issues.blocking ?? '\u6309\u6c42\u804c\u504f\u597d\u5728\u76ee\u6807\u7ad9\u70b9\u81ea\u4e3b\u9009\u5c97\uff0c\u4ea7\u51fa\u5f85\u5ba1\u6279\u5019\u9009\uff08\u4e0d\u6295\u9012\u3001\u4e0d\u4e0a\u4f20\uff09'}
+          className="inline-flex items-center gap-2 rounded-[10px] border border-border-subtle bg-bg-card2 px-4 py-2 text-sm text-text-1 transition hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#ff9f0a', boxShadow: '0 0 8px #ff9f0a' }} />
+          {pending === 'select' ? '\u9009\u5c97\u4e2d\u2026' : '\u5f00\u59cb\u9009\u5c97'}
         </button>
         <button
           type="button"
@@ -370,8 +433,14 @@ export default function WorkflowPanel() {
   )
 }
 
-function GroupHeader({ wf, title, inline }: { wf: 'w1' | 'w2'; title: string; inline?: boolean }) {
-  const cls = wf === 'w1' ? 'bg-signal-blue/18 text-signal-bright' : 'bg-signal-purple/18 text-signal-purple'
+const GROUP_CLS: Record<string, string> = {
+  w1: 'bg-signal-blue/18 text-signal-bright',
+  w2: 'bg-signal-purple/18 text-signal-purple',
+  m1: 'bg-signal-amber/18 text-signal-amber',
+}
+
+function GroupHeader({ wf, title, inline }: { wf: DefaultableWorkflow; title: string; inline?: boolean }) {
+  const cls = GROUP_CLS[wf] ?? GROUP_CLS.w1
   return (
     <div className={inline ? 'flex items-center gap-2.5' : 'mb-3 flex items-center gap-2.5'}>
       <span className={`rounded font-mono text-[12.5px] font-bold px-2 py-0.5 ${cls}`}>{wf.toUpperCase()}</span>
@@ -403,6 +472,32 @@ function FieldNum({
         max={max}
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-[86px] rounded-lg bg-bg-card2 px-2.5 py-1.5 text-right font-mono text-sm text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue"
+        style={{ border: '1px solid rgba(255,255,255,0.08)' }}
+      />
+    </div>
+  )
+}
+
+function FieldText({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="flex-1 font-mono text-sm text-text-2">{label}</span>
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-[240px] rounded-lg bg-bg-card2 px-2.5 py-1.5 font-mono text-xs text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue"
         style={{ border: '1px solid rgba(255,255,255,0.08)' }}
       />
     </div>

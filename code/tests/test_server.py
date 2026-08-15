@@ -181,6 +181,65 @@ def _write_run_log(runs_dir: Path, filename: str, events: list[dict]) -> None:
     (runs_dir / filename).write_text(content, encoding="utf-8")
 
 
+class TestM1ConsoleEntry:
+    """m1 从 Dashboard 控制台触发所需的后端支撑。
+
+    m1 的参数里有一个**每次都一样**的东西：站点的招聘入口页。让人每次手打一遍
+    URL 是最容易出错的一环（打错了 agent 会在一个不存在的页面上兜圈子直到步数
+    耗尽），所以它要能像 W1/W2 的参数一样「设为默认」存下来。
+    """
+
+    @pytest.fixture()
+    def configured(self, client):
+        """「设为默认」的允许键来自 config.yaml 的对应节（w1/w2 同一机制）。
+        测试沙箱的 config 是最小的，所以把这个前提显式摆出来——真实部署由下面
+        `test_factory_config_declares_m1` 守着。"""
+        app.state.config["m1"] = {"site": "", "search_url": "", "max_pages": 8}
+        return client
+
+    def test_factory_config_declares_m1(self):
+        """出厂 config.yaml 必须有 m1 节：没有它，允许键集合是空的，
+        「设为默认」会**静默存不进任何东西**（返回 200，下次打开还是空）。"""
+        import yaml
+
+        cfg = yaml.safe_load(
+            (Path(__file__).resolve().parent.parent / "config.yaml").read_text(encoding="utf-8"))
+        assert set(cfg["m1"]) >= {"site", "search_url", "max_pages"}
+
+    def test_m1_defaults_round_trip(self, configured):
+        client = configured
+        r = client.post("/api/workflow/defaults", json={
+            "workflow": "m1",
+            "updates": {"site": "acme", "search_url": "https://acme.example/campus/",
+                        "max_pages": 3},
+        })
+        assert r.status_code == 200
+        m1 = r.json()["m1"]
+        assert m1["site"] == "acme"
+        assert m1["search_url"] == "https://acme.example/campus/"
+        assert m1["max_pages"] == 3
+
+    def test_m1_defaults_are_readable_after_saving(self, configured):
+        client = configured
+        client.post("/api/workflow/defaults", json={
+            "workflow": "m1", "updates": {"search_url": "https://acme.example/campus/"}})
+        assert client.get("/api/workflow/defaults").json()["m1"]["search_url"] == \
+            "https://acme.example/campus/"
+
+    def test_unknown_keys_are_dropped(self, configured):
+        client = configured
+        # 白名单来自 config.yaml 的 m1 节；垃圾键不该混进 user_settings.yaml。
+        r = client.post("/api/workflow/defaults", json={
+            "workflow": "m1", "updates": {"search_url": "https://a/", "nonsense": 1}})
+        assert "nonsense" not in r.json()["m1"]
+
+    def test_run_logs_can_be_filtered_by_m1_and_m2(self, client):
+        # 日志文件叫 m1_*.jsonl，端点的 pipeline 白名单是另写的一份——不同步的
+        # 表现是"日志在磁盘上，一按筛选就 400"。
+        for wf in ("m1", "m2"):
+            assert client.get(f"/api/runs?pipeline={wf}").status_code == 200
+
+
 class TestRunLogs:
     def test_runs_empty_dir(self, client):
         r = client.get("/api/runs")

@@ -933,7 +933,20 @@ const TABS = [
   { id: 'w1', badge: 'W1', title: '\u6295\u9012\u6d41\u7a0b' },
   { id: 'w2', badge: 'W2', title: '\u56de\u590d\u626b\u63cf' },
   { id: 'w3', badge: 'W3', title: '\u53d1\u9001\u56de\u590d' },
+  // \u591a\u7ad9\u70b9 Layer 1\u3002SKELETON / LOOP_STEPS / RUN_STEPS \u90fd\u6ca1\u7ed9\u5b83\u4eec\u5199\u6761\u76ee\uff0c
+  // \u90a3\u51e0\u5f20\u8868\u662f\u624b\u7ef4\u62a4\u7684\u9759\u6001\u6a21\u677f\uff08\u5df2\u7ecf\u56e0\u4e3a\u6f02\u79fb\u8bb0\u8fc7\u4e00\u6b21\u6848\uff09\uff0c
+  // \u7559\u7a7a = \u53ea\u663e\u793a\u771f\u5b9e\u6536\u5230\u7684\u4e8b\u4ef6\uff0c\u4ee5\u540e\u8981\u505a\u8be6\u7ec6\u9aa8\u67b6\u518d\u5f80\u91cc\u586b\u3002
+  { id: 'm1', badge: 'M1', title: '\u591a\u7ad9\u9009\u5c97' },
+  { id: 'm2', badge: 'M2', title: '\u591a\u7ad9\u586b\u8868' },
 ] as const
+
+const TAB_BADGE_CLS: Record<string, string> = {
+  w1: 'bg-signal-blue/18 text-signal-bright',
+  w2: 'bg-signal-purple/18 text-signal-purple',
+  w3: 'bg-signal-teal/18 text-signal-teal',
+  m1: 'bg-signal-amber/18 text-signal-amber',
+  m2: 'bg-signal-red/18 text-signal-red',
+}
 
 // W1/W2/W3 are mutually exclusive (one workflow runs at a time), so they share a
 // single full-size frame and switch via tabs instead of three cramped cards.
@@ -962,11 +975,7 @@ export default function WorkflowTrack() {
         {TABS.map((t) => {
           const isActive = tab === t.id
           const running = workflowRunning === t.id
-          const badgeCls = t.id === 'w1'
-            ? 'bg-signal-blue/18 text-signal-bright'
-            : t.id === 'w2'
-              ? 'bg-signal-purple/18 text-signal-purple'
-              : 'bg-signal-teal/18 text-signal-teal'
+          const badgeCls = TAB_BADGE_CLS[t.id] ?? 'bg-signal-teal/18 text-signal-teal'
           return (
             <button
               key={t.id}

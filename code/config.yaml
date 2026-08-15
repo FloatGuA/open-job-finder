@@ -61,3 +61,10 @@ w2:                           # 检查回应流程
   stale_conv_days: 30         # 投递满多少天且无进展(排除面试/offer) → 清理数据(级联删岗位+会话+消息)，重新走流程
   dry_run: false
   headless: true
+
+m1:                           # 多站点选岗（Layer 1 Checkpoint 1；对外零副作用）
+  site: ''                    # 站点标识，决定用哪个持久化登录目录 data/browser_profile_multisite/<site>/
+  search_url: ''              # 站点招聘入口页（校招首页，**不要带筛选参数**——
+                              # 偏好由 profile.yaml 的 job_seeking 表达，agent 自己去页面上找筛选功能；
+                              # 把筛选编进 URL 会静默过滤掉整类岗位，实测 87 条 vs 去掉后 134 条）
+  max_pages: 8                # 每个分类桶最多翻几页

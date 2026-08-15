@@ -63,6 +63,14 @@ config.yaml 的 w1: / w2:            ← 出厂默认（最低优先级 fallback
 | `dry_run` | `true` = 不真实发送简历/回复 |
 | `headless` | 浏览器无头模式 |
 
+| `m1:` 键 | 含义 |
+|----------|------|
+| `site` | 站点标识，决定用哪个持久化登录目录 `data/browser_profile_multisite/<site>/` |
+| `search_url` | 站点招聘入口页（校招首页）。**不要带筛选参数**——筛选条件由 `profile.yaml` 的 `job_seeking` 表达，agent 自己去页面上找；编进 URL 会静默过滤掉整类岗位（实测 87 条 vs 去掉后 134 条） |
+| `max_pages` | 每个分类桶最多翻几页 |
+
+> m1 有出厂默认而 m2/w3 没有，判据是**"它有没有每次都一样的参数"**：m2 每次的岗位都不同，w3 发的是当前所有已批准回复。白名单在 `dashboard/server.py::_DEFAULTABLE_WORKFLOWS`。
+
 ### `data/profile.yaml` — Layer 2 用户画像
 
 搜索筛选字段（喂给 `services/boss_search_url.py` 拼搜索 URL）：

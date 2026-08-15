@@ -2500,11 +2500,18 @@ async def workflow_status() -> JSONResponse:
     return JSONResponse({"running": app.state.emitter.current_workflow})
 
 
+# 哪些 workflow 的运行参数支持「设为默认」。**判据是"它有每次都一样的参数"**：
+# w3 没有（发的是当前所有已批准回复），m2 也没有（岗位每次都不同）。
+_DEFAULTABLE_WORKFLOWS = ("w1", "w2", "m1")
+
+
 def _resolved_defaults() -> dict:
     from services.settings_resolver import resolve_params
+    # m1 = 多站点选岗。它跟 w1/w2 一样有"每次都一样"的参数（站点、入口页 URL），
+    # 走同一套「设为默认」机制，不另起炉灶。
     return {
-        "w1": resolve_params("w1", {}, app.state.config, DATA_DIR),
-        "w2": resolve_params("w2", {}, app.state.config, DATA_DIR),
+        wf: resolve_params(wf, {}, app.state.config, DATA_DIR)
+        for wf in _DEFAULTABLE_WORKFLOWS
     }
 
 
@@ -2521,8 +2528,9 @@ async def save_workflow_defaults(body: dict | None = None) -> JSONResponse:
     _initialize_state()
     body = body or {}
     workflow = body.get("workflow")
-    if workflow not in {"w1", "w2"}:
-        raise HTTPException(status_code=400, detail="workflow must be w1 or w2")
+    if workflow not in _DEFAULTABLE_WORKFLOWS:
+        raise HTTPException(status_code=400,
+                            detail=f"workflow must be one of {'|'.join(_DEFAULTABLE_WORKFLOWS)}")
     updates = body.get("updates")
     if not isinstance(updates, dict):
         raise HTTPException(status_code=400, detail="updates must be an object")
