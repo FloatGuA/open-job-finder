@@ -407,3 +407,16 @@
 - **否掉了什么，为什么**：①**否掉"只调大 MAX_STEPS 就算了"**——调多大都可能不够，真正的问题是**不知道够没够**；能观测比能跑完更重要。②**否掉"自己数轮次判断"**——LangGraph 的 `_are_more_steps_needed` 还会看模型是否要调工具，自己数会跟它的判定错位，出现"我以为没超它以为超了"。③**否掉"删掉那个 except 分支"**——留着当第二道，万一上游换回抛异常的实现，已记录的岗位仍然不能全丢。
 - **代价 / 已知不足**：**耦合了 LangGraph 的内部文案**，升级版本时可能失效——而失效的表现正是它要修的那个坑（静默截断）。缓解：`tests/test_agent_runtime.py::TestHitStepLimit` 用字面量断言，字符串变了会红；但那只在我们跑测试时才发现，不是运行时保护。
 - **什么情况下该重新考虑**：LangGraph 升级后测试变红时；或它以后提供了正式的"是否达到步数上限"API（那时应该立刻换过去）。
+
+## m1/m2 复用 W1/W2/W3 那套 run 日志 + SSE，粒度做到节点级，但不做专属前端面板
+
+- **日期 / 版本**：2026-08-16，v2.24.5
+- **背景**：m1/m2 自 v2.24.0 起跟 W1/W2/W3 共用同一个队列，但**一次 `start_workflow`/`finish_workflow` 都不发、一行 run 日志都不写**（只有失败路径在 `run_item` 里发了个 finish，给一个从没 start 过的 workflow）。后果是跑 m1/m2 时 Dashboard 只知道"忙"，看不到卡在哪一步；事后 `logs/runs/` 里也没有能回放的记录，只剩 `schedule_log` 一行——而那个日志本身已经记过案（71% 幻影 success）。
+- **选了什么**：`multisite/layer1_agent.py` 直接用 `pipeline/run_logger.py` 的 `RunLogger`，在 **LangGraph 图这一层**给六个节点统一包一层（`_traced`），落 `logs/runs/{m1|m2}_*.jsonl` 并同步推 SSE；节点摘要抽成纯函数 `_summarize_node` 以便单测。前端只把 m1/m2 加进已有的通用 run 列表/回放（`Logs.tsx` 的 pipeline 过滤 + `WorkflowId`）。
+- **否掉了什么，为什么**：
+  ①**否掉"多站点自己写一套观测"**——多站点确实是另一条轨道（chrome-devtools-mcp / LangGraph / 各站独立 profile，跟 DrissionPage 那条线毫无共用），但**观测契约是全局的**：run 日志的读者（`run_log_reader`、`run_diagnostics`、前端回放）只认这一种格式，自己写一份等于让这些工具对多站点集体失明。"某功能有自己的执行路径"在本项目是记过案的坏味道。
+  ②**否掉"只发 emitter 的 start/finish（粗粒度）"**——那样 Dashboard 上仍然只有"开始/结束"两点，`open_application` 卡住和 `find_jobs` 没找到岗位长得一样；而且不落 JSONL，事后无法回放。**JSONL 是完整数据源、SSE 只是实时镜像**，命令行 `--direct` 跑的那次同样要留下记录，所以 RunLogger 无条件建、emitter 可为 None。
+  ③**否掉"给 WorkflowTrack 加 m1/m2 专属面板 + 骨架"**——手维护的 `SKELETON` 静态模板已经被记过一次（迁步骤后必然漂移，真实骨架的权威源是 run JSONL）。m1/m2 的形态还在动（Layer 3 未做），现在定骨架是给一个会变的东西上石膏。
+  ④**否掉"在每个节点内部手写计时+落日志"**——六份几乎一样的样板，加第七个节点时漏一份不会有任何东西变红，表现为 Dashboard 上那一段莫名不显示，跟"卡住了"一模一样（W1 的 LOOP_STEP 栽过）。
+- **代价 / 已知不足**：`multisite/` 由此依赖 `pipeline/`（此前完全独立）。这条依赖是单向的、只指向那个跟 Boss 线无关的 logger 适配器，可以接受；但如果哪天要把多站点拆成独立服务，这是要先切断的一根线。另外节点级是**图节点**粒度，agent 循环内部那几十步仍然只进 stdout 追踪，Dashboard 上看不到。
+- **什么情况下该重新考虑**：m1/m2 形态稳定（Layer 3 落地）之后，可以再判断要不要给它做专属的前端骨架视图；或者 agent 内部步数也需要在 Dashboard 上看到时——那时该考虑把 `agent_runtime._trace` 也接进 `log_tool`。

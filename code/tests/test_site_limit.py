@@ -110,3 +110,39 @@ class TestRecordSiteLimitTool:
     def test_evidence_is_capped(self, tracker):
         _call(tracker, limit=3, evidence="x" * 2000)
         assert len(tracker.get_site_limit("bambulab").evidence) <= 500
+
+
+class TestClearSiteLimit:
+    """人工把一条上限退回「未知」。
+
+    **为什么是删行、不是 upsert 成 unknown**：`upsert_site_limit` 刻意让 unknown
+    不覆盖已知（防 agent 用"这次没看见"冲掉上次真读到的数字），人工重置要的正是
+    绕过那条保护。这段 SQL 以前内联在端点里——同一张表的写入散在两层，正是本项目
+    连抓四例漂移的形状。
+    """
+
+    def test_removes_the_row(self, tracker):
+        tracker.upsert_site_limit("s", "limited", max_applications=3, evidence="原文")
+        assert tracker.clear_site_limit("s") == 1
+        assert tracker.get_site_limit("s") is None
+
+    def test_missing_row_is_a_noop_not_an_error(self, tracker):
+        assert tracker.clear_site_limit("never-seen") == 0
+
+    def test_only_touches_the_named_scope(self, tracker):
+        """一个站可以有好几条互不相干的上限（按招聘项目分），清一条不能连坐。"""
+        tracker.upsert_site_limit("s", "limited", scope="site", max_applications=5,
+                                  evidence="全站")
+        tracker.upsert_site_limit("s", "limited", scope="bucket", scope_name="研发类",
+                                  max_applications=2, evidence="研发类")
+        tracker.clear_site_limit("s", "研发类")
+        assert tracker.get_site_limit("s", "研发类") is None
+        assert tracker.get_site_limit("s").max_applications == 5
+
+    def test_upsert_can_write_again_after_clearing(self, tracker):
+        # 清空 = 回到"什么都没记到"，跟从没跑过这个站是同一个状态；下次 agent
+        # 看到说明时要能正常写进来（这也是 unknown-不覆盖保护该放行的场景）。
+        tracker.upsert_site_limit("s", "limited", max_applications=3, evidence="旧")
+        tracker.clear_site_limit("s")
+        tracker.upsert_site_limit("s", "unknown")
+        assert tracker.get_site_limit("s").status == "unknown"

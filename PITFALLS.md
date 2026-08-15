@@ -262,3 +262,29 @@ netsh interface ipv4 show excludedportrange protocol=tcp
 **顺带两条**：
 - **agent 循环必须自带逐步追踪**，否则失败时只有一个 `GraphRecursionError`，完全不说明它在哪兜圈子。第一次真机跑的 226 行日志里除了 MCP 噪音和 traceback 什么都没有。追踪实现在 `agent_runtime.run_agent`（用 `astream` 逐条打工具调用与结果长度）。
 - **Windows 上 stdout 重定向到文件默认走 GBK**，追踪里的中文岗位名会被写成不可逆的替换字符，日志等于白打。`scripts/run_layer1.py` 启动时强制 `sys.stdout.reconfigure(encoding="utf-8")`。
+
+## 2026-08-16 新增（m1/m2 接线检查）
+
+## 后端加一个 workflow 而前端 `WorkflowId` 没跟着加，队列页会让**整个 SPA 白屏**
+
+**现象**：批准一个 Checkpoint 1 岗位之后，打开「队列」页整页空白——不是那一块不显示，是整个 Dashboard 没了，控制台一句 `Cannot read properties of undefined (reading 'color')`。
+
+**真因**：`Queue.tsx` 的 `WF_META` 是 `Record<WorkflowId, …>`，而 `WorkflowId` 只写了 `'w1' | 'w2' | 'w3'`。后端的 `VALID_WORKFLOWS` 早在 v2.24.0 就加了 `m1`/`m2`，队列快照原样把它们发给前端，`WF_META['m2']` 于是是 `undefined`。**项目前端没有 ErrorBoundary**，React 18 遇到渲染期异常会卸载整棵树——所以一个查表失败的后果是全站白屏，不是局部空白。
+
+**为什么容易漏**：`workflow_queue.py` 顶部那条"加新 workflow **必须同时改三处**"的清单本身**漏了第四处**（前端类型）。照着清单做也会踩。而 tsc 只保证 `Record<WorkflowId, …>` 的键齐全，**保证不了 `WorkflowId` 本身没漏后端的某个 workflow**——漏掉的恰恰是这一层。
+
+**触发路径一点都不冷门**：Checkpoint 1 一批准就自动入队 `m2`（`server.py::_enqueue_fill_jobs`），之后任何人打开队列页都会撞上。
+
+**已由 `tests/test_multisite_wiring.py::TestWorkflowIdContract` 守门**：它读 `api/index.ts`、把 `WorkflowId` 联合类型解析出来跟后端 `VALID_WORKFLOWS` 比。这是个跨语言契约，两边各写一份必然漂移——判据同「同一外部契约散多处必漂移」。
+
+## 一个开关跨了进程边界，起点打印它、终点不读它，中间没有任何报错
+
+**现象**：`python scripts/run_layer1.py --search-url ... --category 开发:5 --max-pages 3` 跑完，日志明明白白打了一行「本站生效名额: {'开发': 5}」，实际跑的却是 `profile.yaml` 的默认名额和默认 8 页。
+
+**真因**：默认路径（不加 `--direct`）是把任务**排进 Dashboard 队列**由另一个进程执行的。`_enqueue_via_dashboard(args, resume_path, quotas)` 收下了 `quotas` 参数**却从不放进请求 body**，队列侧的 `_run_multisite_select` 也不读 `max_pages`——两头都"看起来接住了"，中间那一段静默断掉。函数签名里那个用不到的参数是唯一的痕迹，而它长得完全像正常代码。
+
+**为什么特别坑**：那行打印发生在**排队之前的本进程**里，它打印的是"我算出来的名额"，不是"实际生效的名额"。看着像验证过了。
+
+**判据**：**一个参数只要跨了进程/队列边界，验证它生效必须在终点做**——看接收方拿到的值，或者在终点打日志。起点的打印在这类缺陷里恰好总是对的。
+
+**已由 `tests/test_multisite_wiring.py::TestSelectPassthrough` 守门**（断言 run_layer1 实际收到的 kwargs）。

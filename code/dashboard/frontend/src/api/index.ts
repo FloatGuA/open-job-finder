@@ -638,7 +638,10 @@ export interface ResumePlan {
   greeting?: { text: string; generated_at: string }
 }
 
-export type WorkflowId = 'w1' | 'w2' | 'w3'
+// w1/w2/w3 = Boss 直聘那条线；m1/m2 = 多站点 Layer 1（选岗 / 填表）。
+// 后端 VALID_WORKFLOWS 早就包含 m1/m2，而这里漏了——队列页的 WF_META 是按
+// 这个类型建的 Record，漏一个就是运行时 undefined → 整个 SPA 白屏。
+export type WorkflowId = 'w1' | 'w2' | 'w3' | 'm1' | 'm2'
 
 export interface QueueItem {
   id: string

@@ -102,6 +102,16 @@ def _enqueue_via_dashboard(args, resume_path: str, quotas) -> int:
     params = {"site": args.site, "headless": args.headless}
     if args.search_url:
         params["search_url"] = args.search_url
+        # `--category` / `--max-pages` 以前**只在 --direct 下生效**：这个函数收了
+        # quotas 却从不放进 body，队列侧也不读，于是默认路径（走队列）上这两个开关
+        # 静默失效——而脚本还照样打印了「本站生效名额」，打印的和实际跑的不是一回事。
+        if quotas:
+            params["categories"] = quotas
+        params["max_pages"] = args.max_pages
+        # 队列里的 m1 **永远**只跑到 Checkpoint 1（select_only=True）：填表是 m2，
+        # 由审批动作触发。说清楚，免得以为不加 --select-only 就会一路投下去。
+        if not args.select_only:
+            print("[layer1] 注意：队列模式的 m1 只跑到选岗+落库，填表要等 Checkpoint 1 审批后由 m2 接手。")
     else:
         # m2 按 pending_job_id 取岗位（队列侧会校验它确实是 approved 状态）。
         from services.tracker import ApplicationTracker

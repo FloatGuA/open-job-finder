@@ -5,8 +5,8 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-14（v2.22.0 Layer 1 改为 agent 自主选岗/导航，真机跑通并逐条独立核对；提交防线改为守法 click） |
-| 当前版本 | 2.22.0.2                       |
+| 最后更新 | 2026-08-16（v2.24.5 多站点 m1/m2 接线检查：队列页白屏、CLI 参数静默丢弃、`source_job_id` 从不写、端点内联 SQL、m1/m2 接入 run 日志/SSE） |
+| 当前版本 | 2.24.5.2                       |
 
 > ⚠️ **下一轮动手前先读**：Layer 1 已按 2026-08-13 的对齐改完并真机验证。**SDK 继续 LangGraph 是用户拍板的（理由是他本人正求职 agent 开发岗位、亲手做工程本身是目标），后续会话不要因为技术理由自作主张换成 Anthropic/Codex SDK。** 完整取舍见 `DECISION.md` 三条：「Layer 1 的导航/找入口/选岗交给 agent 自主决策」「选岗结果用 record_job 边找边落袋」「提交防线从不给工具改成点击工具自己拒绝」。
 
@@ -65,6 +65,13 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 **已知会踩的**：DeepSeek 64k 上下文 vs a11y 快照单次几十 KB，长循环大概率爆——需要在快照裁剪/分步摘要上额外做工程量，这部分成本是明知且接受的。
 
 **实际落地情况（08-14）**：预见的上下文风险**确实发生了，但表现形式不是"爆上下文"而是"不肯收尾"**——agent 一路兜圈子撞 recursion limit。解法不是裁剪（`agent_runtime.trim_stale_snapshots` 只保留最近一张快照，这层照做了）而是**把结果收集外置成 `record_job` 工具**，让它边找边落袋。详见 `DECISION.md` 与 `PITFALLS.md` 对应条目。
+
+### 📌 m1/m2 检查剩下的两条（2026-08-16 查出，本轮**没修**，都不是缺陷是缺口）
+
+1. **`pending_jobs` 没有"已填表"这个终态**：m2 跑完之后那一行仍然停在 `approved`，分不出"排队等填表"和"表已填、待 Checkpoint 2 审批"。现在靠 `pending_applications.source_job_id`（本轮刚接上）能间接推出来，但那是查出来的不是记下来的。要不要加一个状态、加在哪一层，得先想清楚跟 Layer 3 的关系——Layer 3 落地时这条链路还会再长一截，现在定容易返工。
+2. **m1 只能从命令行起**：Dashboard 上没有任何触发选岗的入口（`scripts/run_layer1.py --search-url` 排进队列）。审批、看结果都在 Dashboard，唯独"开始找岗位"要开终端。要做的话得先决定 search_url 从哪来——写死在 profile 里、每次手填、还是让 agent 从站点首页自己找（后者与 v2.22.0「不接受用户给搜索 URL」的方向一致）。
+
+> **本轮未验证的**：所有改动都是静态检查 + 单测 + 变异验证，**m1/m2 没有真机跑过**。风险最低的验证顺序是：先 `--select-only` 跑一次 m1（对外零副作用），确认 `logs/runs/m1_*.jsonl` 有六个节点的 step 记录、队列页能正常显示 M1 徽章；再考虑 m2。
 
 ### 📌 `schedule_log.jsonl` 把"接受了请求"和"真的跑完了"混成同一个 success（2026-08-13 发现，未修）
 
@@ -250,6 +257,16 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- **多站点 m1/m2 接线检查与修复**（2026-08-16，v2.24.5.2，pytest 1086 passed EXIT=0（+23 新增），前端 build 绿；**全部是静态检查 + 单测，未真机跑 m1/m2**）
+  - **起因**：用户让检查 m1/m2 相关内容。查出 5 个问题，共同形态是"接线断了但不报错"——每一个单看都不在代码逻辑里，全在**模块之间**。
+  - **① 队列页白屏（最严重）**：前端 `WorkflowId` 只有 w1/w2/w3，而 Checkpoint 1 一批准就自动入队 m2，`WF_META[item.workflow]` 于是 `undefined`；项目**没有 ErrorBoundary**，一个查表失败让整个 SPA 白屏。修：`WorkflowId` 与 `WF_META`/`paramsSummary` 补 m1/m2，`Logs.tsx` 的 pipeline 过滤也补上。**加了跨语言契约测试**（读 `api/index.ts` 解析联合类型 vs 后端 `VALID_WORKFLOWS`）——`workflow_queue.py` 里那条"加新 workflow 必须改三处"的清单本身漏了前端这一处。
+  - **② CLI `--category` / `--max-pages` 静默失效**：默认路径是排进队列由另一个进程跑，而 `_enqueue_via_dashboard` 收了 `quotas` 却不放进 body、队列侧也不读。脚本还照常打印「本站生效名额」——**打印的和实际跑的不是一回事**。修：params 带上 `categories`/`max_pages`，`_run_multisite_select` 读它们（写错类型直接 ValueError，不静默忽略）；顺带打一行"队列模式的 m1 只跑到 Checkpoint 1"，免得以为不加 `--select-only` 就会一路投下去。
+  - **③ `source_job_id` 生产路径一次都没写过**：列、参数、测试全都有，唯独真正的写入点 `write_pending_application` 没传——Checkpoint 2 的记录**永远回溯不到**它来自哪个已批准岗位，而 tracker 那层的测试是绿的（它测的是"能写"，不是"有人写"）。修：`write_pending_jobs` 按 **url 回查** id 带下去（不能用 `add_pending_job` 的返回值——m2 路径每次都命中 url 去重返回 None），`PendingApplication` 也把这列暴露出来，否则写了没人读等于没写。
+  - **④ 端点内联 SQL**：`PUT /api/checkpoint1/site-limit/{site}` 里直接 `DELETE FROM site_limits`，违反"一个状态转换只能有一份 SQL"。收敛为 `tracker.clear_site_limit()`（删行而不是 upsert 成 unknown——人工重置要的正是绕过"unknown 不覆盖已知"那条保护）。
+  - **⑤ m1/m2 完全没有 run 日志和 SSE**：跑起来 Dashboard 只知道"忙"，事后没有可回放的记录。接入 `pipeline/run_logger.py` 的 `RunLogger`，在 LangGraph 图层给六个节点统一包 `_traced`（不在节点内手写，漏一个不会变红），落 `logs/runs/{m1|m2}_*.jsonl` + SSE；`/api/runs?pipeline=` 的白名单改成引用 `VALID_WORKFLOWS`。取舍与被否掉的三个方案见 `DECISION.md`「m1/m2 复用 W1/W2/W3 那套 run 日志 + SSE」。
+  - **测试**：新增 `tests/test_multisite_wiring.py`（19 例：前后端 workflow 契约、m1/m2 队列参数透传、`source_job_id` 解析、节点摘要、CLI 打包 body）+ `test_site_limit.py` 补 4 例。**代码先于测试写的，所以逐条做了变异验证**：6 处分别改回缺陷版本，对应测试全部变红，恢复后全绿。
+  - **顺带**：上个提交声明 v2.24.4 但 `version.ts` 还停在 2.24.3.2（版本↔提交↔摘要的追溯断链，**同一问题第二次**），本轮一并对齐到 2.24.5。
 
 - **Layer 1 改为 agent 自主选岗/导航 + 提交防线重建**（2026-08-14，v2.22.0，pytest 全量绿 EXIT=0，前端 build 绿，真机跑通且 6 个岗位逐条独立核对）
   - **背景**：用户指出"你在做的和我想做的有分歧"。**分歧是实现方偏离了设计文档**——`docs/multi-site-expansion-design.md` 写明 Layer 1 是"agent 识别层，允许出错"，但落地成了四个 Python 写死顺序的节点 + 硬编码 label 匹配，全链路只有"字段分类"一处交给模型。等于做成了披着 LangGraph 外壳的站点适配器，正是设计文档否掉的路线。

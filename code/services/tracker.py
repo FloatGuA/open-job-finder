@@ -1259,6 +1259,7 @@ class ApplicationTracker:
             created_at=row["created_at"],
             decided_at=row["decided_at"],
             screenshot=row["screenshot"] or "",
+            source_job_id=row["source_job_id"],
         )
 
     def add_pending_application(
@@ -1463,6 +1464,24 @@ class ApplicationTracker:
                 (site_name, scope, scope_name, status, max_applications, applied_count,
                  evidence, self._utcnow_iso()),
             )
+
+    def clear_site_limit(self, site_name: str, scope_name: str = "") -> int:
+        """人工把一条上限退回「未知」。返回删掉的行数。
+
+        **单独一个方法而不是让端点自己 DELETE**：删除是这张表的第三种写操作，
+        端点里内联 SQL 就是"同一张表的写入散在两个层"——本项目连抓四例的正是这个
+        形状（见 CLAUDE.md 第二条铁律）。
+
+        为什么是删而不是 upsert 成 `unknown`：`upsert_site_limit` 刻意让 unknown
+        不覆盖已知（防 agent 用无知冲掉真读到的数字），人工重置要的正是绕过那条
+        保护。删掉行 = 回到"什么都没记到"，跟从没跑过这个站是同一个状态。
+        """
+        with self.conn:
+            cur = self.conn.execute(
+                "DELETE FROM site_limits WHERE site_name = ? AND scope_name = ?",
+                (site_name, scope_name),
+            )
+            return cur.rowcount
 
     @staticmethod
     def _row_to_site_limit(row) -> SiteLimit:

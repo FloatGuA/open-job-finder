@@ -6,6 +6,9 @@ const WF_META: Record<WorkflowId, { label: string; short: string; color: string 
   w1: { label: 'W1 \u6295\u9012', short: 'W1', color: '#0a84ff' },
   w2: { label: 'W2 \u68c0\u67e5', short: 'W2', color: '#30d158' },
   w3: { label: 'W3 \u53d1\u56de\u590d', short: 'W3', color: '#bf5af2' },
+  // \u591a\u7ad9\u70b9 Layer 1\uff1a\u8ddf w1/w2/w3 \u540c\u4e00\u4e2a\u961f\u5217\uff0c\u6f0f\u4e00\u4e2a\u5c31\u662f WF_META[...] \u4e3a undefined \u2192 \u6574\u4e2a SPA \u767d\u5c4f\u3002
+  m1: { label: 'M1 \u9009\u5c97', short: 'M1', color: '#ff9f0a' },
+  m2: { label: 'M2 \u586b\u8868', short: 'M2', color: '#ff375f' },
 }
 
 const SRC_LABEL: Record<string, string> = {
@@ -35,6 +38,12 @@ function paramsSummary(item: QueueItem): string {
     if (p.score_threshold != null) bits.push(`\u9608\u503c ${p.score_threshold}`)
   } else if (item.workflow === 'w2') {
     if (p.max_conversations != null) bits.push(`\u4f1a\u8bdd ${p.max_conversations}`)
+  } else if (item.workflow === 'm1') {
+    if (p.site) bits.push(`\u7ad9 ${p.site}`)
+    if (p.categories) bits.push(`\u540d\u989d ${Object.entries(p.categories as Record<string, number>).map(([k, v]) => `${k}:${v}`).join('/')}`)
+  } else if (item.workflow === 'm2') {
+    if (p.site) bits.push(`\u7ad9 ${p.site}`)
+    if (p.pending_job_id != null) bits.push(`\u5c97\u4f4d #${p.pending_job_id}`)
   } else if (p.max_replies != null) {
     bits.push(`\u56de\u590d ${p.max_replies}`)
   }

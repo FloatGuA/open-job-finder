@@ -29,6 +29,17 @@ services/config_manager.py           config.yaml + profile.yaml 统一读写
 services/run_log_reader.py           run JSONL 只读解析（列表/明细/回放，纯函数）
 services/run_diagnostics.py          run 日志确定性诊断，不调 LLM
 
+多站点 Layer 1（v2.21→，跟上面那条线**浏览器栈完全不同**：chrome-devtools-mcp + LangGraph + 各站独立
+profile，不是 DrissionPage；两个 Chrome 实例互不干扰）
+multisite/layer1_agent.py    m1=选岗 / m2=填表，LangGraph 六节点；节点内部才是 agent 循环
+multisite/safe_tools.py      守法 click（提交类点击由代码拒绝，不靠 prompt 叮嘱）
+
+**但它跟 W1/W2/W3 共用两样东西，别再各造一份**（v2.24.0 共用队列 / v2.24.5 共用观测）：
+- **同一个 `workflow_queue`**（串行、schedule_log、trigger 归类）——加新 workflow 要同时改
+  `VALID_WORKFLOWS`、`run_item` 的 log_wf 映射与分派、**前端 `WorkflowId`**（漏最后一处会让整个 SPA 白屏）
+- **同一套 `RunLogger`**（`logs/runs/*.jsonl` + SSE）——run 日志的读者（`run_log_reader` /
+  `run_diagnostics` / 前端回放）只认这一种格式
+
 简历子系统（v2.13→v2.19）
 services/info_pool.py        信息池：求职者全部信息的主库，高于任何一份简历；写盘前自动快照
 services/resume_blocks.py    文档形状权威（sections:[{name,blocks}]，旧五键形状读时自动转换）

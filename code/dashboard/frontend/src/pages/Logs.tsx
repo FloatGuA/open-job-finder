@@ -345,7 +345,7 @@ function DecisionsTab({ detail }: { detail: RunDetail }) {
 // Main page
 // ---------------------------------------------------------------------------
 
-type PipelineFilter = '' | 'w1' | 'w2' | 'w3'
+type PipelineFilter = '' | 'w1' | 'w2' | 'w3' | 'm1' | 'm2'
 type DetailTab = 'overview' | 'flow' | 'decisions' | 'diagnosis'
 type PageTab = 'runs' | 'cleanup'
 const PAGE_TABS: Array<{ key: PageTab; label: string }> = [
@@ -669,12 +669,14 @@ export default function Logs() {
             RUNS
             <DevLabel name="RunList" />
           </p>
-          {(['', 'w1', 'w2', 'w3'] as PipelineFilter[]).map((pf) => {
+          {(['', 'w1', 'w2', 'w3', 'm1', 'm2'] as PipelineFilter[]).map((pf) => {
             const labelMap: Record<PipelineFilter, string> = {
               '': '\u5168\u90e8',
               w1: 'W1',
               w2: 'W2',
               w3: 'W3',
+              m1: 'M1',
+              m2: 'M2',
             }
             return (
               <button

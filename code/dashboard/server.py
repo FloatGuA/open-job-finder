@@ -303,8 +303,13 @@ def _load_json_file(path: Path, default: Any) -> Any:
 
 
 def _validate_run_pipeline(pipeline: str | None) -> str | None:
-    if pipeline is not None and pipeline not in {"w1", "w2", "w3"}:
-        raise HTTPException(status_code=400, detail="pipeline must be w1, w2 or w3")
+    # 白名单引用队列的 VALID_WORKFLOWS，不手抄——手抄的那份在 m1/m2 上线后就漏了
+    # （enqueue 端点栽过同一次），表现为"日志在磁盘上但按 pipeline 一筛就 400"。
+    from services.workflow_queue import VALID_WORKFLOWS
+
+    if pipeline is not None and pipeline not in VALID_WORKFLOWS:
+        raise HTTPException(status_code=400,
+                            detail=f"pipeline must be one of {'|'.join(VALID_WORKFLOWS)}")
     return pipeline
 
 
@@ -1795,11 +1800,10 @@ async def set_checkpoint1_site_limit(site_name: str, body: dict) -> JSONResponse
     scope = body.get("scope") or "site"
     scope_name = str(body.get("scope_name") or "")
     if status == "unknown":
-        # 人工清空 = 真的把它退回未知，这里要绕过 upsert 的"unknown 不覆盖已知"
-        # 保护（那条是防 agent 用无知覆盖已知，不该拦住人主动重置）。
-        with app.state.tracker.conn as conn:
-            conn.execute("DELETE FROM site_limits WHERE site_name = ? AND scope_name = ?",
-                         (site_name, scope_name))
+        # 人工清空 = 真的把它退回未知，要绕过 upsert 的"unknown 不覆盖已知"保护
+        # （那条是防 agent 用无知覆盖已知，不该拦住人主动重置）。SQL 在
+        # tracker.clear_site_limit 里，端点不自持——铁律见 CLAUDE.md。
+        app.state.tracker.clear_site_limit(site_name, scope_name)
         return JSONResponse({"ok": True, "limit": None})
 
     app.state.tracker.upsert_site_limit(

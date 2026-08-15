@@ -170,13 +170,25 @@ class OrchestrationService:
         if not site or not search_url:
             raise ValueError("m1 需要 site 和 search_url 两个参数")
 
+        # 名额与翻页预算跟着 item 走：CLI 的 --category / --max-pages 现在会放进
+        # params，队列侧不读的话它们就静默失效（默认路径正是走队列的）。
+        # 不给 = 用 profile 的站点解析结果 / 默认 8 页，跟直接跑一致。
+        categories = overrides.get("categories") or None
+        if categories is not None and not isinstance(categories, dict):
+            raise ValueError("m1 的 categories 必须是 {类别: 名额} 字典")
+
         state = asyncio.run(run_layer1(
             resume_pdf_path="",          # 选岗阶段用不到简历
             site_name=site,
             search_url=search_url,
             headless=bool(overrides.get("headless") or False),
             tracker=self._st.tracker,
+            quotas=categories,
+            max_pages=int(overrides.get("max_pages") or 8),
             select_only=True,
+            emitter=getattr(self._st, "emitter", None),
+            workflow="m1",
+            trigger=overrides.get("_trigger", "manual"),
         ))
         found = state.get("found_jobs") or []
         new_ids = state.get("pending_job_ids") or []
@@ -221,6 +233,9 @@ class OrchestrationService:
             job_url=job.url,
             headless=bool(overrides.get("headless") or False),
             tracker=self._st.tracker,
+            emitter=getattr(self._st, "emitter", None),
+            workflow="m2",
+            trigger=overrides.get("_trigger", "manual"),
         ))
         outcome = state.get("open_result")
         app_id = state.get("pending_application_id")
