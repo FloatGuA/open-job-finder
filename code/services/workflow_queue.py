@@ -21,7 +21,17 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-VALID_WORKFLOWS = ("w1", "w2", "w3")
+# w1/w2/w3 = Boss 直聘那条线（投递 / 检查回应 / 发送回复）。
+# m1/m2 = 多站点 Layer 1（选岗 / 填表），见 docs/multi-site-expansion-design.md。
+#
+# **加新 workflow 必须同时改三处**，漏一处就是静默失败：
+#   1. 这里（不加的话 enqueue 直接拒绝，报错还算明显）
+#   2. workflow_orchestration.run_item 的 log_wf 映射（**在 try 外面，跑完了才
+#      炸在写日志上**——活干完了、结果丢了，最难查的那种）
+#   3. run_item 的分派 if/elif
+_BOSS_WORKFLOWS = ("w1", "w2", "w3")
+_MULTISITE_WORKFLOWS = ("m1", "m2")
+VALID_WORKFLOWS = _BOSS_WORKFLOWS + _MULTISITE_WORKFLOWS
 
 
 def _now() -> str:
@@ -31,7 +41,7 @@ def _now() -> str:
 @dataclass
 class QueueItem:
     id: str
-    workflow: str                 # w1 | w2 | w3
+    workflow: str                 # w1 | w2 | w3 | m1 | m2
     params: dict = field(default_factory=dict)
     source: str = "manual"        # manual | queue | scheduled | selfcheck
     enqueued_at: str = field(default_factory=_now)

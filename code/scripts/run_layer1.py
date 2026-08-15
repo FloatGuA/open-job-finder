@@ -53,16 +53,17 @@ load_dotenv(CODE_DIR / ".env")  # DEEPSEEK_API_KEY 等；不存在则跳过，�
 
 
 def _default_resume_path() -> str:
+    # "默认用哪份简历"的唯一实现在 ResumeStore.latest_export_path()——队列里的 m2
+    # 也要用同一条规则，两处各写一遍必然漂移。
     from services.resume_store import ResumeStore
 
-    store = ResumeStore(str(CODE_DIR / "data"))
-    exports = store.list_exports()
-    if not exports:
+    path = ResumeStore(str(CODE_DIR / "data")).latest_export_path()
+    if not path:
         raise SystemExit(
             "data/resume_pdfs/exports/ 里没有任何已导出的简历 PDF——"
             "先在 Dashboard「简历」页导出一份，或用 --resume 指定路径。"
         )
-    return str(Path(store.exports_dir) / exports[0]["file"])
+    return path
 
 
 def _parse_quota_overrides(items):

@@ -1668,22 +1668,53 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
     # 看「待审批」时 items 里一条已批准的都没有，拿它当分母告警永远不会触发。
     all_jobs = tracker.get_pending_jobs()
     sites = sorted({j.site_name for j in all_jobs if j.site_name})
-    site_limits = {}
+    site_info = {}
     for site in sites:
-        limit = tracker.get_site_limit(site)
-        site_limits[site] = {
-            **(vars(limit) if limit else {"site_name": site, "status": "unknown",
-                                          "max_applications": None, "applied_count": -1,
-                                          "evidence": "", "seen_at": ""}),
-            "approved_here": sum(1 for j in all_jobs
-                                 if j.site_name == site and j.status == "approved"),
+        limits = tracker.get_site_limits(site)
+        brief = tracker.get_site_brief(site)
+        here = [j for j in all_jobs if j.site_name == site]
+        # 按招聘项目分别统计已批准数——投递上限常常是按项目算的，拿全站总数去比
+        # 一个项目的上限会低估额度、把人拦在本来能投的岗位外面。
+        # bucket='' 的老记录单独归一档，前端据此知道"这些岗位算不进任何项目"。
+        approved_by_bucket: dict = {}
+        for j in here:
+            if j.status == "approved":
+                approved_by_bucket[j.bucket] = approved_by_bucket.get(j.bucket, 0) + 1
+        site_info[site] = {
+            "site_name": site,
+            "approved_here": sum(1 for j in here if j.status == "approved"),
+            "approved_by_bucket": approved_by_bucket,
+            "buckets": sorted({j.bucket for j in here if j.bucket}),
+            # 一个站可能有好几条上限（按招聘项目分）。空列表 = 什么都没记到，
+            # 前端要显示"未知"而不是"无限制"。
+            "limits": [vars(l) for l in limits],
+            "brief": vars(brief) if brief else None,
         }
     return JSONResponse({
         "jobs": [vars(j) for j in items],
         "total": len(items),
         "categories": categories,
-        "site_limits": site_limits,
+        "sites": site_info,
     })
+
+
+def _enqueue_fill_jobs(job_ids: list, enabled: bool = True) -> list:
+    """批准之后给每个岗位排一个 m2（填表）任务，返回排上的 id。
+
+    **一个岗位一个 item**，不是一个 item 处理一批（用户 2026-08-14 定）：中途哪个
+    挂了一目了然，也不用回答"第 3 个挂了后面还跑不跑"。
+
+    走队列而不是在这里直接调 run_layer1——"某功能有自己的执行路径"在这个项目里
+    是记过案的坏味道（冒烟测试曾自调 run_w1/w2 绕过队列，漏了 schedule_log、
+    trigger 归类和错误清理）。队列还顺带给了串行保护：m2 会开一个真实浏览器。
+    """
+    if not enabled:
+        return []
+    queued = []
+    for job_id in job_ids:
+        item = app.state.workflow_queue.enqueue("m2", {"pending_job_id": job_id}, source="manual")
+        queued.append({"job_id": job_id, "queue_id": item.id})
+    return queued
 
 
 @app.put("/api/checkpoint1/site-limit/{site_name}")
@@ -1706,21 +1737,28 @@ async def set_checkpoint1_site_limit(site_name: str, body: dict) -> JSONResponse
     if status == "limited" and not isinstance(limit, int):
         return JSONResponse({"ok": False, "error": "limited requires an integer max_applications"},
                             status_code=400)
+    # 人填的上限默认按全站算——人说得清范围，说不清也不会去填这个框。
+    scope = body.get("scope") or "site"
+    scope_name = str(body.get("scope_name") or "")
     if status == "unknown":
         # 人工清空 = 真的把它退回未知，这里要绕过 upsert 的"unknown 不覆盖已知"
         # 保护（那条是防 agent 用无知覆盖已知，不该拦住人主动重置）。
         with app.state.tracker.conn as conn:
-            conn.execute("DELETE FROM site_limits WHERE site_name = ?", (site_name,))
+            conn.execute("DELETE FROM site_limits WHERE site_name = ? AND scope_name = ?",
+                         (site_name, scope_name))
         return JSONResponse({"ok": True, "limit": None})
 
     app.state.tracker.upsert_site_limit(
         site_name=site_name,
         status=status,
+        scope=scope,
+        scope_name=scope_name,
         max_applications=limit if status == "limited" else None,
         applied_count=body.get("applied_count", -1),
         evidence=str(body.get("evidence") or "")[:500],
     )
-    return JSONResponse({"ok": True, "limit": vars(app.state.tracker.get_site_limit(site_name))})
+    got = app.state.tracker.get_site_limit(site_name, scope_name if scope == "bucket" else "")
+    return JSONResponse({"ok": True, "limit": vars(got) if got else None})
 
 
 @app.post("/api/checkpoint1/jobs/{job_id}/review")
@@ -1766,7 +1804,8 @@ async def approve_checkpoint1_job(job_id: int, body: dict | None = None) -> JSON
     rowcount = tracker.decide_pending_job(job_id, "approved")
     if rowcount == 0:
         return JSONResponse({"ok": False, "error": "already decided"}, status_code=409)
-    return JSONResponse({"ok": True})
+    queued = _enqueue_fill_jobs([job_id], (body or {}).get("enqueue", True))
+    return JSONResponse({"ok": True, "queued": queued})
 
 
 @app.post("/api/checkpoint1/jobs/{job_id}/reject")
@@ -1815,7 +1854,8 @@ async def decide_checkpoint1_batch(body: dict) -> JSONResponse:
             job_id, decision, reason=reason if decision == "rejected" else None,
         )
         (decided if rowcount else skipped).append(job_id)
-    return JSONResponse({"ok": True, "decided": decided, "skipped": skipped})
+    queued = _enqueue_fill_jobs(decided, decision == "approved" and body.get("enqueue", True))
+    return JSONResponse({"ok": True, "decided": decided, "skipped": skipped, "queued": queued})
 
 
 # ── 跨站点投递审批（多站点扩展 Layer 2；见 docs/multi-site-expansion-design.md）──

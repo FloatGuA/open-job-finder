@@ -140,6 +140,11 @@ class PendingJob:
     category: str = ""        # 当前类别（人可改）
     category_agent: str = ""  # agent 最初自报，永不覆写
     why: str = ""             # 一句话说明对上了哪几条条件
+    # 这个岗位是在站点的哪个顶层分类（招聘项目）里找到的。空串 = 没记录。
+    # **投递上限常常是按招聘项目算的**（拓竹：「在"27届秋招（研发类）"招聘项目中
+    # 最多可以投递 2 次」），没有这一列就只能拿全站已批准数去比一个项目的上限，
+    # 算出来必然低估额度、把人拦在本来能投的岗位外面。
+    bucket: str = ""
     status: str = "pending"   # pending|approved|rejected
     reason: Optional[str] = None
     found_at: str = ""
@@ -147,6 +152,21 @@ class PendingJob:
     # 审批人确认"这条纠正是对的，拿去教 agent"。跟"顺手改了个类别"刻意分开：
     # 随手一改不见得是标准案例，只有确认过的才够格进 prompt。
     is_golden: bool = False
+
+
+@dataclass
+class SiteBrief:
+    """选岗 agent 看完一个站之后写的现场笔记。
+
+    存在理由：agent 跨 run 没有记忆，每次都要重新发现"这个站怎么分类的、要不要登录、
+    投递有什么限制"。把它记下来喂回下次的 prompt，跟 golden set 是同一个思路。
+
+    `brief` 是自由文本、agent 写的，**不是事实源**——真要拿来做判断的东西（投递上限）
+    有自己的结构化字段（SiteLimit），这里只是给人看的背景说明。
+    """
+    site_name: str
+    brief: str = ""
+    updated_at: str = ""
 
 
 @dataclass
@@ -163,9 +183,19 @@ class SiteLimit:
 
     `applied_count` 是机会性的（很多站会把"已投递 1/3"跟上限写在一起）：-1 表示
     没看到。它会随时间变化，看到的那一刻起就在过期，只作参考不作依据。
+
+    `scope` 是**这个上限管多大范围**，由 agent 自己判断（用户 2026-08-14）：
+      - `site`   —— 全站通用
+      - `bucket` —— 只管某个招聘项目/分类，`scope_name` 是它的名字
+      - `unclear`—— 页面没写清楚，**说不清就如实说不清**，不许猜成 site
+    真机第一条证据就是 bucket 级的：「在"27届秋招（研发类）"**招聘项目中**……最多
+    可以投递 2 次」。按站点存会**低估**额度——研发类 2 次和非研发类的额度是分开的，
+    而闸门会拿总数去比一个桶的上限。
     """
     site_name: str
     status: str = "unknown"          # unknown | no_limit | limited
+    scope: str = "unclear"           # site | bucket | unclear
+    scope_name: str = ""             # scope='bucket' 时的招聘项目名
     max_applications: Optional[int] = None   # 只在 status='limited' 时有意义
     applied_count: int = -1          # -1 = 没看到
     evidence: str = ""               # 页面原文

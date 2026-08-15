@@ -167,3 +167,87 @@ class TestKnownUrlsDoNotConsumeQuota:
     def test_defaults_to_no_known_urls(self):
         sink = []
         assert "已记录" in _call(make_record_job_tool(sink, QUOTAS), "https://x/1", "产品")
+
+
+class TestStagedResume:
+    """简历必须先复制进系统临时目录才能传。
+
+    chrome-devtools-mcp 在没协商 MCP roots 时把文件操作限制在 OS 临时目录，
+    传项目内的路径会被它自己拒掉（Access denied: not within the configured
+    workspace roots）。2026-08-15 第一次真跑 open_application 就死在这里。
+    """
+
+    def test_stages_into_temp_and_cleans_up(self, tmp_path):
+        import tempfile
+        from pathlib import Path as P2
+        from multisite.layer1_agent import staged_resume
+
+        src = tmp_path / "resume.pdf"
+        src.write_bytes(b"%PDF-1.4 fake")
+
+        with staged_resume(str(src)) as staged:
+            sp = P2(staged)
+            assert sp.is_file()
+            assert sp.parent == P2(tempfile.gettempdir()), "必须落在 OS 临时目录里"
+            assert sp.read_bytes() == b"%PDF-1.4 fake"
+            assert sp.suffix == ".pdf"
+        assert not sp.exists(), "跑完要删掉——临时目录里躺一份真实简历不合适"
+
+    def test_cleans_up_even_when_the_body_raises(self, tmp_path):
+        from pathlib import Path as P2
+        from multisite.layer1_agent import staged_resume
+
+        src = tmp_path / "resume.pdf"
+        src.write_bytes(b"x")
+        captured = {}
+        try:
+            with staged_resume(str(src)) as staged:
+                captured["p"] = staged
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        assert not P2(captured["p"]).exists()
+
+    def test_missing_source_fails_loudly(self, tmp_path):
+        import pytest as _pytest
+        from multisite.layer1_agent import staged_resume
+
+        with _pytest.raises(FileNotFoundError):
+            with staged_resume(str(tmp_path / "nope.pdf")):
+                pass
+
+
+class TestRecordOpenResult:
+    """导航 agent 的结果用**工具**上报，不用 response_format。
+
+    LangGraph 的结构化输出节点写死了 with_structured_output(schema) 不带
+    method=，ChatOpenAI 默认走 json_schema，而 DeepSeek 直接 400
+    （This response_format type is unavailable now）。没有任何参数能把 method 传进去。
+    """
+
+    def test_records_into_the_sink(self):
+        from multisite.layer1_agent import make_record_open_result_tool
+
+        sink = {}
+        tool = make_record_open_result_tool(sink)
+        _run(tool.ainvoke({"form_opened": True, "resume_uploaded": True, "note": "ok"}))
+        assert sink == {"form_opened": True, "resume_uploaded": True, "note": "ok"}
+
+    def test_partial_result_survives(self):
+        """工具上报比结构化输出多一个好处：agent 半途没步数了，
+        已经报上来的结论照样拿得到。"""
+        from multisite.layer1_agent import make_record_open_result_tool
+
+        sink = {}
+        _run(make_record_open_result_tool(sink).ainvoke(
+            {"form_opened": True, "resume_uploaded": False, "note": "上传控件点不动"}))
+        assert sink["form_opened"] is True and sink["resume_uploaded"] is False
+        assert "上传控件" in sink["note"]
+
+    def test_note_is_capped(self):
+        from multisite.layer1_agent import make_record_open_result_tool
+
+        sink = {}
+        _run(make_record_open_result_tool(sink).ainvoke(
+            {"form_opened": False, "resume_uploaded": False, "note": "x" * 2000}))
+        assert len(sink["note"]) <= 500

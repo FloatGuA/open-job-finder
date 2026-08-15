@@ -174,6 +174,16 @@ class ResumeStore:
         out.sort(key=lambda x: x["file"], reverse=True)  # 文件名以时间戳开头
         return out
 
+    def latest_export_path(self) -> str:
+        """最近导出的那份简历 PDF 的绝对路径；一份都没有就返回空串。
+
+        "默认用哪份简历"以前在 scripts/run_layer1.py 里另有一份实现——同一件事两处
+        各写一遍，迟早漂移（这个项目为此挨过四次）。放在 ResumeStore 上是因为
+        exports_dir 和 list_exports 的排序规则都归它，别处只能靠猜。
+        """
+        exports = self.list_exports()
+        return os.path.join(self.exports_dir, exports[0]["file"]) if exports else ""
+
     def export_file(self, fname: str) -> str:
         if "/" in fname or "\\" in fname or ".." in fname:
             raise ValueError(f"非法文件名: {fname}")

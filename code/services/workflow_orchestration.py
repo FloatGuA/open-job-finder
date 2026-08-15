@@ -144,6 +144,95 @@ class OrchestrationService:
         )
         return "reply 工作流完成", (summary if isinstance(summary, dict) else {})
 
+    # -- multi-site Layer 1 (m1 = 选岗, m2 = 填表) -------------------------------
+    #
+    # 这两条走的是**完全不同的浏览器栈**：chrome-devtools-mcp + 各站独立的
+    # data/browser_profile_multisite/<site>/，跟 W1/W2/W3 的 DrissionPage +
+    # data/browser_profile/ 是两个 Chrome 实例，互不干扰。
+    #
+    # 但**仍然进同一个队列串行跑**：并行要多一套 SSE 通道和 running 状态，而且
+    # 两个 Chrome + 两路 LLM 同时跑，机器和人的注意力都吃不消（用户 2026-08-14
+    # 确认"浏览器互斥还是共享"）。共享队列还顺带拿到 schedule_log / trigger 归类
+    # ——"某功能有自己的执行路径"在这个项目里已经是记过案的坏味道。
+    #
+    # run_layer1 是 async 的，这里用 asyncio.run 桥接：队列 runner 是同步的
+    # （线程模型），而整个项目刻意不引入 async（DrissionPage 不支持）。
+
+    def _run_multisite_select(self, overrides: dict[str, Any]) -> tuple[str, dict]:
+        """m1：按求职偏好自主选岗，产出 pending_jobs 待审批记录。对外零副作用。"""
+        import asyncio
+
+        from multisite.layer1_agent import run_layer1
+
+        self._ensure()
+        site = str(overrides.get("site") or "")
+        search_url = str(overrides.get("search_url") or "")
+        if not site or not search_url:
+            raise ValueError("m1 需要 site 和 search_url 两个参数")
+
+        state = asyncio.run(run_layer1(
+            resume_pdf_path="",          # 选岗阶段用不到简历
+            site_name=site,
+            search_url=search_url,
+            headless=bool(overrides.get("headless") or False),
+            tracker=self._st.tracker,
+            select_only=True,
+        ))
+        found = state.get("found_jobs") or []
+        new_ids = state.get("pending_job_ids") or []
+        return (f"选岗完成：找到 {len(found)} 个，新入库 {len(new_ids)} 条待审批",
+                {"found": len(found), "new": len(new_ids)})
+
+    def _run_multisite_fill(self, overrides: dict[str, Any]) -> tuple[str, dict]:
+        """m2：对**一个已批准的岗位**打开申请表、上传简历、扫描空字段。
+
+        一个岗位一次 run（用户 2026-08-14 定："用队列，每个投递一个 run"）：批准
+        5 个就排 5 个 item，中途哪个挂了一目了然，也不用处理"第 3 个挂了后面还跑
+        不跑"。
+
+        **不提交**——提交是 Layer 3 的事，而且提交类点击在 safe_tools 里被代码
+        拦着，不是靠这里小心。
+        """
+        import asyncio
+
+        from multisite.layer1_agent import run_layer1
+
+        self._ensure()
+        job_id = overrides.get("pending_job_id")
+        if not isinstance(job_id, int):
+            raise ValueError("m2 需要 pending_job_id")
+        job = self._st.tracker.get_pending_job(job_id)
+        if job is None:
+            raise ValueError(f"pending_job {job_id} 不存在")
+        if job.status != "approved":
+            # 没批准就填表 = 绕过 Checkpoint 1。这一层是队列的守门，不是 UI 的。
+            raise ValueError(f"pending_job {job_id} 状态是 {job.status}，只有 approved 才能填表")
+
+        from services.resume_store import ResumeStore
+
+        resume = str(overrides.get("resume_pdf_path") or "") or \
+            ResumeStore(str(self._data_dir)).latest_export_path()
+        if not resume:
+            raise ValueError("没有可用的简历 PDF：先在 Dashboard「简历」页导出一份，"
+                             "或在参数里给 resume_pdf_path")
+        state = asyncio.run(run_layer1(
+            resume_pdf_path=resume,
+            site_name=job.site_name,
+            job_url=job.url,
+            headless=bool(overrides.get("headless") or False),
+            tracker=self._st.tracker,
+        ))
+        outcome = state.get("open_result")
+        app_id = state.get("pending_application_id")
+        n_fields = len(state.get("classified_fields") or [])
+        return (
+            f"填表完成：表单已打开={getattr(outcome, 'form_opened', None)} "
+            f"简历已上传={getattr(outcome, 'resume_uploaded', None)} "
+            f"待审批字段 {n_fields} 个" + (f"（记录 id={app_id}）" if app_id else "（未写记录）"),
+            {"pending_application_id": app_id, "fields": n_fields,
+             "note": getattr(outcome, "note", "")},
+        )
+
     # -- the queue runner (WorkflowQueue's runner callback) ---------------------
 
     def run_item(self, item) -> None:
@@ -168,7 +257,10 @@ class OrchestrationService:
         log_trigger = {"manual": "manual", "queue": "manual",
                        "scheduled": "scheduler", "selfcheck": "selfcheck",
                        "smoke": "smoke", "smoke_live": "smoke_live"}.get(item.source, "manual")
-        log_wf = {"w1": "apply", "w2": "check", "w3": "reply"}[item.workflow]
+        # 加新 workflow 时**必须**同时加这一条。它在 try 外面，漏了会在活儿干完
+        # 之后炸在写日志上——结果已经产生却没落进 schedule_log，是最难查的那种。
+        log_wf = {"w1": "apply", "w2": "check", "w3": "reply",
+                  "m1": "ms_select", "m2": "ms_fill"}[item.workflow]
         params = {**item.params, "_trigger": trig_param}
         triggered_at = datetime.now(timezone.utc).isoformat()
         start_time = time.monotonic()
@@ -177,8 +269,16 @@ class OrchestrationService:
                 summary, raw = self._run_apply_workflow(params)
             elif item.workflow == "w2":
                 summary, raw = self._run_check_workflow(params)
-            else:
+            elif item.workflow == "w3":
                 summary, raw = self._run_reply_workflow(params)
+            elif item.workflow == "m1":
+                summary, raw = self._run_multisite_select(params)
+            elif item.workflow == "m2":
+                summary, raw = self._run_multisite_fill(params)
+            else:
+                # 以前这里是 else→w3，加了 m1/m2 之后那个兜底会把任何未知类型
+                # 悄悄当成"发回复"跑掉。宁可炸。
+                raise ValueError(f"unknown workflow kind: {item.workflow!r}")
             # Hand the raw counters to whoever is waiting on this item (the smoke).
             # Bounded so a long-lived server doesn't accumulate them.
             if item.source.startswith("smoke"):

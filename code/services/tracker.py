@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 
 from schemas import (
-    AppStatus, ApplicationRecord, HRConversation, PendingApplication, PendingJob, SiteLimit,
+    AppStatus, ApplicationRecord, HRConversation, PendingApplication, PendingJob,
+    SiteBrief, SiteLimit,
 )
 from services.logger import get_orchestrator_logger
 
@@ -286,20 +287,77 @@ class ApplicationTracker:
             pj_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(pending_jobs)")}
             if "is_golden" not in pj_cols:
                 self.conn.execute("ALTER TABLE pending_jobs ADD COLUMN is_golden INTEGER NOT NULL DEFAULT 0")
+            # Migration: which recruitment project (bucket) the job was found in.
+            # Existing rows stay '' -- they were recorded before the agent reported it,
+            # and guessing would corrupt the per-bucket quota maths this column exists for.
+            if "bucket" not in pj_cols:
+                self.conn.execute("ALTER TABLE pending_jobs ADD COLUMN bucket TEXT NOT NULL DEFAULT ''")
 
-            # site_limits: how many positions one person may apply to on a given site,
-            # discovered opportunistically by the selection agent. `status` is a THREE-way
-            # value (unknown / no_limit / limited) -- see schemas.SiteLimit for why a bare
-            # nullable number is not good enough here.
+            # site_limits: how many positions one person may apply to, discovered
+            # opportunistically by the selection agent. `status` is THREE-way
+            # (unknown / no_limit / limited) and `scope` is THREE-way too
+            # (site / bucket / unclear) -- see schemas.SiteLimit for why neither can be
+            # collapsed into a nullable number.
+            #
+            # PK is (site_name, scope_name), not site_name: the very first real evidence
+            # was scoped to one recruitment project ("在'27届秋招（研发类）'招聘项目中
+            # ……最多可以投递 2 次"), so one site can carry several independent limits.
             self.conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS site_limits (
-                    site_name        TEXT PRIMARY KEY,
+                    site_name        TEXT NOT NULL,
+                    scope            TEXT NOT NULL DEFAULT 'unclear',
+                    scope_name       TEXT NOT NULL DEFAULT '',
                     status           TEXT NOT NULL DEFAULT 'unknown',
                     max_applications INTEGER,
                     applied_count    INTEGER NOT NULL DEFAULT -1,
                     evidence         TEXT DEFAULT '',
-                    seen_at          TEXT NOT NULL
+                    seen_at          TEXT NOT NULL,
+                    PRIMARY KEY (site_name, scope_name)
+                )
+                """
+            )
+            # Migration: the first cut keyed on site_name alone. SQLite cannot alter a
+            # primary key, so rebuild. Old rows carry scope='unclear' -- they were
+            # recorded before the agent was asked to judge scope, and calling them
+            # site-wide would be inventing a fact we never had.
+            sl_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(site_limits)")}
+            if "scope" not in sl_cols:
+                self.conn.execute("ALTER TABLE site_limits RENAME TO site_limits_old")
+                self.conn.execute(
+                    """
+                    CREATE TABLE site_limits (
+                        site_name        TEXT NOT NULL,
+                        scope            TEXT NOT NULL DEFAULT 'unclear',
+                        scope_name       TEXT NOT NULL DEFAULT '',
+                        status           TEXT NOT NULL DEFAULT 'unknown',
+                        max_applications INTEGER,
+                        applied_count    INTEGER NOT NULL DEFAULT -1,
+                        evidence         TEXT DEFAULT '',
+                        seen_at          TEXT NOT NULL,
+                        PRIMARY KEY (site_name, scope_name)
+                    )
+                    """
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO site_limits
+                        (site_name, scope, scope_name, status, max_applications,
+                         applied_count, evidence, seen_at)
+                    SELECT site_name, 'unclear', '', status, max_applications,
+                           applied_count, evidence, seen_at
+                    FROM site_limits_old
+                    """
+                )
+                self.conn.execute("DROP TABLE site_limits_old")
+
+            # site_briefs: 选岗 agent 看完一个站之后写的现场笔记，喂回下次的 prompt。
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS site_briefs (
+                    site_name  TEXT PRIMARY KEY,
+                    brief      TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
                 )
                 """
             )
@@ -1231,6 +1289,7 @@ class ApplicationTracker:
             category=row["category"] or "",
             category_agent=row["category_agent"] or "",
             why=row["why"] or "",
+            bucket=row["bucket"] or "",
             status=row["status"],
             reason=row["reason"],
             found_at=row["found_at"],
@@ -1246,6 +1305,7 @@ class ApplicationTracker:
         company: str = "",
         category: str = "",
         why: str = "",
+        bucket: str = "",
     ) -> Optional[int]:
         """Record one candidate job for Checkpoint 1. Returns the new id, or None if
         this url is already in the table.
@@ -1262,10 +1322,12 @@ class ApplicationTracker:
             cur = self.conn.execute(
                 """
                 INSERT OR IGNORE INTO pending_jobs
-                    (site_name, url, title, company, category, category_agent, why, status, found_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                    (site_name, url, title, company, category, category_agent, why,
+                     bucket, status, found_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                 """,
-                (site_name, url, title, company, category, category, why, self._utcnow_iso()),
+                (site_name, url, title, company, category, category, why, bucket,
+                 self._utcnow_iso()),
             )
             return cur.lastrowid if cur.rowcount else None
 
@@ -1346,55 +1408,101 @@ class ApplicationTracker:
 
     _SITE_LIMIT_STATUSES = ("unknown", "no_limit", "limited")
 
+    _SITE_LIMIT_SCOPES = ("site", "bucket", "unclear")
+
     def upsert_site_limit(
         self,
         site_name: str,
         status: str,
+        scope: str = "unclear",
+        scope_name: str = "",
         max_applications: Optional[int] = None,
         applied_count: int = -1,
         evidence: str = "",
     ) -> None:
-        """记下某站点的投递数量限制。同一站点后来居上（覆盖）。
+        """记下一条投递数量限制。同一 (站点, 范围) 后来居上。
+
+        `scope_name` 是主键的一部分：一个站可以同时有好几条互不相干的上限
+        （拓竹的研发类和非研发类各算各的）。scope='site'/'unclear' 时它是空串。
 
         **`status='unknown'` 不会覆盖已知结果**：agent 每次跑都可能没看到那段说明
-        （它是机会性发现的），如果"这次没看见"能把上次真读到的 `limited(3)` 冲掉，
+        （它是机会性发现的），如果"这次没看见"能把上次真读到的 `limited(2)` 冲掉，
         那这张表就永远停在 unknown——已知信息被无知覆盖是净损失。
         """
         assert status in self._SITE_LIMIT_STATUSES, f"invalid status: {status!r}"
+        assert scope in self._SITE_LIMIT_SCOPES, f"invalid scope: {scope!r}"
+        scope_name = scope_name if scope == "bucket" else ""
         if status == "unknown":
-            existing = self.get_site_limit(site_name)
+            existing = self.get_site_limit(site_name, scope_name)
             if existing is not None and existing.status != "unknown":
                 return
         with self.conn:
             self.conn.execute(
                 """
                 INSERT INTO site_limits
-                    (site_name, status, max_applications, applied_count, evidence, seen_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(site_name) DO UPDATE SET
+                    (site_name, scope, scope_name, status, max_applications,
+                     applied_count, evidence, seen_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(site_name, scope_name) DO UPDATE SET
+                    scope = excluded.scope,
                     status = excluded.status,
                     max_applications = excluded.max_applications,
                     applied_count = excluded.applied_count,
                     evidence = excluded.evidence,
                     seen_at = excluded.seen_at
                 """,
-                (site_name, status, max_applications, applied_count, evidence, self._utcnow_iso()),
+                (site_name, scope, scope_name, status, max_applications, applied_count,
+                 evidence, self._utcnow_iso()),
             )
 
-    def get_site_limit(self, site_name: str) -> Optional[SiteLimit]:
-        row = self.conn.execute(
-            "SELECT * FROM site_limits WHERE site_name = ?", (site_name,)
-        ).fetchone()
-        if row is None:
-            return None
+    @staticmethod
+    def _row_to_site_limit(row) -> SiteLimit:
         return SiteLimit(
             site_name=row["site_name"],
             status=row["status"],
+            scope=row["scope"],
+            scope_name=row["scope_name"] or "",
             max_applications=row["max_applications"],
             applied_count=row["applied_count"],
             evidence=row["evidence"] or "",
             seen_at=row["seen_at"],
         )
+
+    def get_site_limit(self, site_name: str, scope_name: str = "") -> Optional[SiteLimit]:
+        row = self.conn.execute(
+            "SELECT * FROM site_limits WHERE site_name = ? AND scope_name = ?",
+            (site_name, scope_name),
+        ).fetchone()
+        return self._row_to_site_limit(row) if row else None
+
+    def get_site_limits(self, site_name: str) -> List[SiteLimit]:
+        """这个站的**所有**上限记录（可能一条全站的、也可能几条按招聘项目分的）。"""
+        rows = self.conn.execute(
+            "SELECT * FROM site_limits WHERE site_name = ? ORDER BY scope_name", (site_name,),
+        ).fetchall()
+        return [self._row_to_site_limit(r) for r in rows]
+
+    # -- site briefs -----------------------------------------------------------
+
+    def upsert_site_brief(self, site_name: str, brief: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO site_briefs (site_name, brief, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(site_name) DO UPDATE SET
+                    brief = excluded.brief, updated_at = excluded.updated_at
+                """,
+                (site_name, brief, self._utcnow_iso()),
+            )
+
+    def get_site_brief(self, site_name: str) -> Optional[SiteBrief]:
+        row = self.conn.execute(
+            "SELECT * FROM site_briefs WHERE site_name = ?", (site_name,)
+        ).fetchone()
+        if row is None:
+            return None
+        return SiteBrief(site_name=row["site_name"], brief=row["brief"] or "",
+                         updated_at=row["updated_at"])
 
     def get_golden_category_examples(self, limit: int = 20) -> List[PendingJob]:
         """人工确认过的归类纠正，喂回选岗 agent 的 prompt。

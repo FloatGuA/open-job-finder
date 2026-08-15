@@ -228,3 +228,38 @@ def test_reorder():
         _drain(q)
     finally:
         q.stop()
+
+
+class TestMultisiteWorkflowKinds:
+    """m1/m2 进队列。
+
+    加新 workflow 要同时改三处（VALID_WORKFLOWS / log_wf 映射 / 分派分支），
+    漏了 log_wf 那一处最阴：它在 try 外面，活干完了才炸在写日志上。
+    """
+
+    def test_m1_and_m2_are_valid(self):
+        from services.workflow_queue import VALID_WORKFLOWS
+        assert "m1" in VALID_WORKFLOWS and "m2" in VALID_WORKFLOWS
+
+    def test_log_name_mapping_covers_every_valid_workflow(self):
+        """这条就是为了拦“加了新 workflow 但忘了加映射”。"""
+        import re
+        from pathlib import Path
+        from services.workflow_queue import VALID_WORKFLOWS
+
+        src = Path(__file__).resolve().parent.parent / "services" / "workflow_orchestration.py"
+        text = src.read_text(encoding="utf-8")
+        m = re.search(r"log_wf = \{([^}]*)\}", text, re.S)
+        assert m, "log_wf 映射不见了？"
+        mapped = set(re.findall(r'"(\w+)":', m.group(1)))
+        missing = set(VALID_WORKFLOWS) - mapped
+        assert not missing, f"这些 workflow 没进 log_wf 映射，跑完会 KeyError: {missing}"
+
+    def test_unknown_workflow_is_rejected_at_enqueue(self):
+        from services.workflow_queue import WorkflowQueue
+        q = WorkflowQueue(runner=lambda item: None)
+        try:
+            with pytest.raises(ValueError):
+                q.enqueue("nope", {})
+        finally:
+            q.stop()

@@ -1249,45 +1249,69 @@ class TestCheckpoint1Review:
                            json={"is_golden": True}).status_code == 404
 
 
-class TestCheckpoint1SiteLimits:
-    def test_unknown_site_still_appears_with_unknown_status(self, client):
-        """有岗位但没读到上限时，前端也得拿到这一条并显示"未知"。
-        整个 key 缺失的话前端就什么都不显示，看起来跟"没有限制"一样。"""
-        _add_job()
-        limits = client.get("/api/checkpoint1/jobs").json()["site_limits"]
-        assert limits["bambulab"]["status"] == "unknown"
-        assert limits["bambulab"]["max_applications"] is None
+class TestCheckpoint1Sites:
+    """站点信息（投递上限 + 现场笔记）。
 
-    def test_returns_the_recorded_limit_and_evidence(self, client):
+    **一个站可能有好几条互不相干的上限**：真机拿到的第一条证据就是
+    「在"27届秋招（研发类）"**招聘项目中**……最多可以投递 2 次」——按站点存
+    会把研发类和非研发类的额度当成同一个，低估实际可投数。
+    """
+
+    def test_site_appears_even_with_no_limit_recorded(self, client):
+        """有岗位但没读到上限时，站点本身也得出现。
+        整个 key 缺失的话前端什么都不显示，看起来跟“没有限制”一样。"""
         _add_job()
-        app.state.tracker.upsert_site_limit("bambulab", "limited", max_applications=3,
-                                            applied_count=1, evidence="每人最多投递3个岗位")
-        info = client.get("/api/checkpoint1/jobs").json()["site_limits"]["bambulab"]
-        assert info["status"] == "limited" and info["max_applications"] == 3
-        assert info["applied_count"] == 1
-        assert info["evidence"] == "每人最多投递3个岗位"
+        info = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]
+        assert info["limits"] == [], "没记到就是空列表，不是编一条 unknown"
+        assert info["brief"] is None
+
+    def test_returns_the_recorded_limit_with_scope(self, client):
+        _add_job()
+        app.state.tracker.upsert_site_limit(
+            "bambulab", "limited", scope="bucket", scope_name="27届秋招（研发类）",
+            max_applications=2, applied_count=0, evidence="最多可以投递 2 次")
+        limits = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]["limits"]
+        assert len(limits) == 1
+        assert limits[0]["scope"] == "bucket"
+        assert limits[0]["scope_name"] == "27届秋招（研发类）"
+        assert limits[0]["max_applications"] == 2
+
+    def test_one_site_can_carry_several_bucket_limits(self, client):
+        """这条就是主键从 site_name 改成 (site_name, scope_name) 的理由。"""
+        _add_job()
+        t = app.state.tracker
+        t.upsert_site_limit("bambulab", "limited", scope="bucket",
+                            scope_name="研发类", max_applications=2, evidence="e1")
+        t.upsert_site_limit("bambulab", "limited", scope="bucket",
+                            scope_name="非研发类", max_applications=2, evidence="e2")
+        limits = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]["limits"]
+        assert sorted(l["scope_name"] for l in limits) == ["研发类", "非研发类"]
 
     def test_approved_count_is_global_not_filtered(self, client):
-        """**这条守的是一个真会犯的错**：approved_here 如果数的是过滤后的列表，
-        看「待审批」页时分母恒为 0，超额告警永远不会亮——而那正是最该看到它的时候。
-        """
+        """**这条守的是一个真会犯的错**：approved_here 如果数的是过滤后的
+        列表，看「待审批」页时分母恒为 0，超额告警永远不会亮。"""
         a = _add_job(url="https://x/1")
         _add_job(url="https://x/2")
         app.state.tracker.decide_pending_job(a, "approved")
 
         r = client.get("/api/checkpoint1/jobs?status=pending").json()
-        assert len(r["jobs"]) == 1, "列表本身仍然只给待审批的"
-        assert r["site_limits"]["bambulab"]["approved_here"] == 1, \
-            "已批准数必须统计全量，不受列表过滤影响"
+        assert len(r["jobs"]) == 1
+        assert r["sites"]["bambulab"]["approved_here"] == 1
 
     def test_counts_are_per_site(self, client):
         a = app.state.tracker.add_pending_job(site_name="siteA", url="https://a/1")
         app.state.tracker.add_pending_job(site_name="siteB", url="https://b/1")
         app.state.tracker.decide_pending_job(a, "approved")
 
-        limits = client.get("/api/checkpoint1/jobs").json()["site_limits"]
-        assert limits["siteA"]["approved_here"] == 1
-        assert limits["siteB"]["approved_here"] == 0
+        sites = client.get("/api/checkpoint1/jobs").json()["sites"]
+        assert sites["siteA"]["approved_here"] == 1
+        assert sites["siteB"]["approved_here"] == 0
+
+    def test_brief_is_returned(self, client):
+        _add_job()
+        app.state.tracker.upsert_site_brief("bambulab", "分成研发类和非研发类两个招聘项目。")
+        info = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]
+        assert "非研发类" in info["brief"]["brief"]
 
 
 class TestCheckpoint1ManualSiteLimit:
@@ -1332,5 +1356,128 @@ class TestCheckpoint1ManualSiteLimit:
         _add_job()
         client.put("/api/checkpoint1/site-limit/bambulab",
                    json={"status": "limited", "max_applications": 3})
-        info = client.get("/api/checkpoint1/jobs").json()["site_limits"]["bambulab"]
-        assert info["status"] == "limited" and info["max_applications"] == 3
+        limits = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]["limits"]
+        assert len(limits) == 1
+        assert limits[0]["status"] == "limited" and limits[0]["max_applications"] == 3
+
+
+class TestApproveEnqueuesFill:
+    """批准一个岗位 = 给它排一个 m2（填表）任务。
+
+    没有这一步的话，“批准”只是把行标成 approved，之后永远不会有任何
+    事发生——这正是 2026-08-14 之前的真实状态（库里躺着一条 approved 没人管）。
+
+    **每个用例都必须挂住 worker**（`emitter.current_workflow` 置为真值）：
+    不挂的话队列会真的把 m2 捡起来执行，而 m2 会通过 npx 启动一个真实
+    Chrome。这是本文件已有的约定（见 test_apply_dry_run_flag_propagated），
+    我第一版漏了，测试当场就把任务跑掉了。
+    """
+
+    @staticmethod
+    def _pending():
+        return app.state.workflow_queue.snapshot()["pending"]
+
+    @pytest.fixture(autouse=True)
+    def _hold_worker(self, client):
+        # **必须依赖 client**：autouse fixture 默认排在显式请求的 fixture 前面，
+        # 而 client 会重建 app.state.emitter，把这里设的 busy 标志冲掉——worker
+        # 于是照常把 m2 捡起来跑（去启动真实 Chrome）。加上这个参数强制排在它后面。
+        app.state.emitter.current_workflow = "busy"
+        try:
+            yield
+        finally:
+            app.state.workflow_queue.clear()
+            app.state.emitter.current_workflow = None
+
+    def test_single_approve_queues_one_fill_item(self, client):
+        job_id = _add_job()
+        r = client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={})
+        assert r.status_code == 200
+
+        queued = r.json()["queued"]
+        assert len(queued) == 1 and queued[0]["job_id"] == job_id
+        pending = self._pending()
+        assert [it["workflow"] for it in pending] == ["m2"]
+        assert pending[0]["params"]["pending_job_id"] == job_id
+
+    def test_batch_approve_queues_one_item_per_job(self, client):
+        """一个岗位一个 item，不是一个 item 处理一批——中途哪个挂了
+        一目了然，也不用回答“第 3 个挂了后面还跑不跑”。"""
+        ids = [_add_job(url=f"https://x/{i}") for i in range(3)]
+        r = client.post("/api/checkpoint1/batch", json={"decision": "approved", "ids": ids})
+
+        assert len(r.json()["queued"]) == 3
+        pending = self._pending()
+        assert len(pending) == 3
+        assert sorted(it["params"]["pending_job_id"] for it in pending) == sorted(ids)
+
+    def test_reject_queues_nothing(self, client):
+        job_id = _add_job()
+        client.post(f"/api/checkpoint1/jobs/{job_id}/reject", json={"reason": "x"})
+        assert self._pending() == []
+
+    def test_batch_reject_queues_nothing(self, client):
+        ids = [_add_job(url=f"https://x/{i}") for i in range(2)]
+        client.post("/api/checkpoint1/batch", json={"decision": "rejected", "ids": ids})
+        assert self._pending() == []
+
+    def test_already_decided_job_is_not_queued(self, client):
+        # 409 那条路径不能顺手再排一个填表任务。
+        job_id = _add_job()
+        client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={})
+        before = len(self._pending())
+        assert client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={}).status_code == 409
+        assert len(self._pending()) == before
+
+    def test_enqueue_can_be_turned_off(self, client):
+        # 只想标个 approved 不想现在跑（比如批一堆然后晚上再跑）。
+        job_id = _add_job()
+        r = client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={"enqueue": False})
+        assert r.json()["queued"] == []
+        assert self._pending() == []
+
+
+class TestCheckpoint1BucketCounts:
+    """按招聘项目分别统计已批准数。
+
+    投递上限常常是按项目算的（拓竹：「在"27届秋招（研发类）"招聘项目中
+    最多可以投递 2 次」）。拿全站总数去比一个项目的上限会**低估**额度——
+    研发类 2 个 + 非研发类 1 个，两个桶都没满，却会报“超了 1 个”。
+    """
+
+    def test_counts_are_split_by_bucket(self, client):
+        t = app.state.tracker
+        a = t.add_pending_job(site_name="bambulab", url="https://x/1", bucket="研发类")
+        b = t.add_pending_job(site_name="bambulab", url="https://x/2", bucket="研发类")
+        c = t.add_pending_job(site_name="bambulab", url="https://x/3", bucket="非研发类")
+        for jid in (a, b, c):
+            t.decide_pending_job(jid, "approved")
+
+        info = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]
+        assert info["approved_here"] == 3
+        assert info["approved_by_bucket"] == {"研发类": 2, "非研发类": 1}
+        assert info["buckets"] == ["研发类", "非研发类"] or info["buckets"] == ["非研发类", "研发类"]
+
+    def test_legacy_rows_without_bucket_land_in_their_own_slot(self, client):
+        """bucket='' 是加这一列之前的旧数据。它们算不进任何项目的名额，
+        得单独分一档让前端能说清楚，而不是静默归到某个桶里。"""
+        t = app.state.tracker
+        old = t.add_pending_job(site_name="bambulab", url="https://x/1")  # 没 bucket
+        t.decide_pending_job(old, "approved")
+
+        info = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]
+        assert info["approved_by_bucket"] == {"": 1}
+        assert info["buckets"] == []
+
+    def test_pending_jobs_are_not_counted(self, client):
+        t = app.state.tracker
+        t.add_pending_job(site_name="bambulab", url="https://x/1", bucket="研发类")
+        info = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]
+        assert info["approved_by_bucket"] == {}
+
+    def test_bucket_reaches_the_job_payload(self, client):
+        # 前端要按岗位的 bucket 把"本次选中"分摊到各个项目上。
+        t = app.state.tracker
+        t.add_pending_job(site_name="bambulab", url="https://x/1", bucket="研发类")
+        job = client.get("/api/checkpoint1/jobs").json()["jobs"][0]
+        assert job["bucket"] == "研发类"

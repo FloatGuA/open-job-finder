@@ -72,6 +72,21 @@ def render_golden_examples(tracker=None, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
+def render_site_brief(tracker, site_name: str) -> str:
+    """上次跑完这个站时 agent 写下的笔记，渲染进本次 prompt。
+
+    **明确标注是"上次自己写的"而不是事实**：站点会改版，笔记会过期，而一段过期的
+    笔记被当成事实读会比没有笔记更糟（它会让 agent 不去看页面就下结论）。措辞上
+    要求它"跟这次看到的不一致就以这次为准"。
+    """
+    brief = tracker.get_site_brief(site_name) if site_name else None
+    if brief is None or not brief.brief.strip():
+        return "（第一次跑这个站，没有历史记录）"
+    return (f"{brief.brief.strip()}\n\n"
+            f"（以上是你上次跑这个站时自己记的，{brief.updated_at[:10]}。"
+            f"站点可能已经改版——跟这次看到的不一致就以这次为准。）")
+
+
 def describe_for_log(profile: Optional[Profile] = None) -> str:
     """一行摘要，给 CLI 打印用——跑之前让人一眼看清 agent 是按什么条件在筛。"""
     p = profile if profile is not None else load_profile()

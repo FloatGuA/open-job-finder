@@ -5,6 +5,7 @@ import {
   type PendingApplicationField,
   type PendingApplicationFieldKind,
   type PendingJob,
+  type SiteInfo,
   type SiteLimitInfo,
 } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
@@ -65,6 +66,12 @@ const T_LIMIT_SAVE = '\u4fdd\u5b58'
 const T_LIMIT_NO_LIMIT_BTN = '\u4e0d\u9650\u91cf'
 const T_LIMIT_RESET = '\u9000\u56de\u672a\u77e5'
 const T_LIMIT_PLACEHOLDER = '\u6700\u591a\u6295\u9012\u51e0\u4e2a'
+const T_SCOPE_BUCKET = '\u4ec5\u9650'
+const T_SCOPE_UNCLEAR = '\u8303\u56f4\u4e0d\u660e\uff0c\u4e0d\u7b97\u540d\u989d'
+const T_GATE_NA = '\u4e0a\u9650\u6309\u62db\u8058\u9879\u76ee\u7b97\uff0c\u65e0\u6cd5\u6838\u5bf9\u603b\u6570'
+const T_BRIEF = 'agent \u7b14\u8bb0'
+const T_BUCKET_NONE = '\u672a\u8bb0\u5f55\u9879\u76ee'
+const T_GATE_NO_BUCKET = '\u8fd9\u4e9b\u5c97\u4f4d\u6ca1\u8bb0\u5f55\u62db\u8058\u9879\u76ee\uff0c\u7b97\u4e0d\u8fdb\u4efb\u4f55\u540d\u989d'
 
 const T_APPROVE = '\u6279\u51c6'
 const T_REJECT = '\u9a73\u56de'
@@ -194,6 +201,7 @@ function SiteBar({
   info,
   total,
   picked,
+  pickedByBucket,
   busy,
   overBudget,
   gateArmed,
@@ -204,9 +212,10 @@ function SiteBar({
   onLimitChanged,
 }: {
   site: string
-  info: SiteLimitInfo | undefined
+  info: SiteInfo | undefined
   total: number
   picked: number
+  pickedByBucket: Record<string, number>
   busy: boolean
   overBudget: number
   gateArmed: boolean
@@ -216,9 +225,17 @@ function SiteBar({
   onReject: () => void
   onLimitChanged: () => void
 }) {
-  const status = info?.status ?? 'unknown'
-  const quota = info?.max_applications ?? 0
+  const limits = info?.limits ?? []
   const approved = info?.approved_here ?? 0
+  // **\u53ea\u6709 site \u7ea7\u7684\u4e0a\u9650\u80fd\u7b97\u95f8\u95e8**\u3002bucket \u7ea7\u7684\u62ff\u5168\u7ad9\u5df2\u6279\u51c6\u6570\u53bb\u6bd4\u662f\u9519\u7684
+  // \u2014\u2014pending_jobs \u6ca1\u8bb0\u6bcf\u4e2a\u5c97\u4f4d\u5c5e\u4e8e\u54ea\u4e2a\u62db\u8058\u9879\u76ee\uff0c\u7b97\u51fa\u6765\u53ea\u4f1a\u4f4e\u4f30\u989d\u5ea6\u3002
+  const gate = limits.find((l) => l.scope === 'site' && l.status === 'limited') || null
+  const approvedByBucket = info?.approved_by_bucket ?? {}
+  // scope='unclear' \u4ecd\u7136\u7b97\u4e0d\u4e86\uff1aagent \u81ea\u5df1\u90fd\u8bf4\u4e0d\u6e05\u8fd9\u6761\u4e0a\u9650\u7ba1\u591a\u5927\u8303\u56f4\u3002
+  const unclearOnly = limits.some((l) => l.status === 'limited' && l.scope === 'unclear')
+  // \u6ca1\u8bb0 bucket \u7684\u65e7\u5c97\u4f4d\u88ab\u9009\u4e2d\u65f6\uff0c\u5b83\u4eec\u7b97\u4e0d\u8fdb\u4efb\u4f55\u9879\u76ee\u7684\u540d\u989d\u2014\u2014\u5f97\u8bf4\u51fa\u6765\u3002
+  const hasBucketLimits = limits.some((l) => l.scope === 'bucket')
+  const pickedOutsideBuckets = (pickedByBucket[''] || 0) > 0 && hasBucketLimits
 
   return (
     <div
@@ -231,32 +248,66 @@ function SiteBar({
 
         <span className="h-4 w-px" style={{ background: 'rgba(255,255,255,0.12)' }} />
 
-        {status === 'limited' ? (
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <SlotMeter quota={quota} approved={approved} picked={picked} />
-            <Stat label={T_SLOT_QUOTA} value={String(quota)} />
-            {approved > 0 && <Stat label={T_SLOT_APPROVED} value={String(approved)} color="#30d158" />}
-            {picked > 0 && <Stat label={T_SLOT_PICKED} value={String(picked)} color="#2997ff" />}
-            {overBudget > 0
-              ? <Stat label={T_SLOT_OVER} value={String(overBudget)} color="#ff453a" />
-              : <Stat label={T_SLOT_LEFT} value={String(quota - approved - picked)} />}
-          </span>
-        ) : (
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {limits.length === 0 ? (
+          <span className="flex items-center gap-x-3">
             <span
               className="rounded-full px-2 py-0.5 text-[12.5px] font-semibold"
-              style={status === 'no_limit'
-                ? { background: 'rgba(48,209,88,0.14)', color: '#30d158' }
-                : { background: 'rgba(255,255,255,0.07)', color: '#adadb8' }}
+              style={{ background: 'rgba(255,255,255,0.07)', color: '#adadb8' }}
             >
-              {status === 'no_limit' ? T_SLOT_NO_LIMIT : T_SLOT_UNKNOWN}
+              {T_SLOT_UNKNOWN}
             </span>
             <Stat label={T_SLOT_APPROVED} value={String(approved)} color={approved > 0 ? '#30d158' : undefined} />
             {picked > 0 && <Stat label={T_SLOT_PICKED} value={String(picked)} color="#2997ff" />}
           </span>
+        ) : (
+          <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {limits.map((l) => {
+              const key = l.scope === 'bucket' ? l.scope_name : ''
+              // \u6bcf\u6761\u4e0a\u9650\u53ea\u770b\u5b83\u7ba1\u7684\u90a3\u90e8\u5206\uff1abucket \u7ea7\u53ea\u6570\u90a3\u4e2a\u9879\u76ee\u91cc\u7684\uff0c
+              // site \u7ea7\u624d\u6570\u5168\u7ad9\u3002\u6df7\u7740\u6570\u5c31\u662f\u8fd9\u4e00\u8f6e\u8981\u4fee\u7684\u90a3\u4e2a\u9519\u3002
+              const a = l.scope === 'bucket' ? (approvedByBucket[key] || 0) : approved
+              const p = l.scope === 'bucket' ? (pickedByBucket[key] || 0) : picked
+              const cap = l.max_applications || 0
+              const over = Math.max(0, a + p - cap)
+              if (l.status !== 'limited') {
+                return (
+                  <span
+                    key={key || 'site'}
+                    className="rounded-full px-2 py-0.5 text-[12.5px] font-semibold"
+                    style={{ background: 'rgba(48,209,88,0.14)', color: '#30d158' }}
+                  >
+                    {T_SLOT_NO_LIMIT}
+                  </span>
+                )
+              }
+              return (
+                <span key={key || 'site'} className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                  {l.scope === 'bucket' && (
+                    <span className="text-[12.5px] text-text-2">{l.scope_name}</span>
+                  )}
+                  {l.scope === 'unclear' && (
+                    <span className="text-[12.5px]" style={{ color: '#ff9f0a' }}>{T_SCOPE_UNCLEAR}</span>
+                  )}
+                  {l.scope === 'unclear' ? (
+                    <Stat label={T_SLOT_QUOTA} value={String(cap)} />
+                  ) : (
+                    <>
+                      <SlotMeter quota={cap} approved={a} picked={p} />
+                      <Stat label={T_SLOT_QUOTA} value={String(cap)} />
+                      {a > 0 && <Stat label={T_SLOT_APPROVED} value={String(a)} color="#30d158" />}
+                      {p > 0 && <Stat label={T_SLOT_PICKED} value={String(p)} color="#2997ff" />}
+                      {over > 0
+                        ? <Stat label={T_SLOT_OVER} value={String(over)} color="#ff453a" />
+                        : <Stat label={T_SLOT_LEFT} value={String(cap - a - p)} />}
+                    </>
+                  )}
+                </span>
+              )
+            })}
+          </span>
         )}
 
-        <LimitEditor site={site} current={info} onDone={onLimitChanged} />
+        <LimitEditor site={site} current={gate} onDone={onLimitChanged} />
 
         <div className="flex-1" />
 
@@ -289,18 +340,31 @@ function SiteBar({
         </div>
       </div>
 
-      {(status === 'unknown' || info?.evidence || (info?.applied_count ?? -1) >= 0) && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pb-2.5 text-[12.5px] text-text-3">
-          {status === 'unknown' && <span>{T_SLOT_UNKNOWN_HINT}</span>}
-          {(info?.applied_count ?? -1) >= 0 && (
-            <span>{T_SLOT_APPLIED} {info?.applied_count} {T_C1_UNIT}</span>
-          )}
-          {info?.evidence && (
-            <span>
-              {T_SLOT_EVIDENCE}
+      {(limits.length === 0 || unclearOnly || pickedOutsideBuckets || info?.brief || limits.some((l) => l.evidence)) && (
+        <div className="space-y-1 px-4 pb-2.5 text-[12.5px] leading-relaxed text-text-3">
+          {limits.length === 0 && <p>{T_SLOT_UNKNOWN_HINT}</p>}
+          {unclearOnly && <p style={{ color: '#ff9f0a' }}>{T_GATE_NA}</p>}
+          {pickedOutsideBuckets && <p style={{ color: '#ff9f0a' }}>{T_GATE_NO_BUCKET}</p>}
+          {limits.map((l) => (
+            <p key={`ev-${l.scope_name || 'site'}`}>
+              {l.applied_count >= 0 && (
+                <span>{T_SLOT_APPLIED} {l.applied_count} {T_C1_UNIT}{'\u3000'}</span>
+              )}
+              {l.evidence && (
+                <span>
+                  {T_SLOT_EVIDENCE}
+                  {'\uff1a'}
+                  {l.evidence}
+                </span>
+              )}
+            </p>
+          ))}
+          {info?.brief && (
+            <p>
+              {T_BRIEF}
               {'\uff1a'}
-              {info.evidence}
-            </span>
+              {info.brief.brief}
+            </p>
           )}
         </div>
       )}
@@ -311,7 +375,7 @@ function SiteBar({
 // \u4eba\u5de5\u586b\u5199\u4e0a\u9650\u3002agent \u62ff\u4e0d\u5230\u8fd9\u6761\u4fe1\u606f\u662f\u5e38\u6001\uff08\u5b83\u53ea\u80fd\u987a\u8def\u649e\u89c1\uff0c
 // \u800c\u987b\u77e5\u5e38\u5199\u5728\u7533\u8bf7\u9875\u4e0a\uff0c\u9009\u5c97\u9636\u6bb5\u6839\u672c\u4e0d\u4f1a\u53bb\u90a3\u91cc\uff09\u2014\u2014\u53ea\u505a\u5230\u201c\u4e0d\u649e\u8c0e\u201d\u4e0d\u591f\uff0c
 // \u4eba\u5f97\u80fd\u628a\u81ea\u5df1\u77e5\u9053\u7684\u586b\u8fdb\u53bb\u3002
-function LimitEditor({ site, current, onDone }: { site: string; current: SiteLimitInfo | undefined; onDone: () => void }) {
+function LimitEditor({ site, current, onDone }: { site: string; current: SiteLimitInfo | null; onDone: () => void }) {
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState(String(current?.max_applications ?? ''))
   const [saving, setSaving] = useState(false)
@@ -320,6 +384,8 @@ function LimitEditor({ site, current, onDone }: { site: string; current: SiteLim
     setSaving(true)
     try {
       await API.setCheckpoint1SiteLimit(site, {
+        // \u4eba\u586b\u7684\u9ed8\u8ba4\u6309\u5168\u7ad9\u7b97\uff1a\u4eba\u8bf4\u5f97\u6e05\u8303\u56f4\uff0c\u8bf4\u4e0d\u6e05\u4e5f\u4e0d\u4f1a\u53bb\u586b\u3002
+        scope: 'site',
         status,
         max_applications: status === 'limited' ? Number(value) : undefined,
         evidence: status === 'limited' || status === 'no_limit' ? T_LIMIT_EDIT : undefined,
@@ -574,7 +640,7 @@ function JobRow({
 function Checkpoint1() {
   const [jobs, setJobs] = useState<PendingJob[]>([])
   const [categories, setCategories] = useState<string[]>([])
-  const [siteLimits, setSiteLimits] = useState<Record<string, SiteLimitInfo>>({})
+  const [sites, setSites] = useState<Record<string, SiteInfo>>({})
   const [filter, setFilter] = useState<Filter>('pending')
   const [checkedIds, setCheckedIds] = useState<number[]>([])
   // \u672c\u5730\u7c7b\u522b\u6539\u52a8\uff0c\u952e\u662f job.id\u3002\u63d0\u4ea4\u65f6\u624d\u843d\u5e93\u2014\u2014\u5148\u6539\u540e\u6279\uff0c\u8ddf\u9010\u6761\u70b9\u6279\u51c6\u7684\u987a\u5e8f\u65e0\u5173\u3002
@@ -591,7 +657,7 @@ function Checkpoint1() {
       .then((r) => {
         setJobs(r.jobs)
         setCategories(r.categories)
-        setSiteLimits(r.site_limits || {})
+        setSites(r.sites || {})
         setCheckedIds([])
         setEdited({})
         setGatedSite(null)
@@ -668,14 +734,41 @@ function Checkpoint1() {
     }
   }
 
-  function overBudgetOf(site: string, picked: number): number {
-    const info = siteLimits[site]
-    if (!info || info.status !== 'limited' || info.max_applications === null) return 0
-    return Math.max(0, info.approved_here + picked - info.max_applications)
+  function pickedByBucketOf(siteJobs: PendingJob[], pickedIds: number[]): Record<string, number> {
+    const out: Record<string, number> = {}
+    for (const j of siteJobs) {
+      if (pickedIds.includes(j.id)) out[j.bucket] = (out[j.bucket] || 0) + 1
+    }
+    return out
   }
 
-  function approveSite(site: string, ids: number[]) {
-    if (overBudgetOf(site, ids.length) > 0 && gatedSite !== site) {
+  function overBudgetOf(site: string, picked: number): number {
+    // \u53ea\u5bf9 site \u7ea7\u4e0a\u9650\u7b97\u3002bucket \u7ea7\u7684\u7b97\u4e0d\u4e86\uff08\u4e0d\u77e5\u9053\u6bcf\u4e2a\u5c97\u4f4d\u5c5e\u4e8e\u54ea\u4e2a
+    // \u62db\u8058\u9879\u76ee\uff09\uff0c\u7b97\u4e86\u53cd\u800c\u4f1a\u628a\u4eba\u62e6\u5728\u672c\u6765\u53ef\u4ee5\u6295\u7684\u5c97\u4f4d\u5916\u9762\u3002
+    const info = sites[site]
+    const gate = info?.limits.find((l) => l.scope === 'site' && l.status === 'limited')
+    if (!gate || gate.max_applications === null) return 0
+    return Math.max(0, info.approved_here + picked - gate.max_applications)
+  }
+
+  /** \u4efb\u4f55\u4e00\u4e2a\u62db\u8058\u9879\u76ee\u8d85\u4e86\u90fd\u7b97\u8d85\u2014\u2014\u95f8\u95e8\u53ea\u9700\u8981\u77e5\u9053\u201c\u8981\u4e0d\u8981\u62e6\u4e00\u4e0b\u201d\u3002 */
+  function overBudgetByBucket(site: string, siteJobs: PendingJob[], pickedIds: number[]): number {
+    const info = sites[site]
+    if (!info) return 0
+    const pb = pickedByBucketOf(siteJobs, pickedIds)
+    let worst = 0
+    for (const l of info.limits) {
+      if (l.scope !== 'bucket' || l.status !== 'limited' || l.max_applications === null) continue
+      const a = info.approved_by_bucket[l.scope_name] || 0
+      const p = pb[l.scope_name] || 0
+      worst = Math.max(worst, a + p - l.max_applications)
+    }
+    return Math.max(0, worst)
+  }
+
+  function approveSite(site: string, ids: number[], siteJobs: PendingJob[]) {
+    const over = overBudgetOf(site, ids.length) + overBudgetByBucket(site, siteJobs, ids)
+    if (over > 0 && gatedSite !== site) {
       setGatedSite(site) // \u7b2c\u4e00\u4e0b\uff1a\u53ea\u4e0a\u819b\uff0c\u4e0d\u63d0\u4ea4
       return
     }
@@ -750,15 +843,16 @@ function Checkpoint1() {
             <section key={site} className="overflow-hidden rounded-2xl bg-bg-card shadow-card">
               <SiteBar
                 site={site}
-                info={siteLimits[site]}
+                info={sites[site]}
                 total={siteJobs.length}
                 picked={pickedIds.length}
                 busy={busy}
-                overBudget={overBudgetOf(site, pickedIds.length)}
+                pickedByBucket={pickedByBucketOf(siteJobs, pickedIds)}
+                overBudget={overBudgetOf(site, pickedIds.length) + overBudgetByBucket(site, siteJobs, pickedIds)}
                 gateArmed={gatedSite === site}
                 onSelectAll={() => setCheckedIds((prev) => [...new Set([...prev, ...pendingIds])])}
                 onClear={() => { setCheckedIds((prev) => prev.filter((id) => !pendingIds.includes(id))); setGatedSite(null) }}
-                onApprove={() => approveSite(site, pickedIds)}
+                onApprove={() => approveSite(site, pickedIds, siteJobs)}
                 onReject={() => setRejecting(pickedIds)}
                 onLimitChanged={refresh}
               />

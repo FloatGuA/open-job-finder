@@ -36,8 +36,12 @@ checkpointer 断点续跑有自然的挂载点（这次先不做，留着接口�
 agent 循环——两层结构：外层确定性编排，内层自主决策。
 """
 import asyncio
+import os
 import re
+import shutil
+import tempfile
 from collections import Counter
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Literal, Optional, TypedDict
 
@@ -76,6 +80,7 @@ class FoundJob(BaseModel):
     title: str = Field(default="", description="岗位标题")
     company: str = Field(default="", description="公司名，页面上没有就留空")
     category: str = Field(default="", description="归到哪个方向，必须是 profile 里配置的类别之一")
+    bucket: str = Field(default="", description="在站点的哪个招聘项目/顶层分类里找到的")
     why: str = Field(default="", description="一句话说明对上了哪几条求职条件")
 
 
@@ -306,7 +311,7 @@ def make_record_job_tool(sink: list, quotas: dict, known_urls: Optional[set] = N
     known = known_urls or set()
 
     async def record_job(url: str, category: str, title: str = "", company: str = "",
-                         why: str = "") -> str:
+                         why: str = "", bucket: str = "") -> str:
         if not url or not url.startswith("http"):
             return "记录失败：url 必须是完整的 http(s) 链接。请从快照里那一行的 url=\"...\" 取。"
         category = (category or "").strip()
@@ -324,7 +329,8 @@ def make_record_job_tool(sink: list, quotas: dict, known_urls: Optional[set] = N
         if remaining_quota(quotas, sink)[category] <= 0:
             return (f"记录失败：{category} 的 {quotas[category]} 个名额已经满了，不要再记这一类。"
                     f"{describe_progress(quotas, sink)}")
-        sink.append(FoundJob(url=url, title=title, company=company, why=why, category=category))
+        sink.append(FoundJob(url=url, title=title, company=company, why=why,
+                             category=category, bucket=(bucket or "").strip()[:80]))
         return f"已记录：{title or url}（{category}）。{describe_progress(quotas, sink)}"
 
     return StructuredTool.from_function(
@@ -333,7 +339,8 @@ def make_record_job_tool(sink: list, quotas: dict, known_urls: Optional[set] = N
         description=(
             "记录一个符合求职条件的岗位。每找到一个就立刻调用一次，不要攒到最后。"
             "url 必须是完整链接（从快照里 link 行的 url=\"...\" 取）；"
-            f"category 必须从这些里选：{('、'.join(quotas)) or '(未配置)'}。"
+            f"category 必须从这些里选：{('、'.join(quotas)) or '(未配置)'}；"
+            "bucket 填你当前所在的那个招聘项目/顶层分类的名字（投递次数上限常常是按它算的）。"
         ),
     )
 
@@ -355,6 +362,67 @@ _PASSTHROUGH_FIND_JOBS = ("navigate_page", "wait_for")
 _PASSTHROUGH_OPEN_APPLICATION = ("navigate_page", "wait_for", "upload_file")
 
 
+@contextmanager
+def staged_resume(resume_pdf_path: str):
+    """把简历复制进系统临时目录，产出一个 chrome-devtools-mcp 允许读的路径。
+
+    **为什么必须做这一步**：没协商 MCP roots capability 时，chrome-devtools-mcp 把
+    文件操作限制在 OS 临时目录，`upload_file` 传项目内的路径会被它自己拒掉：
+        Error: Access denied: path C:\\...\\exports\\xxx.pdf is not within
+               the configured workspace roots
+    启动时那行 "File-writing tools will be restricted to the OS temp directory"
+    的警告说的就是这件事，我一直看见但没当回事，直到第一次真跑 open_application
+    才撞上（2026-08-15）。
+
+    **否掉了 `--allow-unrestricted-paths`**：那是给 agent 放开整个文件系统的读写，
+    跟这一版刚做的工具白名单收窄正好相反。agent 只需要能读"我们明确交给它的那一份
+    简历"，不需要读别的——复制一份进 temp 恰好就是这个语义。
+
+    跑完删掉：临时目录里躺一份带真实个人信息的简历不合适。
+    """
+    src = Path(resume_pdf_path)
+    if not src.is_file():
+        raise FileNotFoundError(f"简历 PDF 不存在: {resume_pdf_path}")
+    staged = Path(tempfile.gettempdir()) / f"ojf_resume_{os.getpid()}{src.suffix}"
+    shutil.copy2(src, staged)
+    try:
+        yield str(staged)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def make_record_open_result_tool(sink: dict) -> "object":
+    """导航 agent 汇报"表单打开了没、简历传上去了没"。
+
+    **本来是用 `create_react_agent(response_format=...)` 做的，那条路在 DeepSeek 上
+    直接不通**：LangGraph 的结构化输出节点写死了 `with_structured_output(schema)`
+    不带 `method=`，ChatOpenAI 默认走 json_schema，而 DeepSeek 返回
+    `400 This response_format type is unavailable now`（2026-08-15 首次真机跑
+    open_application 撞到）。没有任何参数能把 method 传进去。
+
+    改成工具上报，跟 `record_job` / `record_site_limit` 同一个套路——那两个在
+    DeepSeek 上一直好用。顺带拿到同样的好处：**agent 半途没步数了，已经报上来的
+    结论照样拿得到**，不像结构化输出那样必须跑到最后一步才有结果。
+    """
+    from langchain_core.tools import StructuredTool
+
+    async def record_open_result(form_opened: bool, resume_uploaded: bool, note: str = "") -> str:
+        sink.update({"form_opened": bool(form_opened),
+                     "resume_uploaded": bool(resume_uploaded),
+                     "note": (note or "").strip()[:500]})
+        return "已记录本次结果。如果还有没做完的就继续；都做完了就结束，不用再调用任何工具。"
+
+    return StructuredTool.from_function(
+        coroutine=record_open_result,
+        name="record_open_result",
+        description=(
+            "汇报申请表打开/简历上传的结果。**做完或卡住时都要调用一次**："
+            "form_opened=申请表是否打开了，resume_uploaded=简历是否上传成功，"
+            "note=失败时卡在哪一步、页面上看到什么。"
+        ),
+    )
+
+
 def make_record_site_limit_tool(tracker, site_name: str) -> "object":
     """让 agent 把"这个站最多能投几个"报回来。
 
@@ -371,9 +439,11 @@ def make_record_site_limit_tool(tracker, site_name: str) -> "object":
     """
     from langchain_core.tools import StructuredTool
 
-    async def record_site_limit(status: str, evidence: str, limit: int = 0,
+    async def record_site_limit(status: str, evidence: str, scope: str = "unclear",
+                                scope_name: str = "", limit: int = 0,
                                 applied_count: int = -1) -> str:
         status = (status or "").strip()
+        scope = (scope or "unclear").strip()
         if status not in ("no_limit", "limited"):
             return ("记录失败：status 只能是 'limited'（看到了具体数量上限）或 "
                     "'no_limit'（明确写了不限量）。**没看到相关说明就根本不要调用这个工具**，"
@@ -382,24 +452,70 @@ def make_record_site_limit_tool(tracker, site_name: str) -> "object":
             return "记录失败：evidence 必须是页面上的原文，照抄那句话，不要自己转述。"
         if status == "limited" and limit < 1:
             return "记录失败：status='limited' 时 limit 必须是页面上写的那个数字（>=1）。"
+        if scope not in ("site", "bucket", "unclear"):
+            return ("记录失败：scope 只能是 'site'（全站通用）、'bucket'（只管某个招聘项目，"
+                    "并填 scope_name）或 'unclear'（页面没写清楚）。")
+        if scope == "bucket" and not (scope_name or "").strip():
+            return "记录失败：scope='bucket' 时必须填 scope_name，就是那个招聘项目的名字。"
         tracker.upsert_site_limit(
             site_name=site_name,
             status=status,
+            scope=scope,
+            scope_name=scope_name.strip()[:80],
             max_applications=limit if status == "limited" else None,
             applied_count=applied_count,
             evidence=evidence.strip()[:500],
         )
         shown = f"最多 {limit} 个" if status == "limited" else "不限量"
-        return f"已记下本站投递限制：{shown}。继续找岗位，这条不用再报第二次。"
+        where = {"site": "全站", "bucket": f"「{scope_name}」这个招聘项目内",
+                 "unclear": "范围不明"}[scope]
+        return f"已记下投递限制：{where} {shown}。这条不用再报第二次。"
 
     return StructuredTool.from_function(
         coroutine=record_site_limit,
         name="record_site_limit",
         description=(
-            "看到本站关于「一个人最多能投递几个岗位」的说明时调用一次。"
-            "status='limited' 并给出 limit 数字，或 status='no_limit'（页面明确写了不限）。"
-            "evidence 照抄页面原文。如果页面还写了已投递数量，一并填 applied_count。"
-            "没看到就不要调用。"
+            "看到关于「一个人最多能投递几个岗位」的说明时调用一次。"
+            "status='limited' 并给出 limit 数字，或 status='no_limit'（明确写了不限）。"
+            "evidence 照抄页面原文。"
+            "**scope 是这条限制管多大范围，你自己判断**："
+            "'site'=全站通用；'bucket'=只管某个招聘项目/分类（把项目名填进 scope_name）；"
+            "'unclear'=页面没写清楚。"
+            "注意「在XX项目中最多投递N次」这种写法是 bucket 不是 site。"
+            "**说不清就填 unclear，不要猜成 site**——猜错会让名额算错。"
+            "页面还写了已投递数量的话一并填 applied_count。没看到相关说明就不要调用。"
+        ),
+    )
+
+
+def make_record_site_brief_tool(tracker, site_name: str) -> "object":
+    """让选岗 agent 在收尾时写一段这个站的现场笔记。
+
+    **为什么值得单开一个工具**：agent 跨 run 没有记忆，每次都要重新发现"这站怎么
+    分类的、要不要登录、投递有什么讲究"。把它记下来喂回下次的 prompt，跟 golden
+    examples 是同一个思路——用真实观察替代我预先想象的规则。
+
+    **它不是事实源**：真要拿来算数的东西（投递上限）有自己的结构化字段
+    （`record_site_limit`）。这里是自由文本，只给人看、给下次的 agent 当背景。
+    两者混在一起的话，"agent 随口写的一句话"和"页面上抄下来的数字"就分不开了。
+    """
+    from langchain_core.tools import StructuredTool
+
+    async def record_site_brief(brief: str) -> str:
+        text = (brief or "").strip()
+        if len(text) < 10:
+            return "记录失败：brief 太短了，用几句话说清这个站的分类方式、登录要求、投递讲究。"
+        tracker.upsert_site_brief(site_name, text[:1200])
+        return "已记下这个站的说明。下次再来这个站时你会先看到它。"
+
+    return StructuredTool.from_function(
+        coroutine=record_site_brief,
+        name="record_site_brief",
+        description=(
+            "**结束前调用一次**，用几句话记下这个招聘网站的情况，供下次参考："
+            "岗位是怎么分类的（有哪些招聘项目/大类）、要不要登录、投递次数有什么讲究、"
+            "有没有什么坑（比如某个筛选器会把整类岗位藏起来）。写你**实际看到的**，"
+            "不确定的就说不确定。"
         ),
     )
 
@@ -547,8 +663,18 @@ def build_graph(
         给了 job_url 就整个跳过——那是"我已经知道要投哪个"的调试/复现路径。
         """
         if state.get("job_url"):
-            return {"found_jobs": [FoundJob(url=state["job_url"], title=state.get("job_title", ""),
-                                            company=state.get("company", ""), why="由调用方直接指定")]}
+            # 标题/公司优先从 pending_jobs 里查——`--job-url` 那条路径的调用方通常
+            # 只给得出 URL，而 pending_applications.job_title 是 Checkpoint 2 页面上
+            # 每条记录的主标题，空着就是一行没有岗位名的记录（真机跑出来过 4 条）。
+            known = next((j for j in tracker.get_pending_jobs() if j.url == state["job_url"]), None)
+            return {"found_jobs": [FoundJob(
+                url=state["job_url"],
+                title=state.get("job_title") or (known.title if known else ""),
+                company=state.get("company") or (known.company if known else ""),
+                category=known.category if known else "",
+                bucket=known.bucket if known else "",
+                why="由调用方直接指定",
+            )]}
 
         prompt = pm.render(
             "layer1_find_jobs",
@@ -558,6 +684,8 @@ def build_graph(
                 "quota_table": "、".join(f"{n} {c} 个" for n, c in quotas.items()) or "（未配置）",
                 # 人工确认过的归类纠正。传同一个 tracker，别让它自己再开一份连接。
                 "golden_examples": preferences.render_golden_examples(tracker),
+                # 上次跑完这个站时 agent 自己写的笔记，省得每次重新摸索一遍。
+                "site_brief": preferences.render_site_brief(tracker, state.get("site_name", "")),
                 # 筛选器点击预算。第一次真机跑就是死在这里：agent 正确点了
                 # 深圳/产品/研发/日常实习，但每次截图后又去点下一个筛选器，
                 # 始终不收敛，一路撞到 recursion limit。"最多翻 N 页"约束不住
@@ -573,6 +701,7 @@ def build_graph(
             *_agent_tools(_PASSTHROUGH_FIND_JOBS),
             make_record_job_tool(sink, quotas, known_urls=known_urls),
             make_record_site_limit_tool(tracker, state.get("site_name", "")),
+            make_record_site_brief_tool(tracker, state.get("site_name", "")),
         ]
         agent = agent_runtime.build_agent(tools_for_agent, prompt)
         try:
@@ -612,6 +741,7 @@ def build_graph(
                 company=job.company,
                 category=job.category,
                 why=job.why,
+                bucket=job.bucket,
             )
             if new_id is None:
                 skipped += 1  # 这个 url 已经在待审批表里了，正常情况不是错误
@@ -638,18 +768,29 @@ def build_graph(
         # 注意这里**不给** record_job：那是选岗阶段的工具，导航阶段拿到它只会
         # 诱导它去"记录"而不是去打开表单。
         # record_site_limit 反而要给：投递须知那类文字最常出现在申请页上，而不是
-        # 岗位列表页——只在选岗阶段给它，最可能出现的位置正好错过。
+        # 岗位列表页——只在选岗阶段给它，最可能出现的位置正好错过。真机验证确认了
+        # 这一点：拓竹的投递次数上限就印在申请页上，选岗阶段永远看不到。
+        result_sink: dict = {}
         tools_for_agent = [
             *_agent_tools(_PASSTHROUGH_OPEN_APPLICATION),
             make_record_site_limit_tool(tracker, state.get("site_name", "")),
+            make_record_open_result_tool(result_sink),
         ]
-        agent = agent_runtime.build_agent(
-            tools_for_agent, prompt, response_format=OpenApplicationOutput
-        )
+        # 不用 response_format：那条路在 DeepSeek 上直接 400，见
+        # make_record_open_result_tool 的说明。
+        agent = agent_runtime.build_agent(tools_for_agent, prompt)
         result = await agent_runtime.run_agent(agent, f"岗位详情页：{job.url}\n请开始。")
-        outcome: OpenApplicationOutput = result.get("structured_response") or OpenApplicationOutput(
+        if agent_runtime.hit_step_limit(result):
+            print("[layer1] ⚠ 导航 agent 步数耗尽，结果可能不完整。", flush=True)
+        outcome = OpenApplicationOutput(
+            form_opened=bool(result_sink.get("form_opened")),
+            resume_uploaded=bool(result_sink.get("resume_uploaded")),
+            note=result_sink.get("note") or (
+                "agent 没调用 record_open_result，最后一句：" + agent_runtime.last_text(result)[:300]
+            ),
+        ) if result_sink else OpenApplicationOutput(
             form_opened=False, resume_uploaded=False,
-            note="agent 未给出结构化结论：" + agent_runtime.last_text(result)[:300],
+            note="agent 未汇报结果，最后一句：" + agent_runtime.last_text(result)[:300],
         )
         # 字段扫描读的是**代码自己拍的**最后一张快照，不是 agent 的自述——agent
         # 可能说"打开了"但实际停在别的页面上。快照是唯一可核对的事实来源。
@@ -788,13 +929,19 @@ async def run_layer1(
     client = chrome_mcp_client.build_client(profile_dir, headless=headless)
     # 必须是同一个 session 贯穿全程（一个 Chrome 实例），不能每次工具调用各开
     # 一个——见 chrome_mcp_client.open_session() 注释，真机验证撞过这个坑。
-    async with chrome_mcp_client.open_session(client) as session:
-        tools = await chrome_mcp_client.get_tools(session)
-        app = build_graph(tools, tracker=tracker, quotas=quotas, max_pages=max_pages,
-                          max_filter_clicks=max_filter_clicks, select_only=select_only)
-        return await app.ainvoke({
-            "job_url": job_url,
-            "search_url": search_url,
-            "resume_pdf_path": resume_pdf_path,
-            "site_name": site_name,
-        })
+    # select_only 用不到简历（图里根本没有上传节点），所以不做无谓的复制。
+    with ExitStack() as stack:
+        staged_path = ""
+        if resume_pdf_path and not select_only:
+            staged_path = stack.enter_context(staged_resume(resume_pdf_path))
+
+        async with chrome_mcp_client.open_session(client) as session:
+            tools = await chrome_mcp_client.get_tools(session)
+            app = build_graph(tools, tracker=tracker, quotas=quotas, max_pages=max_pages,
+                              max_filter_clicks=max_filter_clicks, select_only=select_only)
+            return await app.ainvoke({
+                "job_url": job_url,
+                "search_url": search_url,
+                "resume_pdf_path": staged_path,
+                "site_name": site_name,
+            })

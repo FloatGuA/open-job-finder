@@ -136,6 +136,8 @@ export interface PendingJob {
   // 审批人确认过"这条纠正拿去教 agent"。确认过的会被渲染进选岗 prompt 当例子；
   // 只是改了类别但没确认的不会——随手一改不见得是标准案例。
   is_golden: boolean
+  // 在站点的哪个招聘项目里找到的。投递上限常常按它算，'' = 老数据没记录。
+  bucket: string
 }
 
 export interface SiteLimitInfo {
@@ -143,11 +145,32 @@ export interface SiteLimitInfo {
   // 三态：unknown = 没找到相关说明（**不等于**没有限制）；no_limit = 页面明确写了不限；
   // limited = 看到了具体数字。把 unknown 显示成"无限制"会让人放心批一堆然后超额。
   status: 'unknown' | 'no_limit' | 'limited'
+  // 这条上限管多大范围，agent 自己判断。bucket = 只管某个招聘项目（拓竹的真实情况
+  // 就是「在"27届秋招（研发类）"招聘项目中最多投递 2 次」）；unclear = 它说不清。
+  // 只有 site 级的才能拿全站已批准数去比——别的算出来是错的。
+  scope: 'site' | 'bucket' | 'unclear'
+  scope_name: string
   max_applications: number | null
   applied_count: number // -1 = 页面上没看到
   evidence: string // 页面原文，不是 agent 的转述
   seen_at: string
+}
+
+export interface SiteBriefInfo {
+  site_name: string
+  brief: string // agent 写的现场笔记，不是事实源
+  updated_at: string
+}
+
+export interface SiteInfo {
+  site_name: string
   approved_here: number // 这个站已批准了几个（后端统计全量，不受列表过滤影响）
+  // 按招聘项目分别统计的已批准数。key='' 是没记录 bucket 的老数据，
+  // 它们算不进任何项目的名额。
+  approved_by_bucket: Record<string, number>
+  buckets: string[] // 这个站出现过的招聘项目
+  limits: SiteLimitInfo[] // 可能有好几条（按招聘项目分），空数组 = 什么都没记到
+  brief: SiteBriefInfo | null
 }
 
 export interface PersonalInfo {
@@ -945,14 +968,14 @@ export const API = {
   // ── Checkpoint 1：选岗审批 ──
   // categories 跟列表一起返回：前端渲染类别下拉必须有它，分两次请求只会多出一种
   // “下拉是空的”的中间状态。
-  getCheckpoint1Jobs: (status?: string): Promise<{ jobs: PendingJob[]; total: number; categories: string[]; site_limits: Record<string, SiteLimitInfo> }> => {
+  getCheckpoint1Jobs: (status?: string): Promise<{ jobs: PendingJob[]; total: number; categories: string[]; sites: Record<string, SiteInfo> }> => {
     const query = buildQuery({ status })
     return requestJson(`/api/checkpoint1/jobs${query}`)
   },
   // 人工填/改本站投递上限。不能假设 agent 一定拿得到这条信息，所以人得有入口。
   setCheckpoint1SiteLimit: (
     site: string,
-    patch: { status: 'unknown' | 'no_limit' | 'limited'; max_applications?: number; evidence?: string },
+    patch: { status: 'unknown' | 'no_limit' | 'limited'; max_applications?: number; evidence?: string; scope?: 'site' | 'bucket'; scope_name?: string },
   ): Promise<{ ok: boolean }> =>
     requestJson(`/api/checkpoint1/site-limit/${encodeURIComponent(site)}`, {
       method: 'PUT',

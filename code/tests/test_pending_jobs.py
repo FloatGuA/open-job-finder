@@ -181,3 +181,19 @@ class TestSourceJobLink:
             "SELECT source_job_id FROM pending_applications WHERE id = ?", (app_id,)
         ).fetchone()
         assert row["source_job_id"] is None
+
+
+class TestBucketColumn:
+    def test_bucket_roundtrip(self, tracker):
+        jid = _add(tracker, url="https://x/9", bucket="27届秋招（研发类）")
+        assert tracker.get_pending_job(jid).bucket == "27届秋招（研发类）"
+
+    def test_bucket_defaults_to_empty(self, tracker):
+        jid = _add(tracker)
+        assert tracker.get_pending_job(jid).bucket == ""
+
+    def test_decide_does_not_touch_bucket(self, tracker):
+        # bucket 是"在哪找到的"，审批改不了这个事实。
+        jid = _add(tracker, url="https://x/1", bucket="研发类")
+        tracker.decide_pending_job(jid, "approved")
+        assert tracker.get_pending_job(jid).bucket == "研发类"
