@@ -12,15 +12,19 @@ def _doc(name="张三", sections=None):
     return d
 
 
-def test_load_pool_migrates_from_active_resume(tmp_path):
-    active = str(tmp_path / "resume_blocks.yaml")
-    pool_p = str(tmp_path / "info_pool.yaml")
-    rb.save_blocks(_doc(sections=[{"name": "教育经历", "blocks": [
-        {"title": "甲大学", "time": "", "bullets": [], "summary": ""}]}]), active)
-    pool = info_pool.load_pool(pool_p, active)
-    assert pool["sections"][0]["name"] == "教育经历"
+def test_load_pool_creates_an_empty_pool_when_missing(tmp_path):
+    """池不存在就建一个空的。
+
+    原先这里第二个参数是「激活简历路径」，池不存在时拿它当种子——那是 v2.16 引入
+    信息池时的一次性迁移，池建好之后再没执行过。2026-08-15 连同 resume_blocks.yaml
+    一起删掉：一个永不执行、却让调用方以为"池可以从简历派生"的参数只会误导。
+    """
     import os
-    assert os.path.exists(pool_p)  # 迁移已落盘
+    pool_p = str(tmp_path / "info_pool.yaml")
+    pool = info_pool.load_pool(pool_p)
+    assert pool["sections"] == []
+    assert pool["basic_info"] == {} or all(not v for v in pool["basic_info"].values())
+    assert os.path.exists(pool_p)  # 空池也落盘，下次直接读
 
 
 def test_merge_parsed_semantics():

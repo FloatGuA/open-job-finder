@@ -35,11 +35,16 @@ def _snapshot_dir(path: str) -> str:
     return os.path.join(os.path.dirname(path) or ".", "pool_snapshots")
 
 
-def load_pool(path: str = POOL_PATH, active_resume_path: str = "data/resume_blocks.yaml") -> dict:
-    """读池；不存在则从激活简历迁移初始化（简历也没有就给空结构）。"""
+def load_pool(path: str = POOL_PATH) -> dict:
+    """读池；不存在就建一个空的。
+
+    原本第二个参数是「激活简历路径」，池不存在时拿它当种子——那是 v2.16 引入信息池
+    时的一次性迁移，池建好之后那条分支再没执行过。2026-08-15 连同 resume_blocks.yaml
+    一起删掉：留着一个永不执行、却让调用方以为"池可以从简历派生"的参数，只会误导。
+    """
     if os.path.exists(path):
         return rb.load_blocks(path)
-    pool = rb.load_blocks(active_resume_path)  # 空文件时本身就是空结构
+    pool = rb.empty_blocks()
     rb.save_blocks(pool, path)
     return pool
 

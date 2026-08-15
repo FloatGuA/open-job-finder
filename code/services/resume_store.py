@@ -2,10 +2,12 @@
 
 存储模型（用户定：每份独立完整，FlowCV 式）：
 - data/resumes/index.yaml  → {active: slug, items: [{slug, name, target, updated_at}]}
-- data/resumes/{slug}.yaml → 该简历的完整块集（结构同 resume_blocks.yaml）
-- data/resume_blocks.yaml  → 始终是**当前激活简历**的内容（兼容位：JD 定制/
-  onboarding/上传解析等既有消费方只认这个文件，切换简历=把选中份拷入此文件；
-  保存激活简历=同时写 {slug}.yaml 与此文件）。
+- data/resumes/{slug}.yaml → 该简历的完整块集
+
+历史：v2.15 之前只有一份简历，存在 data/resume_blocks.yaml。改成多份之后那个文件
+被留成「兼容位」，每次保存**双写**一遍（既有消费方只认老文件名）。2026-08-15 删掉了
+——它没有任何独占信息（内容按定义等于 {active}.yaml），而"同一份数据两个写入口"
+是这个项目已经栽过五次的形状。要"当前激活简历的内容"一律走 `load_active()`。
 
 导出存档：data/resume_pdfs/exports/{ts}_{name}.pdf，按时间倒序列出，滚动上限修剪。
 """
@@ -26,7 +28,6 @@ class ResumeStore:
         self.data_dir = data_dir
         self.resumes_dir = os.path.join(data_dir, "resumes")
         self.index_path = os.path.join(self.resumes_dir, "index.yaml")
-        self.active_blocks_path = os.path.join(data_dir, "resume_blocks.yaml")
         self.exports_dir = os.path.join(data_dir, "resume_pdfs", "exports")
 
     # ── index ────────────────────────────────────────────────────────────────
@@ -45,11 +46,14 @@ class ResumeStore:
             yaml.safe_dump(idx, f, allow_unicode=True, sort_keys=False)
 
     def _migrate_initial(self) -> dict:
-        """首次使用：若已有 resume_blocks.yaml，把它收编为第一份简历「默认简历」。"""
+        """还没有 index.yaml 时建一份空的「默认简历」。
+
+        这里原本会去收编 data/resume_blocks.yaml（v2.15 之前那唯一一份简历）。
+        那个一次性迁移早就跑完了，文件也已删除，所以现在只建空结构。
+        """
         slug = uuid.uuid4().hex[:8]
         item = {"slug": slug, "name": "默认简历", "target": "", "updated_at": _now()}
-        blocks = rb.load_blocks(self.active_blocks_path)
-        rb.save_blocks(blocks, self._blocks_path(slug))
+        rb.save_blocks(rb.empty_blocks(), self._blocks_path(slug))
         idx = {"active": slug, "items": [item]}
         self._save_index(idx)
         return idx
@@ -63,6 +67,14 @@ class ResumeStore:
     def list(self) -> dict:
         return self._load_index()
 
+    def load_active(self) -> dict:
+        """当前激活简历的内容。**"激活份内容"的唯一读取入口**——原先各处直接读
+        兼容位文件 data/resume_blocks.yaml，那是同一份数据的第二个副本。"""
+        idx = self._load_index()
+        if not idx["active"]:
+            return rb.empty_blocks()
+        return rb.load_blocks(self._blocks_path(idx["active"]))
+
     def get_blocks(self, slug: str) -> dict:
         """读某一份简历的内容（不改变激活份）——「已保存简历」预览用。"""
         idx = self._load_index()
@@ -75,7 +87,7 @@ class ResumeStore:
         idx = self._load_index()
         slug = uuid.uuid4().hex[:8]
         if blocks is None:
-            blocks = rb.load_blocks(self.active_blocks_path) if copy_from_active else rb.empty_blocks()
+            blocks = self.load_active() if copy_from_active else rb.empty_blocks()
         rb.save_blocks(blocks, self._blocks_path(slug))
         item = {"slug": slug, "name": name or "未命名简历", "target": target, "updated_at": _now()}
         idx["items"].append(item)
@@ -102,7 +114,6 @@ class ResumeStore:
         idx["items"] = [it for it in idx["items"] if it["slug"] != slug]
         if idx["active"] == slug:
             idx["active"] = idx["items"][0]["slug"]
-            rb.save_blocks(rb.load_blocks(self._blocks_path(idx["active"])), self.active_blocks_path)
         self._save_index(idx)
         try:
             os.remove(self._blocks_path(slug))
@@ -110,19 +121,18 @@ class ResumeStore:
             pass
 
     def activate(self, slug: str) -> dict:
-        """切换激活简历：把该份内容拷入兼容位 resume_blocks.yaml。"""
+        """切换激活简历。只改 index 里的指针——内容一直在各自的 {slug}.yaml 里，
+        不需要再往别处拷一份。"""
         idx = self._load_index()
         if not any(it["slug"] == slug for it in idx["items"]):
             raise KeyError(slug)
-        rb.save_blocks(rb.load_blocks(self._blocks_path(slug)), self.active_blocks_path)
         idx["active"] = slug
         self._save_index(idx)
         return idx
 
     def save_active_blocks(self, blocks: dict) -> None:
-        """保存当前激活简历：双写 {slug}.yaml + 兼容位。"""
+        """保存当前激活简历。**只写 {slug}.yaml 一处**（原先还双写一份兼容位）。"""
         idx = self._load_index()
-        rb.save_blocks(blocks, self.active_blocks_path)
         if idx["active"]:
             rb.save_blocks(blocks, self._blocks_path(idx["active"]))
             self.update_meta(idx["active"])  # 刷 updated_at

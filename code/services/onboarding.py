@@ -21,15 +21,11 @@ class OnboardingChecker:
     def __init__(
         self,
         profile_path: str = "data/profile.yaml",
-        resume_yaml_path: str = "data/resume_base.yaml",
         session_path: str = "data/session.json",
         config: dict = None,
         config_path: str = "config.yaml",
-        resume_blocks_path: str = "data/resume_blocks.yaml",
     ):
         self.profile_path = profile_path
-        self.resume_yaml_path = resume_yaml_path
-        self.resume_blocks_path = resume_blocks_path
         self.session_path = session_path
         self.config = config or {}
         self.config_path = config_path
@@ -55,18 +51,24 @@ class OnboardingChecker:
         return False
 
     def _blocks_available(self) -> bool:
+        """简历是否就绪 = 信息池里有内容。
+
+        原本还认 `resume_blocks.yaml`（激活简历的兼容位副本），2026-08-15 那个文件
+        连同双写一起删了。信息池是所有简历素材的主库，判就绪只看它一处。
+        """
         from services import resume_blocks
-        pool_path = os.path.join(os.path.dirname(self.resume_blocks_path) or "data", "info_pool.yaml")
+        pool_path = os.path.join(os.path.dirname(self.profile_path) or "data", "info_pool.yaml")
         try:
-            return resume_blocks.is_available(self.resume_blocks_path) or resume_blocks.is_available(pool_path)
+            return resume_blocks.is_available(pool_path)
         except Exception:
             return False
 
     def check_all(self) -> dict:
         profile_ok = self._file_non_empty(self.profile_path)
-        # 简历就绪 = 旧 resume_base.yaml（onboarding CLI 写）或块库 resume_blocks.yaml
-        # （dashboard 上传的单一真相）任一存在。dashboard 视觉/文本解析都写块库。
-        resume_ok = self._file_non_empty(self.resume_yaml_path) or self._blocks_available()
+        # 简历就绪 = 信息池或块库里有内容。原本还认 `resume_base.yaml`（CLI 引导写的
+        # 老结构），2026-08-15 连同那条解析路径一起删了——同一个人存三份、谁也不同步
+        # 谁，"以哪份为准"永远说不清。现在只认信息池这一条。
+        resume_ok = self._blocks_available()
         session_ok = os.path.exists(self.session_path)
         llm_ok = self._check_llm_provider()
         return {
@@ -258,9 +260,17 @@ class OnboardingChecker:
         return True
 
     def _step4_import_resume(self) -> bool:
-        """Show a file picker dialog, copy the selected resume, then parse it."""
+        """Show a file picker dialog and copy the selected resume into data/.
+
+        **刻意只复制、不解析**（2026-08-15）。这一步原本会调 `parse_resume_file`
+        把简历硬解成 `data/resume_base.yaml`——那是 v2.14 视觉解析之前的老路子，
+        产出的是跟信息池完全不同的第三套结构，谁也不同步谁。
+
+        现在解析统一走 Dashboard 的上传端点（PDF → 视觉模型，docx → 文本 + LLM），
+        两条都写信息池。CLI 引导只把文件放到位，剩下的交给那一条路。
+        少一条写入路径，"个人信息以哪份为准"才说得清。
+        """
         import shutil
-        from services.resume_parser import parse_resume_file
 
         print("\nA file picker window will open 鈥?select your resume PDF or Word file.")
         try:
@@ -297,12 +307,8 @@ class OnboardingChecker:
         shutil.copy2(str(src), str(dest))
         print(f"Copied to {dest}. Parsing...")
 
-        try:
-            parse_resume_file(str(dest))
-            print("Resume parsed and saved to data/resume_base.yaml")
-        except Exception as exc:
-            print(f"Resume parsing failed: {exc}")
-            print("You can re-import later via Dashboard.")
+        print("Now open the Dashboard and upload this file on the Resume page "
+              "to parse it into your info pool.")
         return True
 
     def _step5_create_profile(self) -> bool:

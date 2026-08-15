@@ -131,8 +131,6 @@ def _initialize_state() -> None:
     app.state.tracker = ApplicationTracker(db_path=str(DATA_DIR / "jobs.db"))
     app.state.onboarding = OnboardingChecker(
         profile_path=str(DATA_DIR / "profile.yaml"),
-        resume_yaml_path=str(DATA_DIR / "resume_base.yaml"),
-        resume_blocks_path=str(DATA_DIR / "resume_blocks.yaml"),
         session_path=str(DATA_DIR / "session.json"),
         config=config,
     )
@@ -749,7 +747,7 @@ async def upload_resume(file: UploadFile = File(...)) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Resume parsing failed: no meaningful content detected.")
     # 解析结果合并入信息池（同名分区并组、同标题块替换；池只增改不删）
     pool_path = str(DATA_DIR / "info_pool.yaml")
-    pool = info_pool.merge_parsed(info_pool.load_pool(pool_path, str(DATA_DIR / "resume_blocks.yaml")), parsed)
+    pool = info_pool.merge_parsed(info_pool.load_pool(pool_path), parsed)
     info_pool.save_pool(pool, pool_path)
 
     return JSONResponse(
@@ -764,16 +762,19 @@ async def upload_resume(file: UploadFile = File(...)) -> JSONResponse:
 
 @app.get("/api/resume/blocks")
 async def get_resume_blocks() -> JSONResponse:
-    """简历积木库（功能一）：读取 resume_blocks.yaml（不存在返回空结构）。"""
-    from services import resume_blocks
-    return JSONResponse(resume_blocks.load_blocks(str(DATA_DIR / "resume_blocks.yaml")))
+    """当前激活简历的内容（不存在返回空结构）。
+
+    原先直接读 data/resume_blocks.yaml —— 那是激活份的第二份副本，2026-08-15 删了。
+    """
+    from services.resume_store import ResumeStore
+    return JSONResponse(ResumeStore(str(DATA_DIR)).load_active())
 
 
 @app.put("/api/resume/blocks")
 async def put_resume_blocks(body: dict[str, Any] = Body(...)) -> JSONResponse:
     """整存编辑后的块库；只接受已知结构的键，避免存入垃圾字段。
 
-    经 ResumeStore 双写：兼容位 resume_blocks.yaml + 当前激活简历 {slug}.yaml。
+    经 ResumeStore 写入当前激活简历 {slug}.yaml（唯一存储位）。
     """
     from services.resume_store import ResumeStore
     ResumeStore(str(DATA_DIR)).save_active_blocks(_clean_doc_body(body))
@@ -805,7 +806,7 @@ async def get_interview_prep() -> JSONResponse:
 async def get_pool() -> JSONResponse:
     """读信息池；首次自动从激活简历迁移初始化。"""
     from services import info_pool
-    return JSONResponse(info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"), str(DATA_DIR / "resume_blocks.yaml")))
+    return JSONResponse(info_pool.load_pool(str(DATA_DIR / "info_pool.yaml")))
 
 
 @app.put("/api/pool")
@@ -826,7 +827,7 @@ async def build_pool_endpoint(body: dict[str, Any] | None = None) -> JSONRespons
     body = body or {}
     from services import info_pool
     pool_path = str(DATA_DIR / "info_pool.yaml")
-    pool = info_pool.load_pool(pool_path, str(DATA_DIR / "resume_blocks.yaml"))
+    pool = info_pool.load_pool(pool_path)
     before = sum(len(s["blocks"]) for s in pool["sections"])
     merged = info_pool.build_pool(pool, str(body.get("self_description") or ""),
                                   app.state.model_router, _resume_prompt_manager())
@@ -872,7 +873,7 @@ async def compose_resume(body: dict[str, Any] = Body(...)) -> JSONResponse:
     }
     if not (job["title"] or job["jd_text"]):
         raise HTTPException(status_code=400, detail="job_title 或 jd_text 至少给一个")
-    pool = info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"), str(DATA_DIR / "resume_blocks.yaml"))
+    pool = info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"))
     if not any(s["blocks"] for s in pool["sections"]):
         raise HTTPException(status_code=400, detail="信息池为空，先上传简历或在信息池里添加内容")
     sections = resume_tailor.generate_composed_sections(pool, job, app.state.model_router, _resume_prompt_manager())
@@ -890,7 +891,7 @@ async def compose_resume(body: dict[str, Any] = Body(...)) -> JSONResponse:
     return JSONResponse({"resume": item, "sections": [s["name"] for s in sections]})
 
 
-# ── 多份简历管理（v2.15 简历制作台：每份独立完整，激活份镜像到 resume_blocks.yaml）──
+# ── 多份简历管理（v2.15 简历制作台：每份独立完整，存储只在 resumes/{slug}.yaml）──
 @app.get("/api/resumes")
 async def list_resumes() -> JSONResponse:
     from services.resume_store import ResumeStore
@@ -1041,7 +1042,7 @@ async def tailor_resume(body: dict[str, Any] = Body(...)) -> JSONResponse:
         raise HTTPException(status_code=400, detail="job_id is required")
     job = _tailor_job_from_body(body)
     from services import info_pool
-    pool = info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"), str(DATA_DIR / "resume_blocks.yaml"))
+    pool = info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"))
     templates = resume_tailor.load_templates(str(DATA_DIR / "resume_templates.yaml"))
     tmpl = resume_tailor.match_template(templates, job["title"], job["jd_text"])
     sections = resume_tailor.generate_resume_sections(pool, job, tmpl, app.state.model_router, _resume_prompt_manager())
@@ -1061,7 +1062,7 @@ async def tailor_greeting(body: dict[str, Any] = Body(...)) -> JSONResponse:
         raise HTTPException(status_code=400, detail="job_id is required")
     job = _tailor_job_from_body(body)
     from services import info_pool
-    pool = info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"), str(DATA_DIR / "resume_blocks.yaml"))
+    pool = info_pool.load_pool(str(DATA_DIR / "info_pool.yaml"))
     templates = resume_tailor.load_templates(str(DATA_DIR / "resume_templates.yaml"))
     tmpl = resume_tailor.match_template(templates, job["title"], job["jd_text"])
     greeting = resume_tailor.generate_greeting(pool, job, tmpl, app.state.model_router, _resume_prompt_manager())
@@ -1082,12 +1083,13 @@ async def get_resume_plan(job_id: str) -> JSONResponse:
 async def get_resume_plan_pdf(job_id: str):
     """把已生成的简历方案渲染成 PDF（Chromium CDP）并返回。"""
     _initialize_state()
-    from services import resume_blocks, resume_tailor
+    from services import resume_tailor
+    from services.resume_store import ResumeStore
     plan = resume_tailor.get_plan(job_id, str(DATA_DIR / "resume_plans.yaml"))
     sections = (plan.get("resume") or {}).get("sections") or []
     if not sections:
         raise HTTPException(status_code=404, detail="该岗位还没有生成简历方案")
-    blocks = resume_blocks.load_blocks(str(DATA_DIR / "resume_blocks.yaml"))
+    blocks = ResumeStore(str(DATA_DIR)).load_active()
     html = resume_tailor.render_resume_html(blocks.get("basic_info") or {}, sections)
     out = DATA_DIR / "resume_pdfs" / f"{job_id}.pdf"
     resume_tailor.render_html_to_pdf(html, str(out))

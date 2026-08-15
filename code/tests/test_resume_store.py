@@ -9,20 +9,19 @@ def _store(tmp_path):
     return ResumeStore(str(tmp_path))
 
 
-def test_migrate_absorbs_existing_blocks_as_first_resume(tmp_path):
-    # 已有 resume_blocks.yaml → 首次 list 自动收编为「默认简历」且激活
-    blocks = rb.empty_blocks()
-    blocks["basic_info"]["name"] = "张三"
-    rb.save_blocks(blocks, str(tmp_path / "resume_blocks.yaml"))
+def test_first_use_creates_one_empty_resume(tmp_path):
+    """没有 index.yaml 时建一份空的「默认简历」。
+
+    原本这里还会去收编 data/resume_blocks.yaml（v2.15 之前那唯一一份简历）。
+    那个一次性迁移早跑完了，文件也已删除（2026-08-15）。
+    """
     idx = _store(tmp_path).list()
     assert len(idx["items"]) == 1
     assert idx["active"] == idx["items"][0]["slug"]
-    slug = idx["active"]
-    copied = rb.load_blocks(str(tmp_path / "resumes" / f"{slug}.yaml"))
-    assert copied["basic_info"]["name"] == "张三"
+    assert os.path.exists(str(tmp_path / "resumes" / f"{idx['active']}.yaml"))
 
 
-def test_create_copy_and_activate_switches_compat_file(tmp_path):
+def test_create_copies_from_active(tmp_path):
     st = _store(tmp_path)
     blocks = rb.empty_blocks()
     blocks["basic_info"]["name"] = "原始版"
@@ -30,27 +29,54 @@ def test_create_copy_and_activate_switches_compat_file(tmp_path):
 
     item = st.create(name="游戏岗版", target="游戏运营", copy_from_active=True)
     assert item["target"] == "游戏运营"
-    # 新份内容 = 复制自激活份
     copied = rb.load_blocks(str(tmp_path / "resumes" / f"{item['slug']}.yaml"))
     assert copied["basic_info"]["name"] == "原始版"
 
-    # 改新份内容后激活 → 兼容位跟着换
-    copied["basic_info"]["name"] = "游戏版名字"
-    rb.save_blocks(copied, str(tmp_path / "resumes" / f"{item['slug']}.yaml"))
-    st.activate(item["slug"])
-    active_blocks = rb.load_blocks(str(tmp_path / "resume_blocks.yaml"))
-    assert active_blocks["basic_info"]["name"] == "游戏版名字"
 
+def test_activate_only_moves_the_pointer(tmp_path):
+    """切换激活简历**不该拷贝内容**——内容一直在各自的 {slug}.yaml 里。
 
-def test_save_active_double_writes(tmp_path):
+    原先 activate() 会把选中份拷进 resume_blocks.yaml 兼容位，于是同一份内容存两处。
+    """
     st = _store(tmp_path)
-    st.list()  # 触发迁移建 index
+    first = rb.empty_blocks()
+    first["basic_info"]["name"] = "原始版"
+    st.save_active_blocks(first)
+    slug_a = st.list()["active"]
+
+    item = st.create(name="游戏岗版", copy_from_active=False)
+    other = rb.empty_blocks()
+    other["basic_info"]["name"] = "游戏版名字"
+    rb.save_blocks(other, str(tmp_path / "resumes" / f"{item['slug']}.yaml"))
+
+    st.activate(item["slug"])
+    assert st.list()["active"] == item["slug"]
+    assert st.load_active()["basic_info"]["name"] == "游戏版名字"
+    # 切换不改动原来那份
+    assert rb.load_blocks(str(tmp_path / "resumes" / f"{slug_a}.yaml"))["basic_info"]["name"] == "原始版"
+
+
+def test_save_active_writes_exactly_one_file(tmp_path):
+    """**这条是删掉兼容位的核心不变量**：一份简历的内容只落一个文件。
+
+    原来 save_active_blocks 双写 {slug}.yaml + resume_blocks.yaml，两个写入口写同一
+    份数据——这个项目为此栽过五次。如果有人把兼容位加回来，这条会红。
+    """
+    st = _store(tmp_path)
+    st.list()
     blocks = rb.empty_blocks()
-    blocks["basic_info"]["name"] = "双写"
+    blocks["basic_info"]["name"] = "只写一处"
     st.save_active_blocks(blocks)
+
     slug = st.list()["active"]
-    assert rb.load_blocks(str(tmp_path / "resume_blocks.yaml"))["basic_info"]["name"] == "双写"
-    assert rb.load_blocks(str(tmp_path / "resumes" / f"{slug}.yaml"))["basic_info"]["name"] == "双写"
+    assert rb.load_blocks(str(tmp_path / "resumes" / f"{slug}.yaml"))["basic_info"]["name"] == "只写一处"
+    assert st.load_active()["basic_info"]["name"] == "只写一处"
+    assert not os.path.exists(str(tmp_path / "resume_blocks.yaml")), \
+        "兼容位不该再被写出来——它是同一份内容的第二个副本"
+
+    # data_dir 下只应有 resumes/ 这一处放简历内容的地方
+    yamls = [f for f in os.listdir(tmp_path) if f.endswith(".yaml")]
+    assert yamls == [], f"data 根目录不该出现简历 yaml，实际有 {yamls}"
 
 
 def test_delete_keeps_at_least_one_and_reactivates(tmp_path):
