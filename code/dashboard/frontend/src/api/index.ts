@@ -173,6 +173,60 @@ export interface SiteInfo {
   brief: SiteBriefInfo | null
 }
 
+// ── 信息池变更提案 ──
+// 机器改池（上传解析 / AI 整理）不再直接落盘，先出一份 diff 让人勾选。
+// 池是求职者全部信息的唯一主库，而 build_pool 让 LLM 整体重写 sections、会丢内容；
+// 原先只有"写前快照 + 事后回滚"，那是内容已被覆盖之后的补救。
+
+export interface PoolDiffLine {
+  op: ' ' | '-' | '+'
+  text: string
+}
+
+export interface PoolDiffField {
+  field: string
+  old: string
+  new: string
+}
+
+export interface PoolDiffBlock {
+  key: string
+  kind: 'added' | 'changed' | 'removed'
+  title: string
+  fields: PoolDiffField[]
+  bullets: PoolDiffLine[]
+  // added 默认勾上（新信息通常想要）；changed/removed 默认不勾——
+  // 前者会覆盖已有内容，后者是删除，都得人看一眼。
+  accept_default: boolean
+}
+
+export interface PoolDiffSection {
+  name: string
+  kind: 'added' | 'existing'
+  blocks: PoolDiffBlock[]
+}
+
+export interface PoolDiffBasic {
+  key: string
+  kind: 'added' | 'changed'
+  old: string
+  new: string
+  accept_default: boolean
+}
+
+export interface PoolDiff {
+  basic_info: PoolDiffBasic[]
+  sections: PoolDiffSection[]
+  has_changes: boolean
+}
+
+export interface PoolPending {
+  pending: boolean
+  source?: string
+  created_at?: string
+  diff?: PoolDiff
+}
+
 export interface PersonalInfo {
   // 姓名/电话/邮箱的唯一真源是简历系统的信息池（info_pool.basic_info），这里只读展示，
   // 编辑入口在「简历」页——不重复建第二个写入口。
@@ -687,6 +741,15 @@ export const API = {
       body: JSON.stringify({ self_description }),
     }),
   // \u4fe1\u606f\u6c60\u5feb\u7167\uff08\u6bcf\u6b21\u4fdd\u5b58\u524d\u81ea\u52a8\u7559\u6863\uff0c\u53ef\u56de\u6eda\uff09
+  getPoolPending: (): Promise<PoolPending> => requestJson('/api/pool/pending'),
+  applyPoolPending: (accepted: string[]): Promise<{ ok: boolean; applied: number }> =>
+    requestJson('/api/pool/pending/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accepted }),
+    }),
+  discardPoolPending: (): Promise<{ ok: boolean }> =>
+    requestJson('/api/pool/pending', { method: 'DELETE' }),
   getPoolSnapshots: (): Promise<{ snapshots: PoolSnapshot[]; current: PoolCurrent }> => requestJson('/api/pool/snapshots'),
   restorePoolSnapshot: (fname: string): Promise<ResumeBlocks> =>
     requestJson(`/api/pool/snapshots/${encodeURIComponent(fname)}/restore`, { method: 'POST' }),

@@ -745,17 +745,23 @@ async def upload_resume(file: UploadFile = File(...)) -> JSONResponse:
     from services import info_pool
     if not (parsed["basic_info"].get("name") or any(s["blocks"] for s in parsed["sections"])):
         raise HTTPException(status_code=400, detail="Resume parsing failed: no meaningful content detected.")
-    # 解析结果合并入信息池（同名分区并组、同标题块替换；池只增改不删）
+    # 解析结果**不直接落池**，先变成一份待确认提案（2026-08-15）。池是求职者全部
+    # 信息的唯一主库，机器产生的变更一律要人过一眼——见 services/pool_diff.py。
+    from services import pool_diff
     pool_path = str(DATA_DIR / "info_pool.yaml")
-    pool = info_pool.merge_parsed(info_pool.load_pool(pool_path), parsed)
-    info_pool.save_pool(pool, pool_path)
+    current = info_pool.load_pool(pool_path)
+    proposed = info_pool.merge_parsed(current, parsed)
+    diff = pool_diff.diff_pools(current, proposed)
+    if diff["has_changes"]:
+        pool_diff.save_pending(proposed, source="upload", pool_path=pool_path)
 
     return JSONResponse(
         {
             "success": True,
-            "message": "Resume parsed into info pool.",
+            "message": "Resume parsed. Review the proposed changes.",
             "method": method,
             "sections_found": [s["name"] for s in parsed["sections"] if s["blocks"]],
+            "pending": diff["has_changes"],
         }
     )
 
@@ -818,22 +824,68 @@ async def put_pool(body: dict[str, Any] = Body(...)) -> JSONResponse:
 
 @app.post("/api/pool/build")
 async def build_pool_endpoint(body: dict[str, Any] | None = None) -> JSONResponse:
-    """用 LLM 把自我描述融进信息池，存盘并返回整理后的池。
+    """用 LLM 把自我描述融进信息池，产出一份**待确认提案**（不直接落盘）。
 
-    LLM 是整体重写 sections（可能丢内容），故：①save_pool 会先留快照 ②回包带上
-    整理前后的条目数，前端据此提醒用户核对。
+    这是整个 diff 确认流程最初的动机：LLM 在这里是**整体重写 sections**，可能把它
+    没提到的块弄丢。原先靠"写前快照 + 事后回滚"兜底，那是内容已被覆盖之后的补救。
+    现在改成事前把关——回包只带 diff，人勾选之后才写池。
     """
     _initialize_state()
     body = body or {}
-    from services import info_pool
+    from services import info_pool, pool_diff
     pool_path = str(DATA_DIR / "info_pool.yaml")
-    pool = info_pool.load_pool(pool_path)
-    before = sum(len(s["blocks"]) for s in pool["sections"])
-    merged = info_pool.build_pool(pool, str(body.get("self_description") or ""),
-                                  app.state.model_router, _resume_prompt_manager())
-    info_pool.save_pool(merged, pool_path)
-    after = sum(len(s["blocks"]) for s in merged["sections"])
-    return JSONResponse({**merged, "_stats": {"before": before, "after": after}})
+    current = info_pool.load_pool(pool_path)
+    proposed = info_pool.build_pool(current, str(body.get("self_description") or ""),
+                                    app.state.model_router, _resume_prompt_manager())
+    diff = pool_diff.diff_pools(current, proposed)
+    if diff["has_changes"]:
+        pool_diff.save_pending(proposed, source="build", pool_path=pool_path)
+    return JSONResponse({"pending": diff["has_changes"], "diff": diff})
+
+
+# ── 信息池变更提案（机器改池必须人工勾选确认）──────────────────────────────────
+
+@app.get("/api/pool/pending")
+async def get_pool_pending() -> JSONResponse:
+    """当前待确认的提案 + 它相对**此刻**池内容的 diff。
+
+    diff 每次现算，不存下来：人可能在提案生成之后又手动编辑过池，用当时算好的
+    diff 会让他看到一份跟现状对不上的对照。
+    """
+    from services import info_pool, pool_diff
+    pool_path = str(DATA_DIR / "info_pool.yaml")
+    rec = pool_diff.load_pending(pool_path)
+    if rec is None:
+        return JSONResponse({"pending": False})
+    diff = pool_diff.diff_pools(info_pool.load_pool(pool_path), rec["proposed"])
+    return JSONResponse({"pending": True, "source": rec.get("source", ""),
+                         "created_at": rec.get("created_at", ""), "diff": diff})
+
+
+@app.post("/api/pool/pending/apply")
+async def apply_pool_pending(body: dict[str, Any] = Body(...)) -> JSONResponse:
+    """把勾中的变更落进池。没勾的一律保持现状。"""
+    from services import info_pool, pool_diff
+    pool_path = str(DATA_DIR / "info_pool.yaml")
+    rec = pool_diff.load_pending(pool_path)
+    if rec is None:
+        return JSONResponse({"ok": False, "error": "没有待确认的提案"}, status_code=404)
+    keys = body.get("accepted")
+    if not isinstance(keys, list):
+        return JSONResponse({"ok": False, "error": "accepted must be a list"}, status_code=400)
+    current = info_pool.load_pool(pool_path)
+    merged = pool_diff.apply_selection(current, rec["proposed"], keys)
+    info_pool.save_pool(merged, pool_path)   # save_pool 仍然写前留快照，多一层兜底
+    pool_diff.clear_pending(pool_path)
+    return JSONResponse({"ok": True, "applied": len(keys)})
+
+
+@app.delete("/api/pool/pending")
+async def discard_pool_pending() -> JSONResponse:
+    """整份丢弃提案，池不动。"""
+    from services import pool_diff
+    pool_diff.clear_pending(str(DATA_DIR / "info_pool.yaml"))
+    return JSONResponse({"ok": True})
 
 
 # ── 信息池快照（每次保存前留档，可回滚）────────────────────────────────────────

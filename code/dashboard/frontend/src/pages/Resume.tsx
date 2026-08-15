@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type PoolSnapshot, type FieldMarks, type PoolCurrent, type Job } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
+import PoolDiffPanel from '@/components/PoolDiffPanel'
 
 // v2.16\uff1a\u5206\u533a\u4e0d\u518d\u56fa\u5b9a\uff0c\u540d\u79f0\u81ea\u5b9a\u4e49\uff08\u5982\u300c\u6e38\u620f\u7ecf\u5386\u300d\u300cAgent \u7ecf\u5386\u300d\uff09\u3002\u8fd9\u4e9b\u53ea\u662f\u65b0\u5efa\u65f6\u7684\u5feb\u6377\u5019\u9009\u3002
 const SECTION_PRESETS = ['\u6559\u80b2\u7ecf\u5386', '\u5b9e\u4e60\u7ecf\u5386', '\u9879\u76ee\u7ecf\u5386', '\u6280\u80fd\u7279\u957f', '\u83b7\u5956\u8363\u8a89']
@@ -619,6 +620,8 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
   const [snapCur, setSnapCur] = useState<PoolCurrent | null>(null)
   const [showSnaps, setShowSnaps] = useState(false)
   const [buildNote, setBuildNote] = useState<string | null>(null)
+  // \u6539\u52a8\u5b83\u5c31\u91cd\u5efa PoolDiffPanel\uff0c\u8ba9\u5b83\u91cd\u65b0\u62c9\u5f85\u786e\u8ba4\u63d0\u6848\u3002
+  const [pendingKey, setPendingKey] = useState(0)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const html = useMemo(() => buildResumeHtml(doc), [doc])
@@ -689,7 +692,9 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
       return
     }
     setUploading(true); onErr(null)
-    try { await API.uploadResume(file); await reloadPool() }
+    // \u4e0a\u4f20\u89e3\u6790\u4e0d\u518d\u76f4\u63a5\u5165\u6c60\uff0c\u800c\u662f\u4ea7\u51fa\u4e00\u4efd\u5f85\u786e\u8ba4\u63d0\u6848\uff08\u89c1 services/pool_diff.py\uff09\u3002
+    // \u6240\u4ee5\u8fd9\u91cc\u4e0d\u91cd\u62c9\u6c60\uff08\u5b83\u8fd8\u6ca1\u53d8\uff09\uff0c\u800c\u662f\u53eb\u63d0\u6848\u9762\u677f\u91cd\u65b0\u53d6\u6570\u3002
+    try { await API.uploadResume(file); setPendingKey((n) => n + 1) }
     catch (e2) { onErr((e2 as Error).message) }
     finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
   }
@@ -754,6 +759,10 @@ function Workbench({ onErr, pool, setPool, doc, setDoc, poolDirty, docDirty, act
           {exporting ? '\u5bfc\u51fa\u4e2d\u2026' : '\u5bfc\u51fa\u5f53\u524d\u7b80\u5386 PDF'}</button>
         <span className="ml-auto text-xs text-text-3">
           {poolDirty || docDirty ? '\u6709\u672a\u4fdd\u5b58\u7684\u4fee\u6539\uff0c\u8bb0\u5f97\u70b9\u5404\u680f\u7684\u300c\u4fdd\u5b58\u300d' : '\u6539\u52a8\u5df2\u5168\u90e8\u4fdd\u5b58'}</span>
+      </div>
+
+      <div className="mb-4">
+        <PoolDiffPanel key={pendingKey} onApplied={() => { void reloadPool(); setPendingKey((n) => n + 1) }} />
       </div>
 
       {/* \u628a\u5f53\u524d\u8fd9\u4e00\u7248\u5b58\u6210\u65b0\u7684\u300c\u5df2\u4fdd\u5b58\u7b80\u5386\u300d\u2014\u2014\u65b0\u5efa\u7b80\u5386\u7684\u552f\u4e00\u5165\u53e3\uff08\u539f\u5728\u5df2\u4fdd\u5b58\u7b80\u5386\u9875\uff0c\u4e0e\u300c\u5f53\u524d\u7b80\u5386\u300d\u6982\u5ff5\u51b2\u7a81\uff09 */}

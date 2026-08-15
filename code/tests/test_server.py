@@ -1481,3 +1481,121 @@ class TestCheckpoint1BucketCounts:
         t.add_pending_job(site_name="bambulab", url="https://x/1", bucket="研发类")
         job = client.get("/api/checkpoint1/jobs").json()["jobs"][0]
         assert job["bucket"] == "研发类"
+
+
+class TestPoolPendingFlow:
+    """机器改池必须走人工确认。
+
+    池是求职者全部信息的唯一主库，而 build_pool 让 LLM **整体重写 sections**，
+    一次错误保存就把内容覆盖掉了。原先只有"写前快照 + 事后回滚"，那是
+    发现丢了东西之后的补救（用户 2026-08-15）。
+    """
+
+    @staticmethod
+    def _seed_pool(sections=None, **basic):
+        from services import info_pool
+        pool = {"basic_info": dict(basic), "self_description": "",
+                "sections": list(sections or [])}
+        info_pool.save_pool(pool, str(srv.DATA_DIR / "info_pool.yaml"))
+        return pool
+
+    @staticmethod
+    def _seed_pending(proposed, source="build"):
+        from services import pool_diff
+        return pool_diff.save_pending(proposed, source=source,
+                                      pool_path=str(srv.DATA_DIR / "info_pool.yaml"))
+
+    def test_no_pending_reports_false(self, client):
+        assert client.get("/api/pool/pending").json() == {"pending": False}
+
+    def test_pending_returns_a_diff(self, client):
+        self._seed_pool([{"name": "教育经历", "blocks": [
+            {"title": "甲大学", "time": "", "bullets": ["旧"], "summary": ""}]}])
+        self._seed_pending({"basic_info": {}, "self_description": "", "sections": [
+            {"name": "教育经历", "blocks": [
+                {"title": "甲大学", "time": "", "bullets": ["新"], "summary": ""}]}]})
+
+        r = client.get("/api/pool/pending").json()
+        assert r["pending"] is True and r["source"] == "build"
+        blk = r["diff"]["sections"][0]["blocks"][0]
+        assert blk["kind"] == "changed"
+        assert {"op": "+", "text": "新"} in blk["bullets"]
+
+    def test_diff_is_recomputed_against_the_current_pool(self, client):
+        """人可能在提案生成之后又手动编辑过池。用当时算好的 diff
+        会让他看到一份跟现状对不上的对照。"""
+        self._seed_pool(name="张三")
+        self._seed_pending({"basic_info": {"name": "李四"}, "self_description": "", "sections": []})
+        # 人随后自己把名字也改成了李四 → 提案不再构成变更
+        self._seed_pool(name="李四")
+
+        r = client.get("/api/pool/pending").json()
+        assert r["diff"]["has_changes"] is False
+
+    def test_apply_only_writes_the_ticked_items(self, client):
+        from services import info_pool
+        self._seed_pool(name="张三", phone="123")
+        self._seed_pending({"basic_info": {"name": "李四", "phone": "999"},
+                            "self_description": "", "sections": []})
+
+        r = client.post("/api/pool/pending/apply", json={"accepted": ["basic_info␟name"]})
+        assert r.status_code == 200
+
+        # basic_info 会被块库规范化成固定 6 个字段（缺的补空串），所以只比关心的两个。
+        pool = info_pool.load_pool(str(srv.DATA_DIR / "info_pool.yaml"))
+        assert pool["basic_info"]["name"] == "李四", "勾了的要生效"
+        assert pool["basic_info"]["phone"] == "123", "没勾的必须保持现状"
+        assert client.get("/api/pool/pending").json() == {"pending": False}, "落盘后提案要清掉"
+
+    def test_apply_nothing_leaves_the_pool_untouched(self, client):
+        from services import info_pool
+        self._seed_pool(name="张三")
+        self._seed_pending({"basic_info": {"name": "李四"}, "self_description": "", "sections": []})
+
+        client.post("/api/pool/pending/apply", json={"accepted": []})
+        assert info_pool.load_pool(str(srv.DATA_DIR / "info_pool.yaml"))["basic_info"]["name"] == "张三"
+
+    def test_content_the_proposal_never_mentioned_survives(self, client):
+        """**这条守的是整个功能的初衷。** LLM 重写时可能压根不提某个分区，
+        那些内容不能因此消失——它们从来没被摆到人面前确认过。"""
+        from services import info_pool
+        self._seed_pool([
+            {"name": "教育经历", "blocks": [{"title": "甲大学", "time": "", "bullets": [], "summary": ""}]},
+            {"name": "游戏经历", "blocks": [{"title": "某游戏项目", "time": "", "bullets": [], "summary": ""}]},
+        ])
+        self._seed_pending({"basic_info": {}, "self_description": "", "sections": [
+            {"name": "教育经历", "blocks": [
+                {"title": "甲大学", "time": "", "bullets": ["补充"], "summary": ""}]}]})
+
+        client.post("/api/pool/pending/apply", json={"accepted": ["教育经历␟甲大学"]})
+        pool = info_pool.load_pool(str(srv.DATA_DIR / "info_pool.yaml"))
+        assert [s["name"] for s in pool["sections"]] == ["教育经历", "游戏经历"]
+
+    def test_apply_without_a_pending_is_404(self, client):
+        assert client.post("/api/pool/pending/apply",
+                           json={"accepted": []}).status_code == 404
+
+    def test_bad_payload_is_400(self, client):
+        self._seed_pool()
+        self._seed_pending({"basic_info": {"name": "x"}, "self_description": "", "sections": []})
+        assert client.post("/api/pool/pending/apply", json={}).status_code == 400
+
+    def test_discard_leaves_the_pool_alone(self, client):
+        from services import info_pool
+        self._seed_pool(name="张三")
+        self._seed_pending({"basic_info": {"name": "李四"}, "self_description": "", "sections": []})
+
+        assert client.delete("/api/pool/pending").status_code == 200
+        assert client.get("/api/pool/pending").json() == {"pending": False}
+        assert info_pool.load_pool(str(srv.DATA_DIR / "info_pool.yaml"))["basic_info"]["name"] == "张三"
+
+    def test_direct_pool_edit_still_writes_through(self, client):
+        """人在池编辑页直接改内容**不走**确认——那时人就是作者，
+        给自己的编辑出 diff 让自己确认是纯仪式。"""
+        from services import info_pool
+        self._seed_pool(name="张三")
+        r = client.put("/api/pool", json={"basic_info": {"name": "我自己改的"},
+                                          "self_description": "", "sections": []})
+        assert r.status_code == 200
+        assert info_pool.load_pool(str(srv.DATA_DIR / "info_pool.yaml"))["basic_info"]["name"] == "我自己改的"
+        assert client.get("/api/pool/pending").json() == {"pending": False}
