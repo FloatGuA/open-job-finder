@@ -120,8 +120,8 @@ class PendingApplication:
     # 是给审批人看的：字段名本身常常不足以判断该填什么（"学校名称"是问本科还是
     # 硕士？），得看它在页面上处于哪个分区。空串 = 没拍（没有需要补的字段）。
     screenshot: str = ""
-    # 这条记录来自 Checkpoint 1 的哪个 pending_job。None = 走的是 --job-url 那条
-    # 调试路径（岗位没经过选岗/审批），不是缺数据。
+    # 来自 Checkpoint 1 的哪个 pending_job。None = 走的是 --job-url 调试路径
+    # （岗位没经过选岗/审批），是诚实的空，不是缺数据。
     source_job_id: Optional[int] = None
 
 

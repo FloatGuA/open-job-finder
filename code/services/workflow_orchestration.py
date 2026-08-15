@@ -188,7 +188,6 @@ class OrchestrationService:
             select_only=True,
             emitter=getattr(self._st, "emitter", None),
             workflow="m1",
-            trigger=overrides.get("_trigger", "manual"),
         ))
         found = state.get("found_jobs") or []
         new_ids = state.get("pending_job_ids") or []
@@ -235,7 +234,6 @@ class OrchestrationService:
             tracker=self._st.tracker,
             emitter=getattr(self._st, "emitter", None),
             workflow="m2",
-            trigger=overrides.get("_trigger", "manual"),
         ))
         outcome = state.get("open_result")
         app_id = state.get("pending_application_id")

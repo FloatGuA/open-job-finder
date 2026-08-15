@@ -40,7 +40,6 @@ import os
 import re
 import shutil
 import tempfile
-import time
 from collections import Counter
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -51,12 +50,8 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from multisite import agent_runtime, chrome_mcp_client, preferences, safe_tools
+from multisite.observability import run_scope, traced_stage
 from multisite.personal_info_loader import load_candidates, load_personal_info, match_value
-# 复用 W1/W2/W3 那个 RunLogger 适配器（JSONL + SSE 两件事一起做），不另写一份：
-# 它本身跟 Boss 那条线无关，"多站点自己有一套执行/观测路径"在这个项目里是记过案
-# 的坏味道。多站点确实是另一条轨道，但**观测契约是全局的**——run 日志的读者
-# （前端回放、run_diagnostics）只认这一种格式。
-from pipeline.run_logger import RunLogger
 from services.prompt_manager import PromptManager
 from services.tracker import ApplicationTracker
 
@@ -129,8 +124,7 @@ class Layer1State(TypedDict, total=False):
     # 选岗 agent 的产出
     found_jobs: list[FoundJob]
     pending_job_ids: list[int]   # Checkpoint 1 落库后的 id（重复 url 不在内）
-    # 本次要处理的那个岗位（jobs[0]）在 pending_jobs 里的 id，透传给 Checkpoint 2
-    # 的记录当 source_job_id——没有它，两个 checkpoint 的记录互相认不出来。
+    # 本次要处理的岗位（found_jobs[0]）在 pending_jobs 里的 id，透传给 Checkpoint 2
     source_job_id: Optional[int]
     # 导航 agent 的产出
     open_result: OpenApplicationOutput
@@ -667,54 +661,102 @@ def _enforce_government_id_blank(fields: list[FieldClassification]) -> list[Fiel
     return fields
 
 
-def resolve_source_job_id(tracker, jobs: list) -> Optional[int]:
-    """`jobs[0]`（接下来要处理的那个岗位）在 pending_jobs 里的 id。
+def record_candidates(tracker, state: dict) -> dict:
+    """Checkpoint 1 落库：把候选岗位写进 pending_jobs。
 
-    **按 url 回查，不用 add_pending_job 返回的新 id**：url 去重命中时它返回 None，
-    而 m2 这条路径**每次**都命中（岗位是审批过的，早就在表里了）——拿新 id 等于在
-    最主要的那条路径上永远解析不出来。查不到返回 None（--job-url 那条调试路径可能
-    真的没有对应记录），不编一个。
+    **模块级函数、不是图里的闭包**：它一行浏览器代码都没有，关在需要 tools 的闭包
+    里纯属结构问题——那样"落库到底对不对"只能靠真机跑一次才知道。
+
+    同时解析 `source_job_id`：`found_jobs[0]` 是下一阶段真正会去打开的那个岗位，
+    Checkpoint 2 的记录要靠它认出自己的来源。**按 url 回查、不用刚插入的 id**——
+    m2 那条路径每次都命中 url 去重（岗位是审批过的、早就在表里），新 id 是 None。
     """
-    if not jobs:
-        return None
-    row = next((j for j in tracker.get_pending_jobs() if j.url == jobs[0].url), None)
-    return row.id if row else None
+    jobs = state.get("found_jobs") or []
+    ids: list[int] = []
+    skipped = 0
+    for job in jobs:
+        new_id = tracker.add_pending_job(
+            site_name=state.get("site_name", ""),
+            url=job.url,
+            title=job.title,
+            company=job.company,
+            category=job.category,
+            why=job.why,
+            bucket=job.bucket,
+        )
+        if new_id is None:
+            skipped += 1  # 这个 url 已经在待审批表里了，正常情况不是错误
+        else:
+            ids.append(new_id)
+    if skipped:
+        print(f"[layer1] {skipped} 个岗位此前已入库（url 去重），跳过。", flush=True)
+
+    source_job_id = None
+    if jobs:
+        row = next((j for j in tracker.get_pending_jobs() if j.url == jobs[0].url), None)
+        source_job_id = row.id if row else None
+    return {"pending_job_ids": ids, "source_job_id": source_job_id}
 
 
-def _summarize_node(name: str, out: dict) -> tuple[dict, str]:
-    """节点产出 → (落进 run 日志的结构化 data, 给 SSE 实时日志看的一句话)。
+def record_application(tracker, state: dict, personal_info: dict) -> dict:
+    """Checkpoint 2 落库：把待人工审批的字段清单写进 pending_applications。
 
-    抽成模块级纯函数是为了能单测：节点本身要真浏览器 + 真 LLM 才跑得起来，摘要
-    逻辑埋在里面就永远测不到，而"日志里数字对不对"恰恰是事后唯一的依据。
+    同 `record_candidates`——不碰浏览器，所以提到模块级让它可测。
     """
-    if name == "find_jobs":
-        jobs = out.get("found_jobs") or []
-        by_cat = dict(Counter(j.category for j in jobs))
-        return {"found": len(jobs), "by_category": by_cat}, f"选到 {len(jobs)} 个岗位 {by_cat or ''}"
-    if name == "write_pending_jobs":
-        ids = out.get("pending_job_ids") or []
-        return ({"new": len(ids), "source_job_id": out.get("source_job_id")},
-                f"新入库 {len(ids)} 条待审批")
-    if name == "open_application":
-        res = out.get("open_result")
-        data = {"form_opened": bool(getattr(res, "form_opened", False)),
-                "resume_uploaded": bool(getattr(res, "resume_uploaded", False)),
-                "note": getattr(res, "note", "")[:200]}
-        return data, f"表单已打开={data['form_opened']} 简历已上传={data['resume_uploaded']}"
-    if name == "scan_and_classify_fields":
-        empty = out.get("empty_elements") or []
-        required = [e for e in empty if e.get("required")]
-        classified = out.get("classified_fields") or []
-        return ({"empty": len(empty), "required": len(required),
-                 "classified": len(classified), "screenshot": out.get("form_screenshot", "")},
-                f"空字段 {len(empty)} 个（必填 {len(required)}），已作答 {len(classified)} 个")
-    if name == "write_pending_application":
-        app_id = out.get("pending_application_id")
-        return {"pending_application_id": app_id}, (
-            f"写入待审批记录 id={app_id}" if app_id else "未写记录（没有需要补的字段）")
-    if name == "ensure_ready":
-        return {"snapshot_chars": len(out.get("snapshot_text") or "")}, "入口页已就绪"
-    return {}, name
+    # 一个字段都没扫到就不写记录：一条空的待审批记录对人没有任何信息量，
+    # 只会让审批队列里堆垃圾，还会让人误以为"这个岗位处理过了"。
+    if not state.get("empty_elements"):
+        return {"pending_application_id": None}
+
+    fields_payload = [
+        {
+            "field_id": f.field_id,
+            "label": f.field_id,
+            "kind": f.kind,
+            # demographic 的值只能原样来自 personal_info，不许 LLM 编。取值走
+            # match_value 的同义解析而不是 dict.get：LLM 挑的 key 可能是页面
+            # 上的叫法（「生日」）而存储里是 birth_date，直接 get 会静默返回
+            # 空值——字段留空、但没有任何地方能看出是"没匹配上"还是"确实没
+            # 这份资料"。这里也兜住 LLM 没给 demographic_key 的情况：退回用
+            # 字段名本身去解析。
+            "candidate_value": (
+                match_value(f.demographic_key or f.field_id, personal_info)
+                if f.kind == "demographic"
+                else f.candidate_value
+            ),
+            # 池里对应不止一个值时（本科+硕士两段学历对一个「学校名称」框），
+            # **不挑、不合并**，把候选连上下文一起摆给审批人点。连本人都需要
+            # 看页面才知道该填哪个，系统更没资格猜。空列表 = 没有歧义。
+            "candidates": load_candidates(f.demographic_key or f.field_id),
+        }
+        for f in state.get("classified_fields", [])
+    ]
+    # 选填项也进列表，但**值留空、不生成**——你得知道它们存在（对着截图能判断
+    # 要不要顺手填），而机器不该替你编。kind 一律 open_question：没让 LLM 看过
+    # 它们，硬给一个分类就是编造。
+    answered = {f["field_id"] for f in fields_payload}
+    fields_payload += [
+        {"field_id": e["label"], "label": e["label"], "kind": "open_question",
+         "candidate_value": "", "candidates": load_candidates(e["label"]),
+         "required": False}
+        for e in state.get("empty_elements", [])
+        if not e.get("required") and e["label"] not in answered
+    ]
+    for f in fields_payload:
+        f.setdefault("required", True)   # 上面 LLM 作答的那批都是必填项
+
+    app_id = tracker.add_pending_application(
+        site_name=state.get("site_name", ""),
+        job_title=state.get("job_title") or "",
+        fields=fields_payload,
+        company=state.get("company") or "",
+        job_url=state["job_url"],
+        screenshot=state.get("form_screenshot", ""),
+        # 来自 Checkpoint 1 的哪个岗位。None = 走的是 --job-url 调试路径（岗位没
+        # 经过选岗/审批），是诚实的空，不是缺数据。
+        source_job_id=state.get("source_job_id"),
+    )
+    return {"pending_application_id": app_id}
 
 
 def build_graph(
@@ -725,7 +767,7 @@ def build_graph(
     max_pages: int = 8,
     max_filter_clicks: int = 4,
     select_only: bool = False,
-    logger: Optional[RunLogger] = None,
+    logger=None,
 ):
     """组装 Layer 1 的 LangGraph。tools 来自 chrome_mcp_client.get_tools()，通过
     闭包绑定进各节点——不放进 state（不是可序列化/可 checkpoint 的东西）。
@@ -908,28 +950,10 @@ def build_graph(
         更要命的是**浏览器状态不可序列化**——checkpointer 存得下 messages，存不下
         Chrome；恢复之后 agent 手里的 uid 全部过期，还是得重新截图。岗位详情页有
         自己的 URL，存进库里下一阶段直接从 URL 开始，比恢复现场干净得多。
+
+        真正的落库在模块级的 `record_candidates`（那里没有浏览器，可以单测）。
         """
-        jobs = state.get("found_jobs") or []
-        ids: list[int] = []
-        skipped = 0
-        for job in jobs:
-            new_id = tracker.add_pending_job(
-                site_name=state.get("site_name", ""),
-                url=job.url,
-                title=job.title,
-                company=job.company,
-                category=job.category,
-                why=job.why,
-                bucket=job.bucket,
-            )
-            if new_id is None:
-                skipped += 1  # 这个 url 已经在待审批表里了，正常情况不是错误
-            else:
-                ids.append(new_id)
-        if skipped:
-            print(f"[layer1] {skipped} 个岗位此前已入库（url 去重），跳过。", flush=True)
-        return {"pending_job_ids": ids,
-                "source_job_id": resolve_source_job_id(tracker, jobs)}
+        return record_candidates(tracker, state)
 
     async def open_application(state: Layer1State) -> dict:
         """导航 agent：打开第一个候选岗位的申请表并上传简历。
@@ -1030,95 +1054,40 @@ def build_graph(
                 "form_screenshot": shot}
 
     async def write_pending_application(state: Layer1State) -> dict:
-        # 一个字段都没扫到就不写记录：一条空的待审批记录对人没有任何信息量，
-        # 只会让审批队列里堆垃圾，还会让人误以为"这个岗位处理过了"。
-        if not state.get("empty_elements"):
-            return {"pending_application_id": None}
+        return record_application(tracker, state, personal_info)
 
-        fields_payload = [
-            {
-                "field_id": f.field_id,
-                "label": f.field_id,
-                "kind": f.kind,
-                # demographic 的值只能原样来自 personal_info，不许 LLM 编。取值走
-                # match_value 的同义解析而不是 dict.get：LLM 挑的 key 可能是页面
-                # 上的叫法（「生日」）而存储里是 birth_date，直接 get 会静默返回
-                # 空值——字段留空、但没有任何地方能看出是"没匹配上"还是"确实没
-                # 这份资料"。这里也兜住 LLM 没给 demographic_key 的情况：退回用
-                # 字段名本身去解析。
-                "candidate_value": (
-                    match_value(f.demographic_key or f.field_id, personal_info)
-                    if f.kind == "demographic"
-                    else f.candidate_value
-                ),
-                # 池里对应不止一个值时（本科+硕士两段学历对一个「学校名称」框），
-                # **不挑、不合并**，把候选连上下文一起摆给审批人点。连本人都需要
-                # 看页面才知道该填哪个，系统更没资格猜。空列表 = 没有歧义。
-                "candidates": load_candidates(f.demographic_key or f.field_id),
-            }
-            for f in state.get("classified_fields", [])
+    # 阶段表：名字 → 函数 → 这一步该往 run 日志里记什么。**加节点只能改这里**，
+    # 下面的 add_node 是一个循环——包装因此不是每加一个节点都要记得做的手工动作。
+    # 漏包的表现是 Dashboard 上那一段莫名不显示，跟"卡住了"一模一样，测不出来，
+    # 所以只能从结构上让它不可能发生。
+    stages = [
+        ("ensure_ready", ensure_ready,
+         lambda out: {"snapshot_chars": len(out.get("snapshot_text") or "")}),
+        ("find_jobs", find_jobs,
+         lambda out: {"found": len(out.get("found_jobs") or []),
+                      "by_category": dict(Counter(j.category for j in
+                                                  (out.get("found_jobs") or [])))}),
+        ("write_pending_jobs", write_pending_jobs,
+         lambda out: {"new": len(out.get("pending_job_ids") or [])}),
+    ]
+    if not select_only:
+        stages += [
+            ("open_application", open_application,
+             lambda out: {"form_opened": bool(getattr(out.get("open_result"), "form_opened", False)),
+                          "resume_uploaded": bool(getattr(out.get("open_result"),
+                                                          "resume_uploaded", False))}),
+            ("scan_and_classify_fields", scan_and_classify_fields,
+             lambda out: {"empty": len(out.get("empty_elements") or []),
+                          "required": sum(1 for e in (out.get("empty_elements") or [])
+                                          if e.get("required")),
+                          "classified": len(out.get("classified_fields") or [])}),
+            ("write_pending_application", write_pending_application,
+             lambda out: {"pending_application_id": out.get("pending_application_id")}),
         ]
-        # 选填项也进列表，但**值留空、不生成**——你得知道它们存在（对着截图能判断
-        # 要不要顺手填），而机器不该替你编。kind 一律 open_question：没让 LLM 看过
-        # 它们，硬给一个分类就是编造。
-        answered = {f["field_id"] for f in fields_payload}
-        fields_payload += [
-            {"field_id": e["label"], "label": e["label"], "kind": "open_question",
-             "candidate_value": "", "candidates": load_candidates(e["label"]),
-             "required": False}
-            for e in state.get("empty_elements", [])
-            if not e.get("required") and e["label"] not in answered
-        ]
-        for f in fields_payload:
-            f.setdefault("required", True)   # 上面 LLM 作答的那批都是必填项
-
-        app_id = tracker.add_pending_application(
-            site_name=state.get("site_name", ""),
-            job_title=state.get("job_title") or "",
-            fields=fields_payload,
-            company=state.get("company") or "",
-            job_url=state["job_url"],
-            screenshot=state.get("form_screenshot", ""),
-            # Checkpoint 2 → Checkpoint 1 的回指。这列此前只有 schema 和测试，
-            # 生产路径一次都没写过，于是"这条待审批来自哪个已批准岗位"永远查不出来。
-            source_job_id=state.get("source_job_id"),
-        )
-        return {"pending_application_id": app_id}
-
-    def _traced(name: str, fn):
-        """给节点包一层 run 日志 + SSE。
-
-        **在图这一层包、不在节点里手写**：手写就是六份几乎一样的计时/落日志代码，
-        加第七个节点时漏一份不会有任何东西变红——表现为 Dashboard 上那一段莫名
-        其妙不显示，跟"卡住了"长得一模一样（W1 的 LOOP_STEP 已经栽过一次）。
-
-        `logger=None`（单测直接建图）时原样返回，不套壳。
-        """
-        if logger is None:
-            return fn
-
-        async def wrapped(state: Layer1State) -> dict:
-            scope = {"site": state.get("site_name", "")}
-            logger.emit_step_running(name, scope)   # SSE-only，文件日志只记终态
-            t0 = time.monotonic()
-            try:
-                out = await fn(state)
-            except Exception as exc:
-                logger.log_step(name, scope, "failed",
-                                int((time.monotonic() - t0) * 1000), error=str(exc))
-                raise
-            data, message = _summarize_node(name, out)
-            logger.log_step(name, scope, "successful",
-                            int((time.monotonic() - t0) * 1000), data=data, message=message)
-            return out
-
-        wrapped.__name__ = name
-        return wrapped
 
     graph = StateGraph(Layer1State)
-    graph.add_node("ensure_ready", _traced("ensure_ready", ensure_ready))
-    graph.add_node("find_jobs", _traced("find_jobs", find_jobs))
-    graph.add_node("write_pending_jobs", _traced("write_pending_jobs", write_pending_jobs))
+    for name, fn, summarize in stages:
+        graph.add_node(name, traced_stage(name, fn, logger, summarize) if logger else fn)
     graph.add_edge(START, "ensure_ready")
     graph.add_edge("ensure_ready", "find_jobs")
     # 候选岗位**总是**落库，不管后面还跑不跑——Checkpoint 1 的记录是这次选岗的
@@ -1133,11 +1102,6 @@ def build_graph(
         graph.add_edge("write_pending_jobs", END)
         return graph.compile()
 
-    graph.add_node("open_application", _traced("open_application", open_application))
-    graph.add_node("scan_and_classify_fields",
-                   _traced("scan_and_classify_fields", scan_and_classify_fields))
-    graph.add_node("write_pending_application",
-                   _traced("write_pending_application", write_pending_application))
     graph.add_edge("write_pending_jobs", "open_application")
     graph.add_edge("open_application", "scan_and_classify_fields")
     graph.add_edge("scan_and_classify_fields", "write_pending_application")
@@ -1159,7 +1123,6 @@ async def run_layer1(
     select_only: bool = False,
     emitter=None,
     workflow: str = "",
-    trigger: str = "manual",
 ) -> dict:
     """跑一次 Layer 1。
 
@@ -1170,18 +1133,9 @@ async def run_layer1(
     返回整个 state（不只是 id）——**因为现在有"跑完了但一条记录都没写"的合法
     结果**（没找到符合条件的岗位、或表单里没有空字段）。只返回一个 id 会把这三
     种情况压成同一个 None，调用方无从区分是哪一种，也就无从判断该不该重试。
-
-    `emitter` 给了就往 SSE 推进度（Dashboard 用），不给也照样落 run 日志——
-    **JSONL 是完整数据源，SSE 只是实时镜像**，命令行跑的那次事后同样要能回放。
-    `workflow` 是这次 run 的名字（m1/m2），不给就按入口方式推断，它同时决定
-    run 日志文件名前缀和 SSE 事件的 workflow 字段。
     """
     if bool(job_url) == bool(search_url):
         raise ValueError("job_url 与 search_url 必须且只能给一个")
-
-    # 跟 scripts/run_layer1.py 的队列映射同一条规则：给入口页 = 选岗(m1)，
-    # 给岗位 = 填表(m2)。
-    workflow = workflow or ("m1" if search_url else "m2")
 
     # 按站点解析名额（去掉 site_overrides 里标记本站没有的类别）。调用方显式传了
     # quotas 就以调用方为准——CLI 的 --category 是"我这次就要找这些"，不该被
@@ -1189,47 +1143,33 @@ async def run_layer1(
     if quotas is None:
         quotas = preferences.load_profile().job_seeking.quotas_for_site(site_name)
 
-    run_meta = {"trigger": trigger,
-                "params": {"site": site_name, "entry": job_url or search_url,
-                           "quotas": quotas, "max_pages": max_pages,
-                           "select_only": select_only, "headless": headless}}
-    if emitter is not None:
-        emitter.start_workflow(workflow, meta=run_meta)
-    run_logger = RunLogger(pipeline=workflow, emitter=emitter, debug=True, meta=run_meta)
-
     profile_dir = chrome_mcp_client.profile_dir_for_site(site_name)
     client = chrome_mcp_client.build_client(profile_dir, headless=headless)
     # 必须是同一个 session 贯穿全程（一个 Chrome 实例），不能每次工具调用各开
     # 一个——见 chrome_mcp_client.open_session() 注释，真机验证撞过这个坑。
     # select_only 用不到简历（图里根本没有上传节点），所以不做无谓的复制。
-    try:
-        with ExitStack() as stack:
-            staged_path = ""
-            if resume_pdf_path and not select_only:
-                staged_path = stack.enter_context(staged_resume(resume_pdf_path))
+    # 给入口页 = 选岗(m1)，给岗位 = 填表(m2)，跟 scripts/run_layer1.py 的队列映射同源。
+    run_meta = {"trigger": "manual",
+                "params": {"site": site_name, "quotas": quotas, "max_pages": max_pages,
+                           "select_only": select_only, "headless": headless}}
+    with run_scope(workflow or ("m1" if search_url else "m2"),
+                   emitter=emitter, meta=run_meta) as run, ExitStack() as stack:
+        staged_path = ""
+        if resume_pdf_path and not select_only:
+            staged_path = stack.enter_context(staged_resume(resume_pdf_path))
 
-            async with chrome_mcp_client.open_session(client) as session:
-                tools = await chrome_mcp_client.get_tools(session)
-                app = build_graph(tools, tracker=tracker, quotas=quotas, max_pages=max_pages,
-                                  max_filter_clicks=max_filter_clicks, select_only=select_only,
-                                  logger=run_logger)
-                state = await app.ainvoke({
-                    "job_url": job_url,
-                    "search_url": search_url,
-                    "resume_pdf_path": staged_path,
-                    "site_name": site_name,
-                })
-    except Exception:
-        # run_end 必须写：没有它，"还在跑"和"炸了"在 JSONL 里分不开（读日志三铁律
-        # 之一）。**不发 finish_workflow**——失败路径由队列的 run_item 统一发，
-        # 两边都发就是同一件事两份实现。
-        run_logger.close("failed")
-        raise
-
-    summary = {"found": len(state.get("found_jobs") or []),
-               "new_pending_jobs": len(state.get("pending_job_ids") or []),
-               "pending_application_id": state.get("pending_application_id")}
-    run_logger.close("done", summary=summary)
-    if emitter is not None:
-        emitter.finish_workflow(workflow, str(summary), status="done")
-    return state
+        async with chrome_mcp_client.open_session(client) as session:
+            tools = await chrome_mcp_client.get_tools(session)
+            app = build_graph(tools, tracker=tracker, quotas=quotas, max_pages=max_pages,
+                              max_filter_clicks=max_filter_clicks, select_only=select_only,
+                              logger=run.logger)
+            state = await app.ainvoke({
+                "job_url": job_url,
+                "search_url": search_url,
+                "resume_pdf_path": staged_path,
+                "site_name": site_name,
+            })
+        run.summary.update({"found": len(state.get("found_jobs") or []),
+                            "new_pending_jobs": len(state.get("pending_job_ids") or []),
+                            "pending_application_id": state.get("pending_application_id")})
+        return state

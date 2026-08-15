@@ -33,6 +33,8 @@ services/run_diagnostics.py          run 日志确定性诊断，不调 LLM
 profile，不是 DrissionPage；两个 Chrome 实例互不干扰）
 multisite/layer1_agent.py    m1=选岗 / m2=填表，LangGraph 六节点；节点内部才是 agent 循环
 multisite/safe_tools.py      守法 click（提交类点击由代码拒绝，不靠 prompt 叮嘱）
+multisite/observability.py   run_scope（一次运行的生命周期）+ traced_stage（一个阶段的记录）；
+                             刻意不碰浏览器/LangGraph，否则要开真 Chrome 才测得到
 
 **但它跟 W1/W2/W3 共用两样东西，别再各造一份**（v2.24.0 共用队列 / v2.24.5 共用观测）：
 - **同一个 `workflow_queue`**（串行、schedule_log、trigger 归类）——加新 workflow 要同时改

@@ -303,8 +303,8 @@ def _load_json_file(path: Path, default: Any) -> Any:
 
 
 def _validate_run_pipeline(pipeline: str | None) -> str | None:
-    # 白名单引用队列的 VALID_WORKFLOWS，不手抄——手抄的那份在 m1/m2 上线后就漏了
-    # （enqueue 端点栽过同一次），表现为"日志在磁盘上但按 pipeline 一筛就 400"。
+    # 引用队列的白名单，不手抄一份——手抄的那份漏了 m1/m2，表现为"日志在磁盘上
+    # 但按 pipeline 一筛就 400"。
     from services.workflow_queue import VALID_WORKFLOWS
 
     if pipeline is not None and pipeline not in VALID_WORKFLOWS:

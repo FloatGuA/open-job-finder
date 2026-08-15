@@ -412,7 +412,8 @@
 
 - **日期 / 版本**：2026-08-16，v2.24.5
 - **背景**：m1/m2 自 v2.24.0 起跟 W1/W2/W3 共用同一个队列，但**一次 `start_workflow`/`finish_workflow` 都不发、一行 run 日志都不写**（只有失败路径在 `run_item` 里发了个 finish，给一个从没 start 过的 workflow）。后果是跑 m1/m2 时 Dashboard 只知道"忙"，看不到卡在哪一步；事后 `logs/runs/` 里也没有能回放的记录，只剩 `schedule_log` 一行——而那个日志本身已经记过案（71% 幻影 success）。
-- **选了什么**：`multisite/layer1_agent.py` 直接用 `pipeline/run_logger.py` 的 `RunLogger`，在 **LangGraph 图这一层**给六个节点统一包一层（`_traced`），落 `logs/runs/{m1|m2}_*.jsonl` 并同步推 SSE；节点摘要抽成纯函数 `_summarize_node` 以便单测。前端只把 m1/m2 加进已有的通用 run 列表/回放（`Logs.tsx` 的 pipeline 过滤 + `WorkflowId`）。
+- **选了什么**（v2.24.6 按 TDD 重写后的形态）：新模块 `multisite/observability.py`，两个东西——`run_scope(workflow, emitter)` 管一次运行的生命周期（run_start / **无论如何都写 run_end** / SSE 的 start 与 done），`traced_stage(name, fn, logger, summarize)` 管一个阶段的记录。两者**都不碰浏览器、不碰 LangGraph**。图组装改成「阶段表 + 循环 add_node」，包装因此不是每加一个节点都要记得做的手工动作。前端只把 m1/m2 加进已有的通用 run 列表/回放（`Logs.tsx` 的 pipeline 过滤 + `WorkflowId`）。
+- **为什么是这个形状**：它是被测试逼出来的。第一版（v2.24.5，测试事后补）把生命周期手写在 `run_layer1` 的 try/except 里、把摘要做成一个认识全部六个阶段输出形状的 `_summarize_node` 大 if-else——两者都要开真 Chrome 才跑得到，于是**失败路径一条测试都没有**。TDD 第一个问题「这个行为怎么测」直接把这两块从浏览器里拆了出来。
 - **否掉了什么，为什么**：
   ①**否掉"多站点自己写一套观测"**——多站点确实是另一条轨道（chrome-devtools-mcp / LangGraph / 各站独立 profile，跟 DrissionPage 那条线毫无共用），但**观测契约是全局的**：run 日志的读者（`run_log_reader`、`run_diagnostics`、前端回放）只认这一种格式，自己写一份等于让这些工具对多站点集体失明。"某功能有自己的执行路径"在本项目是记过案的坏味道。
   ②**否掉"只发 emitter 的 start/finish（粗粒度）"**——那样 Dashboard 上仍然只有"开始/结束"两点，`open_application` 卡住和 `find_jobs` 没找到岗位长得一样；而且不落 JSONL，事后无法回放。**JSONL 是完整数据源、SSE 只是实时镜像**，命令行 `--direct` 跑的那次同样要留下记录，所以 RunLogger 无条件建、emitter 可为 None。
@@ -420,3 +421,33 @@
   ④**否掉"在每个节点内部手写计时+落日志"**——六份几乎一样的样板，加第七个节点时漏一份不会有任何东西变红，表现为 Dashboard 上那一段莫名不显示，跟"卡住了"一模一样（W1 的 LOOP_STEP 栽过）。
 - **代价 / 已知不足**：`multisite/` 由此依赖 `pipeline/`（此前完全独立）。这条依赖是单向的、只指向那个跟 Boss 线无关的 logger 适配器，可以接受；但如果哪天要把多站点拆成独立服务，这是要先切断的一根线。另外节点级是**图节点**粒度，agent 循环内部那几十步仍然只进 stdout 追踪，Dashboard 上看不到。
 - **什么情况下该重新考虑**：m1/m2 形态稳定（Layer 3 落地）之后，可以再判断要不要给它做专属的前端骨架视图；或者 agent 内部步数也需要在 Dashboard 上看到时——那时该考虑把 `agent_runtime._trace` 也接进 `log_tool`。
+
+## 事后补测试 vs TDD：同一块代码写两遍的实测差异
+
+- **日期 / 版本**：2026-08-16，v2.24.5（事后补）→ v2.24.6（TDD 重写）
+- **背景**：v2.24.5 的测试是代码写完之后补的，违反全局规则 11 与 superpowers 的
+  iron law。用户要求「先 commit 这一版做基线，然后重写，对比效果」——所以两版
+  在 git 里都在（`e854ae1` 是事后补测试的那版）。
+- **量到的差异**（不是感受，是两版代码本身）：
+  1. **测的东西不同**。事后补的那版测了两个辅助函数（`_summarize_node`、
+     `resolve_source_job_id`）——都是我记得自己写过的东西；**包装器本身零测试**
+     （计时、失败时也要落日志、异常必须重抛，一条都没有），**回指有没有真的落到
+     库里也没测**（只测了"算得对"）。TDD 版测的是"JSONL 里有什么""库里那条记录的
+     `source_job_id` 是多少"。
+  2. **TDD 逼出两处拆分**：run 生命周期从 `run_layer1` 里拆成 `run_scope`；两个
+     不碰浏览器的阶段（`record_candidates` / `record_application`）从图的闭包里
+     提到模块级。理由都一样——**"这个行为怎么测"问不出答案时，是设计在挡路**。
+  3. **TDD 当场抓到一个缺口**：`source_job_id` 写进去了但 `PendingApplication`
+     读不出来，测试直接 AttributeError。事后补的那版是我写完顺手想到才补的读侧，
+     没有任何机制保证我会想到。
+  4. **摘要的形状被"我希望怎么调用"决定**：从「包装器认识每个阶段的输出形状」
+     变成「摘要跟着阶段走」，加阶段不再需要改两处。
+- **必须打的折**：**这个对比被污染了**——重写时我记得第一版的实现，"delete means
+  delete / don't look at it"对 LLM 只能做到不回看文件、不复制，做不到没见过。
+  最明显的例子：`test_link_survives_the_whole_m2_path`（url 去重每次命中、所以不能
+  用新插入的 id）这条测试是**知道那个陷阱才写得出来**的，是记忆的功劳不是 TDD 的。
+  所以上面第 1、2、3 条可信（它们是结构性的），"TDD 版质量更高"这个整体结论要打折。
+- **代价**：重写一轮的时间；`multisite/layer1_agent.py` 多了一次结构变动（两个阶段
+  搬家）。
+- **什么情况下该重新考虑**：不该。这条记的是"规则 11 不是仪式"的实测证据，下次想
+  说"这次先写代码后补测试"时回来读第 1 条。
