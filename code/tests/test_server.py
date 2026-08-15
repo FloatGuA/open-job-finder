@@ -1599,3 +1599,40 @@ class TestPoolPendingFlow:
         assert r.status_code == 200
         assert info_pool.load_pool(str(srv.DATA_DIR / "info_pool.yaml"))["basic_info"]["name"] == "我自己改的"
         assert client.get("/api/pool/pending").json() == {"pending": False}
+
+
+class TestPendingApplicationScreenshot:
+    """表单截图给审批人看——字段名常常不够判断该填什么
+    （「学校名称」是问本科还是硕士？），得看它在页面上属于哪个分区。"""
+
+    def test_screenshot_field_roundtrips(self, client):
+        app_id = app.state.tracker.add_pending_application(
+            site_name="s", job_title="x", fields=[], screenshot="20260815_form.png")
+        got = client.get(f"/api/pending-applications/{app_id}").json()
+        assert got["screenshot"] == "20260815_form.png"
+
+    def test_defaults_to_empty(self, client):
+        app_id = app.state.tracker.add_pending_application(site_name="s", job_title="x", fields=[])
+        assert client.get(f"/api/pending-applications/{app_id}").json()["screenshot"] == ""
+
+    def test_serves_an_existing_screenshot(self, client):
+        d = srv.DATA_DIR / "multisite_screenshots"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n fake")
+        r = client.get("/api/pending-applications/screenshot/shot.png")
+        assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+
+    def test_missing_screenshot_is_404(self, client):
+        assert client.get("/api/pending-applications/screenshot/nope.png").status_code == 404
+
+    @pytest.mark.parametrize("evil", ["../config.yaml", "..%2Fx", "a/b.png"])
+    def test_path_traversal_is_rejected(self, client, evil):
+        """截图名来自数据库，但端点是公开的——不能拿它当任意文件读取器。
+
+        三种码都算拦住了，拦的位置不同：422 是 FastAPI 路由层（路径参数不含 `/`，
+        压根没匹配上），400 是处理函数里的显式校验，404 是文件不存在。**断言只关心
+        "没把文件发出去"**，写死某一个码等于把实现细节焊进测试。
+        """
+        r = client.get(f"/api/pending-applications/screenshot/{evil}")
+        assert r.status_code in (400, 404, 422), f"意外放行：{r.status_code}"
+        assert r.status_code != 200

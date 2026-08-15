@@ -352,3 +352,72 @@ class TestSaveNewFactsSynonymDedup:
         )
 
         assert saved == ["英语能力"]
+
+
+class TestLoadCandidates:
+    """多值字段给**候选**，不挑也不合并。
+
+    用户有本科和硕士两段学历，表单上一个「学校名称」框——填哪个？
+    **连本人都需要看页面上下文才能决定**（用户 2026-08-15 原话），
+    系统更没资格猜。跟 government_id 留空、跟 site_limit 的 unknown 三态同一条原则。
+    """
+
+    @staticmethod
+    def _pool(tmp_path, sections):
+        import yaml
+        p = tmp_path / "info_pool.yaml"
+        p.write_text(yaml.safe_dump(
+            {"basic_info": {}, "self_description": "", "sections": sections},
+            allow_unicode=True), encoding="utf-8")
+        return p
+
+    def _edu(self, tmp_path, blocks):
+        return self._pool(tmp_path, [{"name": "教育经历", "blocks": blocks}])
+
+    def test_two_schools_become_two_candidates(self, tmp_path):
+        from multisite.personal_info_loader import load_candidates
+        p = self._edu(tmp_path, [
+            {"title": "甲大学", "time": "2019-2023", "bullets": ["本科 计算机"], "summary": ""},
+            {"title": "乙大学", "time": "2023-2025", "bullets": ["硕士 软件工程"], "summary": ""},
+        ])
+        got = load_candidates("学校名称", p)
+        assert [c["value"] for c in got] == ["甲大学", "乙大学"]
+
+    def test_context_distinguishes_them(self, tmp_path):
+        """只有标题在本硕两段上够用，换成同一家公司两段实习就分不出来了。"""
+        from multisite.personal_info_loader import load_candidates
+        p = self._edu(tmp_path, [
+            {"title": "甲大学", "time": "2019-2023", "bullets": ["本科 计算机"], "summary": ""},
+            {"title": "乙大学", "time": "2023-2025", "bullets": ["硕士 软件工程"], "summary": ""},
+        ])
+        got = load_candidates("学校名称", p)
+        assert "2019-2023" in got[0]["context"] and "本科" in got[0]["context"]
+        assert "硕士" in got[1]["context"]
+
+    def test_single_entry_gives_no_candidates(self, tmp_path):
+        """只有一条 = 没有歧义，摆个只有一项的选择器是噪音。"""
+        from multisite.personal_info_loader import load_candidates
+        p = self._edu(tmp_path, [{"title": "甲大学", "time": "", "bullets": [], "summary": ""}])
+        assert load_candidates("学校名称", p) == []
+
+    def test_unmapped_label_gives_no_candidates(self, tmp_path):
+        # 「姓名」不是多值型字段，走 match_value 的单值路径。
+        from multisite.personal_info_loader import load_candidates
+        p = self._edu(tmp_path, [{"title": "甲大学"}, {"title": "乙大学"}])
+        assert load_candidates("姓名", p) == []
+
+    def test_label_synonyms_and_required_star(self, tmp_path):
+        """真机扫到的 label 经常带必填星号，也可能是英文。"""
+        from multisite.personal_info_loader import load_candidates
+        p = self._edu(tmp_path, [{"title": "甲大学"}, {"title": "乙大学"}])
+        for label in ("毕业院校 *", "School", "就读院校"):
+            assert len(load_candidates(label, p)) == 2, label
+
+    def test_missing_pool_is_not_an_error(self, tmp_path):
+        from multisite.personal_info_loader import load_candidates
+        assert load_candidates("学校名称", tmp_path / "nope.yaml") == []
+
+    def test_blocks_without_titles_are_skipped(self, tmp_path):
+        from multisite.personal_info_loader import load_candidates
+        p = self._edu(tmp_path, [{"title": "甲大学"}, {"title": ""}, {"title": "乙大学"}])
+        assert [c["value"] for c in load_candidates("学校名称", p)] == ["甲大学", "乙大学"]

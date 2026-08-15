@@ -1921,6 +1921,20 @@ async def list_pending_applications(status: str | None = None) -> JSONResponse:
     return JSONResponse({"applications": [vars(a) for a in items], "total": len(items)})
 
 
+@app.get("/api/pending-applications/screenshot/{name}")
+async def get_pending_application_screenshot(name: str):
+    """表单整页截图。审批人靠它判断字段在页面上属于哪个分区——字段名本身常常
+    不够（「学校名称」是问本科还是硕士？）。"""
+    from fastapi.responses import FileResponse
+
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(status_code=400, detail="非法文件名")  # 防路径穿越
+    path = DATA_DIR / "multisite_screenshots" / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="截图不存在")
+    return FileResponse(str(path), media_type="image/png")
+
+
 @app.get("/api/pending-applications/{application_id}")
 async def get_pending_application(application_id: int) -> JSONResponse:
     _initialize_state()

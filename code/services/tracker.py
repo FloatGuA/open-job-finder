@@ -251,6 +251,12 @@ class ApplicationTracker:
             pa_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(pending_applications)")}
             if "source_job_id" not in pa_cols:
                 self.conn.execute("ALTER TABLE pending_applications ADD COLUMN source_job_id INTEGER")
+            # Migration: a full-page screenshot of the form, taken by CODE (not the
+            # agent -- DeepSeek has no vision and take_screenshot is not in its
+            # allowlist). It exists so the reviewer can see WHERE a field sits: the
+            # label alone is often not enough to decide ("学校名称" -- 本科 or 硕士?).
+            if "screenshot" not in pa_cols:
+                self.conn.execute("ALTER TABLE pending_applications ADD COLUMN screenshot TEXT")
 
             # pending_jobs: Checkpoint 1 -- candidates the selection agent found,
             # awaiting human approval before anything touches an application form.
@@ -1252,6 +1258,7 @@ class ApplicationTracker:
             reason=row["reason"],
             created_at=row["created_at"],
             decided_at=row["decided_at"],
+            screenshot=row["screenshot"] or "",
         )
 
     def add_pending_application(
@@ -1262,17 +1269,19 @@ class ApplicationTracker:
         company: str = "",
         job_url: str = "",
         source_job_id: Optional[int] = None,
+        screenshot: str = "",
     ) -> int:
         """Insert a new Layer 1 candidate awaiting Layer 2 approval. Returns the new id."""
         with self.conn:
             cur = self.conn.execute(
                 """
                 INSERT INTO pending_applications
-                    (site_name, job_title, company, job_url, fields, status, created_at, source_job_id)
-                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+                    (site_name, job_title, company, job_url, fields, status, created_at,
+                     source_job_id, screenshot)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
                 """,
                 (site_name, job_title, company, job_url, json.dumps(fields, ensure_ascii=False),
-                 self._utcnow_iso(), source_job_id),
+                 self._utcnow_iso(), source_job_id, screenshot),
             )
             return cur.lastrowid
 

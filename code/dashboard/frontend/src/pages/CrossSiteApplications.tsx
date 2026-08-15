@@ -3,6 +3,7 @@ import {
   API,
   type PendingApplication,
   type PendingApplicationField,
+  type FieldCandidate,
   type PendingApplicationFieldKind,
   type PendingJob,
   type SiteInfo,
@@ -91,6 +92,9 @@ const T_NO_SELECTION = '\u9009\u4e2d\u5de6\u4fa7\u4e00\u6761\u8bb0\u5f55\u67e5\u
 const T_OPEN_URL = '\u6253\u5f00\u94fe\u63a5'
 const T_NEEDS_MANUAL = '\u9700\u624b\u586b'
 const T_MISSING_GOV_ID = '\u8fd8\u6709\u8bc1\u4ef6\u7c7b\u5b57\u6bb5\u672a\u586b\uff0c\u65e0\u6cd5\u6279\u51c6'
+const T_CANDIDATES = '\u4fe1\u606f\u6c60\u91cc\u6709\u591a\u4e2a\u53ef\u9009\uff0c\u70b9\u4e00\u4e2a\u586b\u5165'
+const T_SCREENSHOT = '\u8868\u5355\u622a\u56fe'
+const T_SCREENSHOT_HINT = '\u5b57\u6bb5\u540d\u5e38\u5e38\u4e0d\u591f\u5224\u65ad\u8be5\u586b\u4ec0\u4e48\u2014\u2014\u5bf9\u7167\u622a\u56fe\u770b\u5b83\u5728\u9875\u9762\u4e0a\u5c5e\u4e8e\u54ea\u4e2a\u5206\u533a\u3002'
 
 const KIND_LABEL: Record<PendingApplicationFieldKind, string> = {
   demographic: '\u4eba\u53e3\u5b66\u5b57\u6bb5',
@@ -1066,10 +1070,54 @@ function Checkpoint2() {
                     ) : (
                       <p className="text-[14px] text-text-2">{value || '\u2014'}</p>
                     )}
+                    {editable && (f.candidates?.length ?? 0) > 1 && (
+                      <div className="mt-2">
+                        <p className="text-[12px] text-text-3">{T_CANDIDATES}</p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {f.candidates!.map((c: FieldCandidate) => {
+                            const on = value === c.value
+                            return (
+                              <button
+                                key={c.value}
+                                type="button"
+                                onClick={() => setEditedFields((prev) => ({ ...prev, [f.field_id]: c.value }))}
+                                className="rounded-lg px-2.5 py-1 text-left text-[12.5px] transition"
+                                style={on
+                                  ? { background: 'rgba(10,132,255,0.20)', color: '#fff', border: '1px solid rgba(10,132,255,0.5)' }
+                                  : { background: 'rgba(255,255,255,0.05)', color: '#adadb8', border: '1px solid rgba(255,255,255,0.12)' }}
+                              >
+                                <span className="font-medium">{c.value}</span>
+                                {c.context && <span className="ml-1.5 text-text-3">{c.context}</span>}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })}
             </div>
+
+            {selected.screenshot && (
+              <div className="space-y-1.5 border-t border-border-subtle pt-3.5">
+                <p className="text-[13px] font-semibold text-text-1">{T_SCREENSHOT}</p>
+                <p className="text-[12.5px] leading-relaxed text-text-3">{T_SCREENSHOT_HINT}</p>
+                <a
+                  href={`/api/pending-applications/screenshot/${selected.screenshot}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block overflow-hidden rounded-xl"
+                  style={{ border: '1px solid rgba(255,255,255,0.12)' }}
+                >
+                  <img
+                    src={`/api/pending-applications/screenshot/${selected.screenshot}`}
+                    alt={T_SCREENSHOT}
+                    className="w-full"
+                  />
+                </a>
+              </div>
+            )}
 
             {selected.status === 'pending' && (
               <div className="space-y-2.5 border-t border-border-subtle pt-3.5">

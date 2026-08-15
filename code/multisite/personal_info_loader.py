@@ -11,7 +11,9 @@
   会随审批时人工填新字段而增长的字典（见 `save_new_facts`）。
 """
 from pathlib import Path
-from typing import Dict, List
+# Optional 是 resolve_key 的返回标注。Python 3.14 的延迟标注（PEP 649）让漏导入不会
+# 当场报错，但任何 get_type_hints / 旧版本 Python 上都会炸——补上。
+from typing import Dict, List, Optional
 
 import yaml
 
@@ -240,3 +242,61 @@ def save_identity(data: Dict[str, str], data_dir: Path = DATA_DIR) -> None:
         yaml.safe_dump({k: v for k, v in data.items() if v}, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+
+
+# ── 多值候选（从 info_pool.sections 派生）─────────────────────────────────────
+#
+# 有些表单字段在池里对应的**不止一个值**：用户有本科和硕士两段学历，表单上一个
+# 「学校名称」框，填哪个？**连本人都需要看页面上下文才能决定**（用户 2026-08-15
+# 原话："我不知道这里我应该填写的是哪个"）。
+#
+# 所以这里刻意**不合并、不挑选**，只把候选连同上下文一起摆出来，人点一个。跟
+# government_id 留空、跟 site_limit 的 unknown 三态是同一条原则：**系统不知道的
+# 事情，不猜**。
+#
+# 映射表是确定性的、显式的——同 `_KEY_ALIASES`，新增直接往这里加。刻意不用 LLM：
+# 这是"字段名 → 池里哪个分区"的路由，不是判断题。
+_SECTION_SOURCES: Dict[str, str] = {
+    # 归一后的字段名 → info_pool 里的分区名
+    "学校名称": "教育经历", "学校": "教育经历", "毕业院校": "教育经历",
+    "院校名称": "教育经历", "就读院校": "教育经历", "school": "教育经历",
+    "university": "教育经历",
+    "公司名称": "实习经历", "工作单位": "实习经历", "实习单位": "实习经历",
+    "company": "实习经历",
+    "项目名称": "项目经历", "project": "项目经历",
+}
+_SECTION_SOURCES_NORMALIZED = {_normalize_key(k): v for k, v in _SECTION_SOURCES.items()}
+
+
+def _block_context(block: dict) -> str:
+    """给候选项配一句上下文，让人分得清哪个是哪个。
+
+    只有标题（"甲大学"/"乙大学"）在本硕两段学历上是够用的，但换成两段同公司不同
+    岗位的实习就分不出来了。时间 + 首条要点是池里稳定存在、且最能区分的两样。
+    """
+    parts = [str(block.get("time") or "").strip()]
+    bullets = block.get("bullets") or []
+    first = str(bullets[0]).strip() if bullets else str(block.get("summary") or "").strip()
+    if first:
+        parts.append(first[:40])
+    return " · ".join([p for p in parts if p])
+
+
+def load_candidates(label: str, pool_path: Path = POOL_PATH) -> List[dict]:
+    """这个表单字段在池里有哪些候选值。**只有一个或一个都没有时返回空列表**。
+
+    返回空的两种情况在调用方看来行为一致（不显示候选区），但含义不同：
+      - 映射不到分区 —— 这个字段不是"多值型"的，走 `match_value` 的单值路径；
+      - 分区里只有一条 —— 没有歧义，直接填就是了，摆个只有一项的选择器是噪音。
+    """
+    section_name = _SECTION_SOURCES_NORMALIZED.get(_normalize_key(label))
+    if not section_name or not pool_path.exists():
+        return []
+    pool = yaml.safe_load(pool_path.read_text(encoding="utf-8")) or {}
+    section = next((s for s in (pool.get("sections") or [])
+                    if s.get("name") == section_name), None)
+    if section is None:
+        return []
+    out = [{"value": str(b.get("title") or "").strip(), "context": _block_context(b)}
+           for b in (section.get("blocks") or []) if str(b.get("title") or "").strip()]
+    return out if len(out) > 1 else []

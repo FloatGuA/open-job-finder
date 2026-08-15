@@ -115,6 +115,11 @@ class PendingApplication:
     reason: Optional[str] = None
     created_at: str = ""
     decided_at: Optional[str] = None
+    # 表单整页截图的文件名（相对 data/multisite_screenshots/）。**由代码拍，不是
+    # agent** —— DeepSeek 没有视觉，take_screenshot 也不在它的工具白名单里；这张图
+    # 是给审批人看的：字段名本身常常不足以判断该填什么（"学校名称"是问本科还是
+    # 硕士？），得看它在页面上处于哪个分区。空串 = 没拍（没有需要补的字段）。
+    screenshot: str = ""
 
 
 @dataclass

@@ -171,3 +171,93 @@ class TestEnforceGovernmentIdBlank:
         fields = [FieldClassification(field_id="自我评价", kind="open_question", candidate_value="熟悉后端开发")]
         result = _enforce_government_id_blank(fields)
         assert result[0].candidate_value == "熟悉后端开发"
+
+
+# a11y 树里日期控件的真实形状（2026-08-15 真机快照，人名/校名换成虚构）：年月被拆成
+# 一堆平铺的 StaticText，**离输入框比真正的字段名更近**。
+DATE_WIDGET_SNAPSHOT = """
+uid=1_0 RootWebArea "投递简历" url="https://example.com/apply"
+  uid=3_42 textbox "专业 *" value="某专业"
+  uid=3_43 StaticText "起止时间"
+  uid=3_11 StaticText "*"
+  uid=3_44 StaticText "无准确的毕业时间可填写预计毕业时间"
+  uid=3_45 StaticText "2019"
+  uid=3_46 StaticText "-"
+  uid=3_47 StaticText "09"
+  uid=3_48 StaticText "2023"
+  uid=3_49 StaticText "-"
+  uid=3_50 StaticText "09"
+  uid=3_51 textbox
+"""
+
+
+class TestLandmarkHeuristic:
+    """日期控件的碎片不能当字段名。
+
+    真机踩过两次，都是同一个控件：第一次是 `MM`/`YYYY` 格式提示抢走地标；
+    第二次是年月被拆成 `"2019"` `"-"` `"09"` 平铺，字段名成了 `09`。
+
+    **第二次的后果严重得多**：`09` 被当成开放问题交给 LLM，而它拿到岗位
+    上下文之后**认真编了一段期望薪资**——一个凭空生成的数字会跟着审批流走到
+    Layer 3，真填进企业表单。
+    """
+
+    def _labels(self, snapshot):
+        from multisite.layer1_agent import _parse_empty_input_elements
+        return [e["label"] for e in _parse_empty_input_elements(snapshot)]
+
+    def test_date_fragments_never_become_the_label(self):
+        labels = self._labels(DATE_WIDGET_SNAPSHOT)
+        assert "09" not in labels and "2019" not in labels and "-" not in labels
+
+    def test_landmark_falls_back_to_the_real_field_name(self):
+        """拒掉器碎片后，地标应该回退到它们前面那个真字段名。"""
+        assert self._labels(DATE_WIDGET_SNAPSHOT) == ["起止时间"]
+
+    def test_help_text_is_not_a_field_name(self):
+        # "无准确的毕业时间可填写预计毕业时间" 是页面说明，不是字段名。
+        assert "无准确的毕业时间可填写预计毕业时间" not in self._labels(DATE_WIDGET_SNAPSHOT)
+
+    def test_a_long_question_is_still_a_valid_label(self):
+        """**长度分不开真假**：同一张表单上两个 17 字的串，一个是真字段名（问句）
+        一个是说明文字。卡长度会把问句一起误杀（试过 12 字，它变成了前面的"邮箱"）。"""
+        snap = """
+uid=1_0 RootWebArea "x" url="https://example.com"
+  uid=2_1 StaticText "邮箱"
+  uid=2_2 StaticText "您从哪些渠道了解到该岗位招聘信息？"
+  uid=2_3 combobox
+"""
+        assert self._labels(snap) == ["您从哪些渠道了解到该岗位招聘信息？"]
+
+    def test_element_is_dropped_when_no_usable_label_exists(self):
+        """宁可漏一个字段，也不要交出一个名字是垃圾的字段——漏了人看截图能
+        发现，交出去会变成 LLM 给不存在的问题编答案。"""
+        snap = """
+uid=1_0 RootWebArea "x" url="https://example.com"
+  uid=2_1 StaticText "2024"
+  uid=2_2 textbox
+"""
+        assert self._labels(snap) == []
+
+    def test_named_fields_are_unaffected(self):
+        # 自带 accessible name 的字段根本不走地标逻辑。
+        snap = """
+uid=1_0 RootWebArea "x" url="https://example.com"
+  uid=2_1 StaticText "09"
+  uid=2_2 textbox "手机号码 *"
+"""
+        assert self._labels(snap) == ["手机号码 *"]
+
+    def test_a_field_whose_own_name_is_garbage_is_dropped(self):
+        """地标那两道闸管不到这条路径：元素**自带**的 accessible name 就是垃圾。
+
+        表单写得糟的时候真会这样（把月份数字当成了输入框的 aria-label）。
+        走到这里必须丢掉——宁可漏一个字段，也不要交出一个名字是 `09` 的字段让
+        LLM 去"回答"它。
+        """
+        snap = """
+uid=1_0 RootWebArea "投递简历" url="https://example.com"
+  uid=2_1 StaticText "起止时间"
+  uid=2_2 textbox "09"
+"""
+        assert self._labels(snap) == []

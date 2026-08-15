@@ -50,7 +50,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from multisite import agent_runtime, chrome_mcp_client, preferences, safe_tools
-from multisite.personal_info_loader import load_personal_info, match_value
+from multisite.personal_info_loader import load_candidates, load_personal_info, match_value
 from services.prompt_manager import PromptManager
 from services.tracker import ApplicationTracker
 
@@ -127,7 +127,68 @@ class Layer1State(TypedDict, total=False):
     snapshot_text: str
     empty_elements: list[ScannedElement]
     classified_fields: list[FieldClassification]
+    form_screenshot: str          # 表单整页截图文件名（给审批人看，不给 agent）
     pending_application_id: Optional[int]
+
+
+# 纯数字（年份 2019、月份 09）、纯分隔符（- / ~ 等）。日期控件在 a11y 树里被拆成
+# 一堆这样的 StaticText 平铺在输入框前面，是抢地标的主力。
+_DIGITS_ONLY_RE = re.compile(r"^\d+$")
+_PUNCT_ONLY_RE = re.compile(r"^[\s\-–—/~·:：.,，、|]+$")
+# 字段名里至少得有一个字母或汉字。纯数字/纯符号的"名字"不是字段名。
+_HAS_WORD_RE = re.compile(r"[A-Za-z一-鿿]")
+# 长文本要不要当地标：光看长度分不开。真机同一张表单上有两个 17 字的串——
+#   "您从哪些渠道了解到该岗位招聘信息？"   ← 真字段名（开放问题）
+#   "无准确的毕业时间可填写预计毕业时间"    ← 页面说明文字
+# 卡长度会连真字段名一起误杀（试过 12 字，那个问句就变成了前面的"邮箱"）。
+#
+# 区别在**收尾**：长的字段名几乎总是问句或以冒号提示后面要填什么；说明文字是
+# 陈述句，没有这些收尾。短串（≤12）一律放行——"起止时间""学校名称"都是 4 字。
+#
+# 这是启发式，只在一张真实表单上调过。失败方式是：某个站的说明文字碰巧以问号结尾
+# （会漏进来当字段名，表现为审批页多一项名字很怪的字段——看得见、能人工驳回），
+# 或者某个长字段名不带问号（会被拒，地标回退到前一个字段名——表现为两个字段同名，
+# 去重后少一项）。两种都比"给不存在的问题编答案"轻。
+_SHORT_LANDMARK_LEN = 12
+_LABEL_ENDINGS = ("？", "?", "：", ":")
+# 文档结构节点，它们的 name 不是页面上给人看的文字标签。
+_STRUCTURAL_ROLES = {"RootWebArea", "WebArea", "document"}
+
+
+def _is_usable_landmark(name: str) -> bool:
+    """这行文字能不能当"离它最近的字段名"用。
+
+    真机踩过两次（都是同一个日期控件）：
+      - `MM` / `YYYY` 这类格式提示抢走了「起止时间」的地标位；
+      - 年月被拆成 `StaticText "2019"` `"-"` `"09"` 平铺在输入框前面，**离得比
+        「起止时间」更近**，于是字段名成了 `09`。
+
+    第二次的后果比第一次严重得多：`09` 被当成 open_question 交给 LLM，而 LLM
+    拿到岗位上下文之后**认真编了一段期望薪资**——一个凭空生成的数字会跟着审批流
+    走到 Layer 3，真填进企业表单。
+    """
+    if not name or name == "*":
+        return False
+    if _PLACEHOLDER_HINT_RE.fullmatch(name):      # YYYY / MM / DD
+        return False
+    if _DIGITS_ONLY_RE.fullmatch(name):           # 2019 / 09 / 11
+        return False
+    if _PUNCT_ONLY_RE.fullmatch(name):            # - / ~ ·
+        return False
+    if len(name) > _SHORT_LANDMARK_LEN and not name.endswith(_LABEL_ENDINGS):
+        return False                              # 长陈述句 = 页面说明文字
+    return True
+
+
+def _looks_like_field_label(label: str) -> bool:
+    """这个名字像不像一个真的表单字段名。不像就整个丢掉这个元素。
+
+    **宁可漏一个字段，也不要交出一个名字是垃圾的字段**：漏了的表现是"审批页上少
+    一项"，人看截图能发现；而交出去的表现是"LLM 给一个不存在的问题编了个答案"，
+    它会一路走到真实表单里，没人拦得住。两种错误的代价不对称。
+    """
+    label = (label or "").strip()
+    return bool(label) and bool(_HAS_WORD_RE.search(label))
 
 
 def _parse_empty_input_elements(snapshot_text: str) -> list[ScannedElement]:
@@ -160,9 +221,10 @@ def _parse_empty_input_elements(snapshot_text: str) -> list[ScannedElement]:
         name = (m.group("name") or "").strip()
 
         if role not in _INPUT_ROLES or role == "radio":
-            # "*"(必填星号)和 YYYY/MM/DD 这类日期占位符格式提示不是真地标，
-            # 真机验证撞到过"起止时间"字段被离它更近的占位符"MM"抢走地标位。
-            if name and name != "*" and not _PLACEHOLDER_HINT_RE.fullmatch(name):
+            # RootWebArea 的 name 是**页面标题**（"投递简历 - 欢迎加入 XX"），
+            # 是文档根节点不是页面上的文字标签。真实快照里因为标题和第一个输入框
+            # 之间总隔着别的文字所以没露馅，但它随时可能变成某个字段的名字。
+            if role not in _STRUCTURAL_ROLES and _is_usable_landmark(name):
                 landmark = name
             continue
 
@@ -174,6 +236,11 @@ def _parse_empty_input_elements(snapshot_text: str) -> list[ScannedElement]:
         label = name or landmark
         if not label or label in seen_labels:
             continue  # 既没自己的名字也没地标可用，或者是同一字段的重复节点
+        if not _looks_like_field_label(label):
+            # 最后一道闸：宁可漏一个字段，也不要交出一个名字是垃圾的字段。
+            # 见 _looks_like_field_label 的说明——上一版放它过去的后果是 LLM
+            # 给「09」编了一段期望薪资。
+            continue
         seen_labels.add(label)
         elements.append({"uid": m.group("uid"), "role": role, "label": label})
     elements.extend(_parse_radio_groups(snapshot_text))
@@ -213,12 +280,15 @@ def _parse_radio_groups(snapshot_text: str) -> list[ScannedElement]:
             continue
         # 非 radio 行：跟刚才那个选项同名就当装饰性重复，不打断当前组；
         # 否则视为下一个单选题的候选地标，并把当前组收尾。
+        # 地标可用性走跟 _parse_empty_input_elements 同一个判据——两处各写一套的话，
+        # 修好了一边另一边照样会把 `09` 当字段名（同一个日期控件两条路径都路过）。
         if name and name != last_radio_name:
             if active is not None:
                 _flush()
                 active = None
                 last_radio_name = None
-            landmark_name = name
+            if _is_usable_landmark(name):
+                landmark_name = name
     _flush()
     return groups
 
@@ -609,6 +679,38 @@ def build_graph(
         _latest_snapshot["text"] = text
         return text
 
+    async def _capture_form_screenshot() -> str:
+        """给当前表单拍一张整页截图，返回存到 data/multisite_screenshots/ 的文件名。
+
+        **代码拍，不是 agent 拍。** DeepSeek 没有视觉，`take_screenshot` 也刻意不在
+        agent 的工具白名单里——这张图是给**审批人**看的：字段名本身常常不足以判断
+        该填什么（「学校名称」是问本科还是硕士？），得看它在页面上处于哪个分区。
+
+        `fullPage=True`：申请表通常比可视区长，只拍视口等于把上下文裁掉一半。
+
+        先写系统临时目录再搬——chrome-devtools-mcp 没协商 MCP roots 时把文件写限制在
+        OS temp，直接给项目内路径会被它自己拒掉（`upload_file` 已经栽过一次）。
+        失败不阻断流程：截图是辅助信息，为它丢掉整条待审批记录不划算，返回空串即可。
+        """
+        import shutil
+        import tempfile
+        import time as _time
+
+        try:
+            shot_tool = chrome_mcp_client.get_tool(tools, "take_screenshot")
+            tmp = Path(tempfile.gettempdir()) / f"ojf_form_{os.getpid()}_{int(_time.time())}.png"
+            await shot_tool.ainvoke({"filePath": str(tmp), "fullPage": True, "format": "png"})
+            if not tmp.is_file():
+                return ""
+            dest_dir = Path(__file__).resolve().parent.parent / "data" / "multisite_screenshots"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            name = f"{_time.strftime('%Y%m%d_%H%M%S')}_form.png"
+            shutil.move(str(tmp), str(dest_dir / name))
+            return name
+        except Exception as exc:  # noqa: BLE001 — 见 docstring：截图失败不该毁掉整次 run
+            print(f"[layer1] 表单截图失败（不影响落库）：{exc}", flush=True)
+            return ""
+
     def _agent_tools(passthrough: tuple) -> list:
         return build_agent_toolset(
             tools,
@@ -807,7 +909,11 @@ def build_graph(
         _dump_debug_snapshot("scan_raw_snapshot", state.get("snapshot_text", ""))
         empty_elements = _parse_empty_input_elements(state.get("snapshot_text", ""))
         if not empty_elements:
-            return {"empty_elements": [], "classified_fields": []}
+            # 没有要补的字段就不拍照——照片是给人核对用的，没东西要核对时拍它
+            # 只是在磁盘上多堆一张带个人信息的图。
+            return {"empty_elements": [], "classified_fields": [], "form_screenshot": ""}
+
+        shot = await _capture_form_screenshot()
 
         fields_desc = "\n".join(f"- field_id={e['label']!r}, role={e['role']}" for e in empty_elements)
         keys_desc = "\n".join(f"- {k}" for k in personal_info) or "(无)"
@@ -829,7 +935,8 @@ def build_graph(
             ClassifyFieldsOutput, method="function_calling"
         ).ainvoke(prompt)
         classified = _enforce_government_id_blank(result.fields)
-        return {"empty_elements": empty_elements, "classified_fields": classified}
+        return {"empty_elements": empty_elements, "classified_fields": classified,
+                "form_screenshot": shot}
 
     async def write_pending_application(state: Layer1State) -> dict:
         # 一个字段都没扫到就不写记录：一条空的待审批记录对人没有任何信息量，
@@ -853,6 +960,10 @@ def build_graph(
                     if f.kind == "demographic"
                     else f.candidate_value
                 ),
+                # 池里对应不止一个值时（本科+硕士两段学历对一个「学校名称」框），
+                # **不挑、不合并**，把候选连上下文一起摆给审批人点。连本人都需要
+                # 看页面才知道该填哪个，系统更没资格猜。空列表 = 没有歧义。
+                "candidates": load_candidates(f.demographic_key or f.field_id),
             }
             for f in state.get("classified_fields", [])
         ]
@@ -862,6 +973,7 @@ def build_graph(
             fields=fields_payload,
             company=state.get("company") or "",
             job_url=state["job_url"],
+            screenshot=state.get("form_screenshot", ""),
         )
         return {"pending_application_id": app_id}
 

@@ -98,11 +98,19 @@ export interface PendingReply {
 
 export type PendingApplicationFieldKind = 'demographic' | 'open_question' | 'government_id'
 
+export interface FieldCandidate {
+  value: string
+  context: string // 时间 + 首条要点，用来分清本科/硕士这种同名多值
+}
+
 export interface PendingApplicationField {
   field_id: string
   label: string
   kind: PendingApplicationFieldKind
   candidate_value: string
+  // 池里对应不止一个值时的候选（本科+硕士两段学历对一个「学校名称」框）。
+  // **系统刻意不挑**——连本人都得看页面才知道填哪个。空/缺省 = 没有歧义。
+  candidates?: FieldCandidate[]
 }
 
 export interface PendingApplication {
@@ -116,6 +124,9 @@ export interface PendingApplication {
   reason: string | null
   created_at: string
   decided_at: string | null
+  // 表单整页截图的文件名（由代码拍，不是 agent——DeepSeek 没有视觉）。
+  // 空串 = 没拍（没有需要补的字段）。
+  screenshot: string
 }
 
 export interface PendingJob {
