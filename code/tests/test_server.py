@@ -114,6 +114,10 @@ def client(tmp_path, monkeypatch):
     _q = getattr(app.state, "workflow_queue", None)
     if _q is not None:
         _q.clear()
+        # **全程暂停 worker**：它是后台线程，测试结束、monkeypatch 撤销之后才可能
+        # 把任务捡起来执行——那时写日志用的已经是恢复后的真实路径，m2 还会去启动
+        # 真实浏览器。没有任何测试需要 worker 真的执行，它们只看 snapshot()。
+        _q.pause()
 
     # Redirect every path that server.py resolves at runtime
     monkeypatch.setattr(srv, "DATA_DIR", data_dir)
@@ -124,6 +128,16 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "BOSS_POSITIONS_PATH", data_dir / "boss_positions.json")
     monkeypatch.setattr(srv, "BOSS_INDUSTRIES_PATH", data_dir / "boss_industries.json")
     monkeypatch.setattr(srv, "RUNS_DIR", tmp_path / "runs")
+    # **这三个是模块级常量，_write_schedule_log 等直接读它们**——不重定向的话，
+    # 测试里跑出来的每一条调度日志都写进真实的 data/schedule_log.jsonl。
+    # 2026-08-15 在真实日志里查出 108 条测试产生的 ms_fill error 才发现，
+    # 而且它同时解释了长期没查明的"duration=0 幽灵成功"（2115/2845 条）。
+    monkeypatch.setattr(srv, "SCHEDULE_LOG_PATH", data_dir / "schedule_log.jsonl")
+    monkeypatch.setattr(srv, "SELFCHECK_LOG_PATH", data_dir / "selfcheck_log.jsonl")
+    monkeypatch.setattr(srv, "REGRESSION_SMOKE_LOG", data_dir / "regression_smoke_log.jsonl")
+    # OrchestrationService 是模块单例，data_dir 在**首次构建时按值捕获**——不重置的话
+    # 后面所有测试都拿着第一个测试（或真实启动）的目录跑，patch 再多也够不着它。
+    srv._orch_service = None
     # Prevent real LLM client creation. configured_provider_names() must return a
     # real list (not an auto-generated MagicMock) -- /api/config/llm JSON-encodes it.
     def _fake_router(*a, **kw):
@@ -134,6 +148,12 @@ def client(tmp_path, monkeypatch):
 
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
+
+    # Teardown: 先清空队列再让 monkeypatch 撤销——留在队列里的任务会在补丁失效
+    # 之后被 worker 执行，写进真实数据目录。
+    _q2 = getattr(app.state, "workflow_queue", None)
+    if _q2 is not None:
+        _q2.clear()
 
     # Teardown: close the tracker the startup event created
     tracker = getattr(app.state, "tracker", None)
@@ -912,6 +932,11 @@ class TestWorkflow:
         app.state.emitter.current_workflow = None  # cleanup
 
     def test_apply_starts_and_returns_started(self, client):
+        # 这两条**需要 worker 真的跑**（下面 ran.wait 等的就是它），所以显式恢复
+        # 队列。fixture 默认把队列暂停了——后台 worker 会在测试结束、monkeypatch
+        # 撤销之后才执行任务，写进真实数据目录（真实日志里查出过 108 条这种垃圾）。
+        # 这里 runner 已被 patch，恢复是安全的；下一个测试的 fixture 会重新暂停。
+        app.state.workflow_queue.resume()
         # Idle queue -> the item runs immediately, so the response says "started".
         # Patch the runner and wait for the worker to consume the item under the
         # patch so no real W1 run leaks out after the patch context exits.
@@ -954,6 +979,11 @@ class TestWorkflow:
             app.state.emitter.current_workflow = None
 
     def test_check_starts_and_returns_started(self, client):
+        # 这两条**需要 worker 真的跑**（下面 ran.wait 等的就是它），所以显式恢复
+        # 队列。fixture 默认把队列暂停了——后台 worker 会在测试结束、monkeypatch
+        # 撤销之后才执行任务，写进真实数据目录（真实日志里查出过 108 条这种垃圾）。
+        # 这里 runner 已被 patch，恢复是安全的；下一个测试的 fixture 会重新暂停。
+        app.state.workflow_queue.resume()
         import threading
         ran = threading.Event()
         with patch("services.workflow_orchestration.OrchestrationService._run_check_workflow",

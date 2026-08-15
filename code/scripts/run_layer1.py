@@ -83,6 +83,56 @@ def _parse_quota_overrides(items):
     return quotas
 
 
+def _enqueue_via_dashboard(args, resume_path: str, quotas) -> int:
+    """把这次运行排进 Dashboard 的工作流队列，而不是在本进程直接跑。
+
+    **为什么默认走队列**：直接跑会绕开队列的串行保护——2026-08-15 一次 m2 命令行
+    运行跟 W1 真的重叠了（schedule_log: apply 11:00:16 +273s；m2 截图落在 11:03:18）。
+    当时没出事只是因为两条线用的是不同的浏览器（DrissionPage vs chrome-devtools-mcp），
+    那是运气不是设计。顺带也拿到 schedule_log 记录和 SSE 进度。
+
+    Dashboard 没起来时给出可操作的提示，而不是静默退回直接执行——静默回退等于
+    "安全路径失败时自动改走不安全路径"，那比一开始就不安全更糟。
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    workflow = "m1" if args.search_url else "m2"
+    params = {"site": args.site, "headless": args.headless}
+    if args.search_url:
+        params["search_url"] = args.search_url
+    else:
+        # m2 按 pending_job_id 取岗位（队列侧会校验它确实是 approved 状态）。
+        from services.tracker import ApplicationTracker
+        job = next((j for j in ApplicationTracker().get_pending_jobs()
+                    if j.url == args.job_url), None)
+        if job is None:
+            raise SystemExit(f"这个 URL 不在 pending_jobs 里，队列模式需要先经过选岗+审批：\n"
+                             f"  {args.job_url}\n"
+                             f"（只想跑一次可以加 --direct，但它会绕开队列的串行保护）")
+        params["pending_job_id"] = job.id
+    if resume_path:
+        params["resume_pdf_path"] = resume_path
+
+    url = args.dashboard.rstrip("/") + "/api/workflow/queue"
+    body = json.dumps({"workflow": workflow, "params": params}).encode("utf-8")
+    req = urllib.request.Request(url, data=body,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            out = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise SystemExit(
+            f"连不上 Dashboard（{args.dashboard}）：{exc}\n"
+            f"先启动它：python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8765\n"
+            f"或者加 --direct 绕开队列（会跟 W1/W2 抢，且不写 schedule_log）"
+        )
+    print(f"[layer1] 已排入队列：{workflow} status={out.get('status')} id={out.get('id')}")
+    print(f"[layer1] 进度看 Dashboard，或 {args.dashboard}/api/workflow/queue")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     # 二选一：给入口页让 agent 自己选岗（正常用法），或直接指定岗位（调试/复现）。
@@ -101,6 +151,12 @@ def main() -> int:
     )
     parser.add_argument("--select-only", action="store_true",
                         help="只跑到 Checkpoint 1（选岗+落库），不上传简历。对外零副作用")
+    parser.add_argument("--dashboard", default="http://127.0.0.1:8765",
+                        help="Dashboard 地址（默认 http://127.0.0.1:8765）")
+    parser.add_argument("--direct", action="store_true",
+                        help="绕开队列直接在本进程跑。**会跟 W1/W2 同时执行**——"
+                             "队列的串行保护、schedule_log、SSE 进度全都不生效。"
+                             "只在 Dashboard 没起来时用")
     args = parser.parse_args()
 
     from multisite import preferences
@@ -120,6 +176,12 @@ def main() -> int:
         # 去掉本站没有的类别）。打出来免得事后纳闷"我明明配了游戏怎么没找"。
         eff = quotas or preferences.load_profile().job_seeking.quotas_for_site(args.site)
         print(f"[layer1] 本站生效名额: {eff}")
+
+    if not args.direct:
+        return _enqueue_via_dashboard(args, resume_path, quotas)
+
+    print("[layer1] ⚠ --direct：绕开队列直接跑。W1/W2 若同时在跑不会被拦住，"
+          "本次也不会写进 schedule_log。", flush=True)
 
     from multisite.layer1_agent import run_layer1
 

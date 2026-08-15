@@ -2611,9 +2611,14 @@ async def add_workflow_queue(body: dict | None = None) -> JSONResponse:
     """Explicitly add one item to the queue (source=queue)."""
     _initialize_state()
     body = body or {}
+    # 白名单直接引用队列的 VALID_WORKFLOWS，不再手抄一份 ("w1","w2","w3")——
+    # 手抄的那份在 m1/m2 上线后就漏了，表现为"队列支持但这个端点拒收"。
+    from services.workflow_queue import VALID_WORKFLOWS
+
     wf = body.get("workflow")
-    if wf not in ("w1", "w2", "w3"):
-        raise HTTPException(status_code=400, detail="workflow must be w1|w2|w3")
+    if wf not in VALID_WORKFLOWS:
+        raise HTTPException(status_code=400,
+                            detail=f"workflow must be one of {'|'.join(VALID_WORKFLOWS)}")
     return _enqueue_response(wf, body.get("params") or {}, source="queue")
 
 

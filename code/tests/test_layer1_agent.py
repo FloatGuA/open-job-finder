@@ -261,3 +261,70 @@ uid=1_0 RootWebArea "投递简历" url="https://example.com"
   uid=2_2 textbox "09"
 """
         assert self._labels(snap) == []
+
+
+class TestRequiredDetection:
+    """只把**必填**字段交给 LLM 作答。
+
+    这类站点会解析上传的简历自动回填，剩下还空着的多半是选填。给全部字段生成内容
+    的产出是：「起止时间 → "请填写您在教育或工作经历中的起止时间，格式如：
+    2020.09 - 2024.06"」——一句填写说明冒充答案（2026-08-15 真机）。
+
+    必填标记的真实形态（来自真机快照）：`StaticText "*"` 夹在字段名和字段之间。
+    """
+
+    def _scan(self, snapshot):
+        from multisite.layer1_agent import _parse_empty_input_elements
+        return {e["label"]: e["required"] for e in _parse_empty_input_elements(snapshot)}
+
+    def test_star_between_label_and_field_marks_required(self):
+        snap = """
+uid=1_0 RootWebArea "投递简历" url="https://example.com"
+  uid=2_1 StaticText "学校名称"
+  uid=2_2 StaticText "*"
+  uid=2_3 combobox
+"""
+        assert self._scan(snap) == {"学校名称": True}
+
+    def test_no_star_means_optional(self):
+        snap = """
+uid=1_0 RootWebArea "投递简历" url="https://example.com"
+  uid=2_1 StaticText "您从哪些渠道了解到该岗位招聘信息？"
+  uid=2_2 combobox
+"""
+        assert self._scan(snap) == {"您从哪些渠道了解到该岗位招聘信息？": False}
+
+    def test_star_survives_rejected_landmarks(self):
+        """**这条是关键**：「起止时间」的星号落在日期碎片和说明文字**前面**。
+        被拒的地标不该重置必填标记，否则这个字段会被误判成选填。"""
+        snap = """
+uid=1_0 RootWebArea "投递简历" url="https://example.com"
+  uid=2_1 StaticText "起止时间"
+  uid=2_2 StaticText "*"
+  uid=2_3 StaticText "无准确的毕业时间可填写预计毕业时间"
+  uid=2_4 StaticText "2019"
+  uid=2_5 StaticText "-"
+  uid=2_6 StaticText "09"
+  uid=2_7 textbox
+"""
+        assert self._scan(snap) == {"起止时间": True}
+
+    def test_star_is_reset_by_the_next_real_label(self):
+        """必填标记不能跨字段泄漏——上一个字段必填不代表下一个也必填。"""
+        snap = """
+uid=1_0 RootWebArea "投递简历" url="https://example.com"
+  uid=2_1 StaticText "学校名称"
+  uid=2_2 StaticText "*"
+  uid=2_3 combobox
+  uid=2_4 StaticText "个人网站"
+  uid=2_5 textbox
+"""
+        assert self._scan(snap) == {"学校名称": True, "个人网站": False}
+
+    def test_star_inside_the_accessible_name(self):
+        # 有的站把星号写进字段自己的 name 里（"专业 *"）。
+        snap = """
+uid=1_0 RootWebArea "投递简历" url="https://example.com"
+  uid=2_1 textbox "手机号码 *"
+"""
+        assert self._scan(snap) == {"手机号码 *": True}

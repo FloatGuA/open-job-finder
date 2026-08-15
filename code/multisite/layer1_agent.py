@@ -100,6 +100,7 @@ class ScannedElement(TypedDict):
     uid: str
     role: str
     label: str
+    required: bool   # 页面上标了必填星号
 
 
 _INPUT_ROLES = {"textbox", "combobox", "radio", "checkbox", "listbox", "searchbox"}
@@ -213,6 +214,9 @@ def _parse_empty_input_elements(snapshot_text: str) -> list[ScannedElement]:
     elements: list[ScannedElement] = []
     seen_labels: set[str] = set()
     landmark = ""
+    # 自上一个**有效地标**以来见没见过必填星号。被拒的地标（数字碎片、说明文字）
+    # 不重置它——「起止时间」的星号正好落在日期碎片前面，重置了就检测不到。
+    required_seen = False
     for line in snapshot_text.splitlines():
         m = _SNAPSHOT_LINE_RE.search(line)
         if not m:
@@ -224,8 +228,11 @@ def _parse_empty_input_elements(snapshot_text: str) -> list[ScannedElement]:
             # RootWebArea 的 name 是**页面标题**（"投递简历 - 欢迎加入 XX"），
             # 是文档根节点不是页面上的文字标签。真实快照里因为标题和第一个输入框
             # 之间总隔着别的文字所以没露馅，但它随时可能变成某个字段的名字。
-            if role not in _STRUCTURAL_ROLES and _is_usable_landmark(name):
+            if name in ("*", "＊"):
+                required_seen = True
+            elif role not in _STRUCTURAL_ROLES and _is_usable_landmark(name):
                 landmark = name
+                required_seen = False
             continue
 
         value_m = _VALUE_RE.search(m.group("rest") or "")
@@ -242,7 +249,10 @@ def _parse_empty_input_elements(snapshot_text: str) -> list[ScannedElement]:
             # 给「09」编了一段期望薪资。
             continue
         seen_labels.add(label)
-        elements.append({"uid": m.group("uid"), "role": role, "label": label})
+        # 字段自带的 name 里也可能直接带星号（"专业 *"）。
+        is_required = required_seen or "*" in name
+        elements.append({"uid": m.group("uid"), "role": role, "label": label,
+                         "required": is_required})
     elements.extend(_parse_radio_groups(snapshot_text))
     return elements
 
@@ -258,12 +268,14 @@ def _parse_radio_groups(snapshot_text: str) -> list[ScannedElement]:
     """
     groups: list[ScannedElement] = []
     landmark_name = ""
+    required_seen = False
     active: Optional[dict] = None  # {"uid","label","any_checked"}
     last_radio_name = None
 
     def _flush():
         if active is not None and not active["any_checked"]:
-            groups.append({"uid": active["uid"], "role": "radio", "label": active["label"]})
+            groups.append({"uid": active["uid"], "role": "radio", "label": active["label"],
+                           "required": bool(active.get("required"))})
 
     for line in snapshot_text.splitlines():
         m = _SNAPSHOT_LINE_RE.search(line)
@@ -273,7 +285,8 @@ def _parse_radio_groups(snapshot_text: str) -> list[ScannedElement]:
         name = (m.group("name") or "").strip()
         if role == "radio":
             if active is None:
-                active = {"uid": m.group("uid"), "label": landmark_name or name, "any_checked": False}
+                active = {"uid": m.group("uid"), "label": landmark_name or name,
+                          "any_checked": False, "required": required_seen}
             if "checked" in (m.group("rest") or ""):
                 active["any_checked"] = True
             last_radio_name = name
@@ -282,6 +295,9 @@ def _parse_radio_groups(snapshot_text: str) -> list[ScannedElement]:
         # 否则视为下一个单选题的候选地标，并把当前组收尾。
         # 地标可用性走跟 _parse_empty_input_elements 同一个判据——两处各写一套的话，
         # 修好了一边另一边照样会把 `09` 当字段名（同一个日期控件两条路径都路过）。
+        if name in ("*", "＊"):
+            required_seen = True
+            continue
         if name and name != last_radio_name:
             if active is not None:
                 _flush()
@@ -289,6 +305,7 @@ def _parse_radio_groups(snapshot_text: str) -> list[ScannedElement]:
                 last_radio_name = None
             if _is_usable_landmark(name):
                 landmark_name = name
+                required_seen = False
     _flush()
     return groups
 
@@ -915,7 +932,20 @@ def build_graph(
 
         shot = await _capture_form_screenshot()
 
-        fields_desc = "\n".join(f"- field_id={e['label']!r}, role={e['role']}" for e in empty_elements)
+        # **只把必填项交给 LLM 作答。** 这类站点会解析上传的简历自动回填，剩下还空
+        # 着的多半是选填——给全部字段生成内容，产出的就是「起止时间 → "请填写您在
+        # 教育或工作经历中的起止时间，格式如：2020.09 - 2024.06"」这种：一句填写
+        # 说明冒充答案（2026-08-15 真机）。
+        #
+        # 选填项**仍然进审批列表**，只是值留空、不生成——你得知道它们存在（对着截图
+        # 能判断要不要顺手填），但不该由机器替你编。
+        required_elements = [e for e in empty_elements if e.get("required")]
+        if not required_elements:
+            return {"empty_elements": empty_elements, "classified_fields": [],
+                    "form_screenshot": shot}
+
+        fields_desc = "\n".join(f"- field_id={e['label']!r}, role={e['role']}"
+                                for e in required_elements)
         keys_desc = "\n".join(f"- {k}" for k in personal_info) or "(无)"
         prompt = pm.render(
             "classify_field",
@@ -941,7 +971,7 @@ def build_graph(
     async def write_pending_application(state: Layer1State) -> dict:
         # 一个字段都没扫到就不写记录：一条空的待审批记录对人没有任何信息量，
         # 只会让审批队列里堆垃圾，还会让人误以为"这个岗位处理过了"。
-        if not state.get("classified_fields"):
+        if not state.get("empty_elements"):
             return {"pending_application_id": None}
 
         fields_payload = [
@@ -967,6 +997,20 @@ def build_graph(
             }
             for f in state.get("classified_fields", [])
         ]
+        # 选填项也进列表，但**值留空、不生成**——你得知道它们存在（对着截图能判断
+        # 要不要顺手填），而机器不该替你编。kind 一律 open_question：没让 LLM 看过
+        # 它们，硬给一个分类就是编造。
+        answered = {f["field_id"] for f in fields_payload}
+        fields_payload += [
+            {"field_id": e["label"], "label": e["label"], "kind": "open_question",
+             "candidate_value": "", "candidates": load_candidates(e["label"]),
+             "required": False}
+            for e in state.get("empty_elements", [])
+            if not e.get("required") and e["label"] not in answered
+        ]
+        for f in fields_payload:
+            f.setdefault("required", True)   # 上面 LLM 作答的那批都是必填项
+
         app_id = tracker.add_pending_application(
             site_name=state.get("site_name", ""),
             job_title=state.get("job_title") or "",
