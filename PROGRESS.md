@@ -242,7 +242,9 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 >
 > **2026-08-16：四张多站点表已清空，从白纸开始验证**（`scripts/reset_multisite.py --yes`，备份在 `data/backups/multisite_20260815_201228.json`，19 + 2 + 1 + 0 行）。截图与调试快照一并清了；**登录态 `browser_profile_multisite/bambulab/` 未动**。Boss 那条线（applications 968 / hr_conversations 1072 / hr_messages 3637）一行没碰。
 > ⚠️ 清库**不撤销已经发生的事**：被删的那条 `pending_applications` 意味着 8-15 那次 m2 已经把简历传进过那个企业申请表（未提交），重跑会再传一次。
-> 📌 顺带一个待观察：`site_briefs` 清空前就是 0 条——`record_site_brief` **从来没成功写过一次**，重跑时留意 agent 收尾前会不会调用它。
+> ✅ ~~待观察：`site_briefs` 从来没成功写过~~ —— **2026-08-17 已销**：08-16 那次 m1 写进去 1 条，内容是可用的（招聘项目怎么分、城市筛选器有哪些）。`record_site_limit` 也写了 2 条，其中「27届秋招（研发类）最多投递 2 次」是真实约束。
+> **2026-08-17 再次清空四张表**（备份 `data/backups/multisite_20260816_220957.json`，16 + 3 + 2 + 1 行），准备用 v2.25.0~v2.25.3 四批修复重跑一遍完整验证。登录态 `browser_profile_multisite/bambulab/` 未动；Boss 三表（992 / 1096 / 3705）一行没碰。⚠️ `site_limits` 里那条「27届秋招（研发类）最多投递 2 次」也一起清了——重跑时 agent 要重新发现它。
+
 
 ### 📌 `schedule_log.jsonl` 把"接受了请求"和"真的跑完了"混成同一个 success（2026-08-13 发现，未修）
 
