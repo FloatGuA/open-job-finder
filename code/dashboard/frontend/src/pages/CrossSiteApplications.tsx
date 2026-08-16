@@ -213,6 +213,8 @@ function SiteBar({
   onClear,
   onApprove,
   onReject,
+  onStartFill,
+  fillPending,
   onLimitChanged,
 }: {
   site: string
@@ -227,6 +229,9 @@ function SiteBar({
   onClear: () => void
   onApprove: () => void
   onReject: () => void
+  // 看完整站、批完之后，一次性把已批准的岗位排进填表队列。
+  onStartFill: () => void
+  fillPending: number
   onLimitChanged: () => void
 }) {
   const limits = info?.limits ?? []
@@ -340,6 +345,18 @@ function SiteBar({
             className="rounded-lg bg-bg-card2 px-3 py-1.5 text-[13.5px] text-text-2 disabled:opacity-35"
           >
             {T_C1_BATCH_REJECT}
+          </button>
+          {/* 装填：批准只是标记，真正开跑由这里触发。禁用时说明原因，而不是让人
+              对着一个点不动的按钮猜。 */}
+          <button
+            type="button"
+            disabled={busy || fillPending === 0}
+            onClick={onStartFill}
+            title={fillPending === 0 ? '\u6ca1\u6709\u5f85\u586b\u8868\u7684\u5c97\u4f4d\uff1a\u5148\u6279\u51c6\u51e0\u4e2a\uff0c\u6216\u8005\u5b83\u4eec\u90fd\u5df2\u7ecf\u586b\u8fc7\u4e86' : '\u628a\u8fd9\u4e2a\u7ad9\u5df2\u6279\u51c6\u3001\u8fd8\u6ca1\u586b\u8fc7\u8868\u7684\u5c97\u4f4d\u4e00\u6b21\u6027\u6392\u8fdb\u961f\u5217\uff08\u6bcf\u4e2a\u5c97\u4f4d\u4e00\u6b21 m2\uff09'}
+            className="rounded-lg px-3 py-1.5 text-[13.5px] font-medium transition disabled:cursor-not-allowed disabled:opacity-35"
+            style={{ background: 'rgba(255,159,10,0.16)', color: '#ff9f0a' }}
+          >
+            {'\u5f00\u59cb\u586b\u8868'}{fillPending > 0 ? ` ${fillPending}` : ''}
           </button>
         </div>
       </div>
@@ -698,6 +715,20 @@ function Checkpoint1() {
     setGatedSite(null)
   }
 
+  async function startFill(site: string) {
+    // 批准只标记，真正开跑在这里。一次把这个站所有待填表的岗位排进队列——
+    // 数量由后端算（差集规则只有一份实现），这里只负责触发和刷新。
+    setBusy(true)
+    try {
+      await API.startSiteFill(site)
+      // \u53cd\u9988\u9760\u4e24\u5904\u73b0\u6210\u7684\u4e1c\u897f\uff1a\u6309\u94ae\u4e0a\u7684\u6570\u5b57\u4f1a\u4ece N \u53d8 0\uff0c\u300c\u961f\u5217\u300d\u9875\u51fa\u73b0\u5bf9\u5e94\u6761\u76ee\u3002
+      // \u4e0d\u4e3a\u4e00\u53e5\u63d0\u793a\u5f15\u5165\u4e00\u5957\u901a\u77e5\u673a\u5236\u2014\u2014\u8fd9\u4e2a\u7ec4\u4ef6\u672c\u6765\u6ca1\u6709\u3002
+      refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function markGolden(id: number, golden: boolean) {
     const job = jobs.find((j) => j.id === id)
     if (!job) return
@@ -858,6 +889,8 @@ function Checkpoint1() {
                 onClear={() => { setCheckedIds((prev) => prev.filter((id) => !pendingIds.includes(id))); setGatedSite(null) }}
                 onApprove={() => approveSite(site, pickedIds, siteJobs)}
                 onReject={() => setRejecting(pickedIds)}
+                onStartFill={() => void startFill(site)}
+                fillPending={sites[site]?.fill_pending ?? 0}
                 onLimitChanged={refresh}
               />
               {siteJobs.map((job) => (

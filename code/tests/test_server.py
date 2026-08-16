@@ -1207,8 +1207,8 @@ class TestPreviewSearch:
 
 # ── Checkpoint 1：选岗审批（pending_jobs）─────────────────────────────────────
 
-def _add_job(url="https://x/1", category="产品", **kw):
-    return app.state.tracker.add_pending_job(site_name="bambulab", url=url, category=category, **kw)
+def _add_job(url="https://x/1", category="产品", site_name="bambulab", **kw):
+    return app.state.tracker.add_pending_job(site_name=site_name, url=url, category=category, **kw)
 
 
 class TestCheckpoint1Jobs:
@@ -1531,36 +1531,103 @@ class TestApproveEnqueuesFill:
             app.state.workflow_queue.clear()
             app.state.emitter.current_workflow = None
 
-    def test_single_approve_queues_one_fill_item(self, client):
+    def test_approving_does_not_start_filling(self, client):
+        """**批准只是标记，不再立刻开跑。**
+
+        旧行为是批准即入队 m2，于是点第一个岗位的批准之后浏览器立刻被占住，
+        剩下的岗位连看都没法看（用户 2026-08-16 实测）。审批是「逐个判断」，
+        填表是「批量执行」，把它们绑在一起等于强迫你一次只能审一个。
+        """
         job_id = _add_job()
         r = client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={})
+
         assert r.status_code == 200
+        assert r.json()["job"]["status"] == "approved"
+        assert self._pending() == []          # 一个都没排进队列
 
-        queued = r.json()["queued"]
-        assert len(queued) == 1 and queued[0]["job_id"] == job_id
-        pending = self._pending()
-        assert [it["workflow"] for it in pending] == ["m2"]
-        assert pending[0]["params"]["pending_job_id"] == job_id
-
-    def test_batch_approve_queues_one_item_per_job(self, client):
-        """一个岗位一个 item，不是一个 item 处理一批——中途哪个挂了
-        一目了然，也不用回答“第 3 个挂了后面还跑不跑”。"""
+    def test_batch_approving_does_not_start_filling(self, client):
         ids = [_add_job(url=f"https://x/{i}") for i in range(3)]
-        r = client.post("/api/checkpoint1/batch", json={"decision": "approved", "ids": ids})
+        client.post("/api/checkpoint1/batch", json={"decision": "approved", "ids": ids})
+        assert self._pending() == []
 
-        assert len(r.json()["queued"]) == 3
+    def test_start_fill_queues_every_approved_job_of_that_site(self, client):
+        """看完一个站的所有岗位之后，点一次按钮把它们一起排进去。"""
+        ids = [_add_job(url=f"https://x/{i}") for i in range(3)]
+        client.post("/api/checkpoint1/batch", json={"decision": "approved", "ids": ids[:2]})
+
+        r = client.post("/api/checkpoint1/sites/bambulab/start-fill")
+
+        assert r.status_code == 200
         pending = self._pending()
-        assert len(pending) == 3
-        assert sorted(it["params"]["pending_job_id"] for it in pending) == sorted(ids)
+        assert [it["workflow"] for it in pending] == ["m2", "m2"]
+        assert sorted(it["params"]["pending_job_id"] for it in pending) == sorted(ids[:2])
+
+    def test_start_fill_skips_jobs_that_already_have_an_application(self, client):
+        """已经填过表的不重排——重跑一次等于再往企业系统传一次简历。
+
+        判断依据是 `pending_applications.source_job_id`（m2 落库时写的回指）。
+        """
+        ids = [_add_job(url=f"https://x/{i}") for i in range(2)]
+        client.post("/api/checkpoint1/batch", json={"decision": "approved", "ids": ids})
+        app.state.tracker.add_pending_application(
+            site_name="bambulab", job_title="t", fields=[], source_job_id=ids[0])
+
+        client.post("/api/checkpoint1/sites/bambulab/start-fill")
+
+        pending = self._pending()
+        assert [it["params"]["pending_job_id"] for it in pending] == [ids[1]]
+
+    def test_start_fill_only_touches_the_named_site(self, client):
+        here = _add_job(url="https://x/here")
+        there = _add_job(url="https://y/there", site_name="other")
+        client.post("/api/checkpoint1/batch", json={"decision": "approved",
+                                                    "ids": [here, there]})
+
+        client.post("/api/checkpoint1/sites/bambulab/start-fill")
+
+        assert [it["params"]["pending_job_id"] for it in self._pending()] == [here]
+
+    def test_clicking_start_fill_twice_does_not_double_queue(self, client):
+        """连点两次（或不确定点没点过）不能把同一个岗位排两遍——那等于再往企业
+        系统传一次简历。已经在队列里但还没跑完的，`pending_applications` 里还没有
+        回指记录，所以光按"填过表没有"过滤是不够的，队列本身也要看。"""
+        ids = [_add_job(url=f"https://x/{i}") for i in range(2)]
+        client.post("/api/checkpoint1/batch", json={"decision": "approved", "ids": ids})
+
+        client.post("/api/checkpoint1/sites/bambulab/start-fill")
+        client.post("/api/checkpoint1/sites/bambulab/start-fill")
+
+        assert len(self._pending()) == 2
+
+    def test_start_fill_reports_how_many_it_queued(self, client):
+        """按钮要能显示「还有 N 个待填表」，所以端点得把数字给出来。"""
+        ids = [_add_job(url=f"https://x/{i}") for i in range(2)]
+        client.post("/api/checkpoint1/batch", json={"decision": "approved", "ids": ids})
+
+        body = client.post("/api/checkpoint1/sites/bambulab/start-fill").json()
+
+        assert body["queued"] == 2
+        assert client.post("/api/checkpoint1/sites/bambulab/start-fill").json()["queued"] == 0
+
+    def test_site_info_reports_how_many_await_filling(self, client):
+        """按钮上要显示「开始填表 N」，所以列表接口得带这个数字。
+
+        **由后端算**：差集逻辑（已批准 − 已填表 − 已在队列）已经在 start-fill 里，
+        前端再算一遍就是同一规则两份实现，而两份必然漂移。
+        """
+        ids = [_add_job(url=f"https://x/{i}") for i in range(3)]
+        client.post("/api/checkpoint1/batch", json={"decision": "approved", "ids": ids[:2]})
+
+        sites = client.get("/api/checkpoint1/jobs").json()["sites"]
+        assert sites["bambulab"]["fill_pending"] == 2
+
+        client.post("/api/checkpoint1/sites/bambulab/start-fill")
+        sites = client.get("/api/checkpoint1/jobs").json()["sites"]
+        assert sites["bambulab"]["fill_pending"] == 0   # 排进队列的不再算待填
 
     def test_reject_queues_nothing(self, client):
         job_id = _add_job()
         client.post(f"/api/checkpoint1/jobs/{job_id}/reject", json={"reason": "x"})
-        assert self._pending() == []
-
-    def test_batch_reject_queues_nothing(self, client):
-        ids = [_add_job(url=f"https://x/{i}") for i in range(2)]
-        client.post("/api/checkpoint1/batch", json={"decision": "rejected", "ids": ids})
         assert self._pending() == []
 
     def test_already_decided_job_is_not_queued(self, client):
@@ -1570,13 +1637,6 @@ class TestApproveEnqueuesFill:
         before = len(self._pending())
         assert client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={}).status_code == 409
         assert len(self._pending()) == before
-
-    def test_enqueue_can_be_turned_off(self, client):
-        # 只想标个 approved 不想现在跑（比如批一堆然后晚上再跑）。
-        job_id = _add_job()
-        r = client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={"enqueue": False})
-        assert r.json()["queued"] == []
-        assert self._pending() == []
 
 
 class TestCheckpoint1BucketCounts:

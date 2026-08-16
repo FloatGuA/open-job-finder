@@ -1772,6 +1772,9 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
             "buckets": sorted({j.bucket for j in here if j.bucket}),
             # 一个站可能有好几条上限（按招聘项目分）。空列表 = 什么都没记到，
             # 前端要显示"未知"而不是"无限制"。
+            # 「开始填表」按钮上显示的数字。跟列表一起返回而不是单开端点：
+            # 分两次请求只会让"按钮还不知道该显示几"变成一种可能的中间状态。
+            "fill_pending": len(_jobs_awaiting_fill(site)),
             "limits": [vars(l) for l in limits],
             "brief": vars(brief) if brief else None,
         }
@@ -1783,23 +1786,45 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
     })
 
 
-def _enqueue_fill_jobs(job_ids: list, enabled: bool = True) -> list:
-    """批准之后给每个岗位排一个 m2（填表）任务，返回排上的 id。
+def _jobs_awaiting_fill(site_name: str) -> list:
+    """这个站还等着填表的岗位：已批准 − 已填过表 − 已经排在队列里。
 
-    **一个岗位一个 item**，不是一个 item 处理一批（用户 2026-08-14 定）：中途哪个
-    挂了一目了然，也不用回答"第 3 个挂了后面还跑不跑"。
+    **只有一份实现**：列表接口要拿它的**数量**（按钮上显示「开始填表 N」），
+    start-fill 要拿它的**内容**。两处各算一遍就是同一规则两份实现，必然漂移。
 
-    走队列而不是在这里直接调 run_layer1——"某功能有自己的执行路径"在这个项目里
-    是记过案的坏味道（冒烟测试曾自调 run_w1/w2 绕过队列，漏了 schedule_log、
-    trigger 归类和错误清理）。队列还顺带给了串行保护：m2 会开一个真实浏览器。
+    "已填过表"看 `pending_applications.source_job_id`（m2 落库时写的回指）；
+    "已在队列"看队列快照——排着但还没跑到的岗位那时还没有回指记录，光看前者会把
+    同一个岗位排第二遍，而那等于再往企业系统传一次简历。
     """
-    if not enabled:
-        return []
-    queued = []
-    for job_id in job_ids:
-        item = app.state.workflow_queue.enqueue("m2", {"pending_job_id": job_id}, source="manual")
-        queued.append({"job_id": job_id, "queue_id": item.id})
-    return queued
+    tracker = app.state.tracker
+    already = {a.source_job_id for a in tracker.get_pending_applications()
+               if a.source_job_id is not None}
+    snap = app.state.workflow_queue.snapshot()
+    in_flight = [snap["current"]] if snap.get("current") else []
+    for item in list(snap.get("pending") or []) + in_flight:
+        if item.get("workflow") == "m2":
+            already.add((item.get("params") or {}).get("pending_job_id"))
+    return [j for j in tracker.get_pending_jobs(status="approved")
+            if j.site_name == site_name and j.id not in already]
+
+
+@app.post("/api/checkpoint1/sites/{site_name}/start-fill")
+async def start_site_fill(site_name: str) -> JSONResponse:
+    """把这个站**所有已批准、还没填过表**的岗位一次性排进队列。
+
+    **为什么不在批准时就排**（旧行为）：批准即入队 m2，于是点下第一个岗位的批准，
+    浏览器立刻被占住，剩下的岗位连看都没法看（用户 2026-08-16 实测）。审批是「逐个
+    判断」，填表是「批量执行」，绑在一起等于强迫人一次只审一个。拆开之后：先把一个
+    站的岗位挨个看完、批完，再点一次这个按钮开始跑。
+
+    「还没填过表」的依据是 `pending_applications.source_job_id`——m2 落库时写的回指。
+    重排一个已经填过的岗位等于**再往企业系统传一次简历**，所以这里按差集过滤。
+    """
+    _initialize_state()
+    todo = _jobs_awaiting_fill(site_name)
+    ids = [app.state.workflow_queue.enqueue(
+        "m2", {"pending_job_id": j.id}, source="manual").id for j in todo]
+    return JSONResponse({"ok": True, "queued": len(ids), "queue_ids": ids})
 
 
 @app.put("/api/checkpoint1/site-limit/{site_name}")
@@ -1888,8 +1913,8 @@ async def approve_checkpoint1_job(job_id: int, body: dict | None = None) -> JSON
     rowcount = tracker.decide_pending_job(job_id, "approved")
     if rowcount == 0:
         return JSONResponse({"ok": False, "error": "already decided"}, status_code=409)
-    queued = _enqueue_fill_jobs([job_id], (body or {}).get("enqueue", True))
-    return JSONResponse({"ok": True, "queued": queued})
+    # **批准只标记，不开跑**：填表由站点级的 start-fill 统一触发，见那个端点的说明。
+    return JSONResponse({"ok": True, "job": vars(tracker.get_pending_job(job_id))})
 
 
 @app.post("/api/checkpoint1/jobs/{job_id}/reject")
@@ -1938,8 +1963,7 @@ async def decide_checkpoint1_batch(body: dict) -> JSONResponse:
             job_id, decision, reason=reason if decision == "rejected" else None,
         )
         (decided if rowcount else skipped).append(job_id)
-    queued = _enqueue_fill_jobs(decided, decision == "approved" and body.get("enqueue", True))
-    return JSONResponse({"ok": True, "decided": decided, "skipped": skipped, "queued": queued})
+    return JSONResponse({"ok": True, "decided": decided, "skipped": skipped})
 
 
 # ── 跨站点投递审批（多站点扩展 Layer 2；见 docs/multi-site-expansion-design.md）──

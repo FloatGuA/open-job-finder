@@ -180,6 +180,9 @@ export interface SiteInfo {
   // 它们算不进任何项目的名额。
   approved_by_bucket: Record<string, number>
   buckets: string[] // 这个站出现过的招聘项目
+  // 已批准、还没填过表、也还没排在队列里的岗位数——「开始填表 N」按钮上的那个数字。
+  // 由后端算：差集规则（已批准 − 已填 − 在队列）只有一份实现，前端再算会漂移。
+  fill_pending: number
   limits: SiteLimitInfo[] // 可能有好几条（按招聘项目分），空数组 = 什么都没记到
   brief: SiteBriefInfo | null
 }
@@ -1087,6 +1090,12 @@ export const API = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category }),
+    }),
+  // 把这个站所有「已批准且还没填过表」的岗位一次性排进队列。
+  // 批准本身**不再**触发填表——否则点下第一个批准，浏览器就被占住，剩下的岗位没法看。
+  startSiteFill: (site: string): Promise<{ ok: boolean; queued: number }> =>
+    requestJson(`/api/checkpoint1/sites/${encodeURIComponent(site)}/start-fill`, {
+      method: 'POST',
     }),
   rejectCheckpoint1Job: (id: number, reason?: string): Promise<{ ok: boolean }> =>
     requestJson(`/api/checkpoint1/jobs/${id}/reject`, {
