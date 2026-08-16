@@ -171,6 +171,78 @@ class ResumeStore:
         )
         return os.path.join(self.exports_dir, hits[0]) if hits else ""
 
+    def export_path_for(self, slug: str) -> str:
+        """给一次导出分配存档路径。**文件名里带 slug**。
+
+        原来只带名字，于是两份同名简历（真实数据里就有两份「游戏岗版」）一旦都
+        导出就再也分不清谁是谁——而分不清的后果是给 A 岗位发了 B 的简历。
+        """
+        os.makedirs(self.exports_dir, exist_ok=True)
+        item = next((it for it in self._load_index()["items"] if it["slug"] == slug), None)
+        name = item["name"] if item else "resume"
+        safe = re.sub(r'[\\/:*?"<>|\s]+', "_", name or "resume").strip("_") or "resume"
+        fname = f"{time.strftime('%Y%m%d_%H%M%S')}_{slug}_{safe}.pdf"
+        self._prune_exports()
+        return os.path.join(self.exports_dir, fname)
+
+    def pdf_status(self) -> dict:
+        """每份简历「能不能真的发出去」。返回 {slug: {state, pdf, exported_at, updated_at}}。
+
+        三态，缺一不可：
+          - `ready`   有 PDF，且**不早于**简历最后一次修改
+          - `stale`   有 PDF，但简历在那之后改过——**传出去的是旧内容**
+          - `missing` 从没导出过
+
+        `stale` 是这里的重点。2026-08-16 真机连投三个岗位，用的都是一份比简历最后
+        修改还早 10 分钟的 PDF，而界面上没有任何地方会显示这件事。只判断"有没有
+        文件"会把这种情况报成可用。
+
+        两个时间戳同源可比：`updated_at` 与导出文件名的 ts 都来自 `time.strftime`
+        的本地时间。
+        """
+        index = self._load_index()
+        by_slug = {}
+        for item in index["items"]:
+            pdf = self.latest_export_for_slug(item["slug"])
+            exported_at = _ts_from_export_name(os.path.basename(pdf)) if pdf else ""
+            if not pdf:
+                state = "missing"
+            elif exported_at and exported_at < (item.get("updated_at") or ""):
+                state = "stale"
+            else:
+                state = "ready"
+            by_slug[item["slug"]] = {
+                "state": state,
+                "pdf": pdf,
+                "exported_at": exported_at,
+                "updated_at": item.get("updated_at", ""),
+            }
+        return by_slug
+
+    def latest_export_for_slug(self, slug: str) -> str:
+        """按 slug 回查最近一次导出的 PDF；没有返回 ""。
+
+        新格式 `{ts}_{slug}_{name}.pdf` 精确匹配。老存档文件名里没有 slug，退回按
+        **名字**匹配——但**名字重复时直接放弃**（返回 ""）：宁可报"没有"让人重新
+        导出一次，也不要猜错一份发到企业系统里去。
+        """
+        if not os.path.isdir(self.exports_dir):
+            return ""
+        files = sorted((f for f in os.listdir(self.exports_dir) if f.endswith(".pdf")),
+                       reverse=True)          # 文件名以时间戳开头 → 倒序即最新
+        exact = [f for f in files if f"_{slug}_" in f]
+        if exact:
+            return os.path.join(self.exports_dir, exact[0])
+
+        index = self._load_index()
+        item = next((it for it in index["items"] if it["slug"] == slug), None)
+        if item is None:
+            return ""
+        if sum(1 for it in index["items"] if it["name"] == item["name"]) > 1:
+            return ""                          # 老格式 + 重名 = 真的分不清
+        legacy = self.latest_export_for(item["name"])
+        return legacy if legacy and f"_{slug}_" not in os.path.basename(legacy) else legacy
+
     def list_exports(self) -> list:
         if not os.path.isdir(self.exports_dir):
             return []
@@ -214,5 +286,17 @@ class ResumeStore:
                 pass
 
 
+def _ts_from_export_name(fname: str) -> str:
+    """从 `{ts}_...pdf` 取出 `YYYY-MM-DDTHH:MM:SS`，好跟 updated_at 直接比大小。
+
+    取不到就返回 ""——调用方把它当"不早于"处理（宁可放行也不误报过期，真正的
+    保护是"有没有文件"那一层）。"""
+    m = re.match(r"(\d{8})_(\d{6})_", fname or "")
+    if not m:
+        return ""
+    d, t = m.group(1), m.group(2)
+    return f"{d[:4]}-{d[4:6]}-{d[6:]}T{t[:2]}:{t[2:4]}:{t[4:]}"
+
+
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")

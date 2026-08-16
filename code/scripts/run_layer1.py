@@ -14,7 +14,7 @@ design.md 的四层架构是独立于 Boss 直聘那套流程的新轨道），�
   # 调试/复现：已经知道要投哪个岗位，跳过选岗
   python scripts/run_layer1.py --job-url https://xxx.jobs.../position/123 --site bambulab
 
-  # 指定简历（默认用 data/resume_pdfs/exports/ 里最新导出的那份）
+  # 指定简历（不给就由队列按岗位自动选，并校验 PDF 不旧于简历内容）
   python scripts/run_layer1.py --search-url ... --site huawei --resume path/to/resume.pdf
 
   # 已确认该站点登录态持久化生效后可以 headless 跑
@@ -51,20 +51,6 @@ from dotenv import load_dotenv
 load_dotenv(CODE_DIR / ".env")  # DEEPSEEK_API_KEY 等；不存在则跳过，不报错
 
 
-def _default_resume_path() -> str:
-    # "默认用哪份简历"的唯一实现在 ResumeStore.latest_export_path()——队列里的 m2
-    # 也要用同一条规则，两处各写一遍必然漂移。
-    from services.resume_store import ResumeStore
-
-    path = ResumeStore(str(CODE_DIR / "data")).latest_export_path()
-    if not path:
-        raise SystemExit(
-            "data/resume_pdfs/exports/ 里没有任何已导出的简历 PDF——"
-            "先在 Dashboard「简历」页导出一份，或用 --resume 指定路径。"
-        )
-    return path
-
-
 def _parse_quota_overrides(items):
     """`--category 产品:3` × N → {"产品": 3}。没给就返回 None（用 profile 的默认）。
 
@@ -82,7 +68,7 @@ def _parse_quota_overrides(items):
     return quotas
 
 
-def _enqueue_via_dashboard(args, resume_path: str, quotas) -> int:
+def _enqueue_via_dashboard(args, quotas) -> int:
     """把这次运行排进 Dashboard 的工作流队列，而不是在本进程直接跑。
 
     **为什么默认走队列**：直接跑会绕开队列的串行保护——2026-08-15 一次 m2 命令行
@@ -121,8 +107,12 @@ def _enqueue_via_dashboard(args, resume_path: str, quotas) -> int:
                              f"  {args.job_url}\n"
                              f"（只想跑一次可以加 --direct，但它会绕开队列的串行保护）")
         params["pending_job_id"] = job.id
-    if resume_path:
-        params["resume_pdf_path"] = resume_path
+    # **不自动挑简历。** 以前这里塞的是「最近导出的那份」，而那条规则已经被队列侧
+    # 的闸门取代（按岗位匹配 + 要求 PDF 不旧于简历内容）。CLI 一旦塞了这个键，就正好
+    # 命中"显式指定优先"的分支，把闸门整个绕过去——同一件事两份实现、其中一份是旧
+    # 规则，正是本函数原注释警告过的漂移。
+    if args.resume:
+        params["resume_pdf_path"] = args.resume
 
     url = args.dashboard.rstrip("/") + "/api/workflow/queue"
     body = json.dumps({"workflow": workflow, "params": params}).encode("utf-8")
@@ -149,7 +139,9 @@ def main() -> int:
     entry.add_argument("--search-url", help="站点招聘入口页 URL，由 agent 按 profile.yaml 的求职偏好自主选岗")
     entry.add_argument("--job-url", help="直接指定一个岗位详情页 URL，跳过选岗（调试/复现用）")
     parser.add_argument("--site", required=True, help="站点标识（如 huawei / bambulab），决定用哪个持久化登录目录")
-    parser.add_argument("--resume", default=None, help="简历 PDF 路径（默认用最新导出的那份）")
+    parser.add_argument("--resume", default=None,
+                        help="简历 PDF 路径。**不给就由队列按岗位自动选**（并校验 PDF 不旧于简历）；"
+                             "给了就绕过那道闸门，只在调试时用")
     parser.add_argument("--headless", action="store_true", help="无头模式（仅在已确认登录态持久化后使用）")
     parser.add_argument("--max-pages", type=int, default=8,
                         help="每个分类桶最多翻几页（默认 8）")
@@ -172,10 +164,9 @@ def main() -> int:
 
     quotas = _parse_quota_overrides(args.category)
 
-    resume_path = args.resume or _default_resume_path()
     mode = "指定岗位" if args.job_url else "自主选岗"
     print(f"[layer1] 模式={mode}  入口={args.job_url or args.search_url}")
-    print(f"[layer1] resume={resume_path}")
+    print(f"[layer1] resume={args.resume or '(由队列按岗位选)'}")
     print(f"[layer1] headless={args.headless}")
     if not args.job_url:
         # 跑之前把 agent 实际在按什么条件筛打出来——这是"agent 选错岗"这类新错误
@@ -187,16 +178,23 @@ def main() -> int:
         print(f"[layer1] 本站生效名额: {eff}")
 
     if not args.direct:
-        return _enqueue_via_dashboard(args, resume_path, quotas)
+        return _enqueue_via_dashboard(args, quotas)
 
     print("[layer1] ⚠ --direct：绕开队列直接跑。W1/W2 若同时在跑不会被拦住，"
           "本次也不会写进 schedule_log。", flush=True)
 
     from multisite.layer1_agent import run_layer1
 
+    if args.job_url and not args.resume:
+        # --direct 绕开队列，也就绕开了"按岗位选简历 + 校验 PDF 不过期"那道闸门。
+        # 这里不替它挑一份——挑错的后果是一份不对口的简历躺进企业的申请表。
+        raise SystemExit(
+            "--direct 跑填表时必须用 --resume 显式指定简历 PDF。"
+            "队列模式会按岗位自动选、并校验 PDF 不旧于简历内容，--direct 没有这道闸门。")
+
     state = asyncio.run(
         run_layer1(
-            resume_pdf_path=resume_path,
+            resume_pdf_path=args.resume or "",
             site_name=args.site,
             job_url=args.job_url or "",
             search_url=args.search_url or "",

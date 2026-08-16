@@ -194,6 +194,44 @@ class OrchestrationService:
         return (f"选岗完成：找到 {len(found)} 个，新入库 {len(new_ids)} 条待审批",
                 {"found": len(found), "new": len(new_ids)})
 
+    _PDF_STATE_HINT = {
+        "missing": "从没导出过 PDF",
+        "stale": "PDF 比简历内容旧（简历改过之后没有重新导出）",
+    }
+
+    def _resume_for(self, job) -> str:
+        """这个岗位该发哪一份简历的 PDF。选不出可用的就**拒绝**，不凑合。
+
+        两步：`resume_matcher` 按岗位标题/描述挑一份（判断依据是岗位，不是
+        "最近导出"这种跟岗位无关的时间属性），然后要求它有一份**不早于简历
+        最后修改**的已导出 PDF。
+
+        **不可用时绝不改发另一份可用的**（用户 2026-08-16 定的哲学：往外发的
+        东西用人工做的精美简历，Agent 生成的能力做了也收在开关后面）。悄悄换一
+        份发出去比不发严重得多——它会躺在企业系统的表单里。对照 W2 那条线：它
+        允许回退站内简历，因为 Boss 有兜底；多站点没有兜底。
+
+        后端**不能**自己渲染 PDF：A4 排版的唯一实现在前端 `resumeHtml.ts`，
+        后端再写一份就是同一契约两份实现。所以这里只能要求人先导出。
+        """
+        from services.resume_matcher import pick_for_job
+        from services.resume_store import ResumeStore
+
+        store = ResumeStore(str(self._data_dir))
+        if not (store.list().get("items") or []):
+            raise ValueError("还没有任何简历：先在 Dashboard「简历」页建一份并导出 PDF")
+
+        picked = pick_for_job(store, job_title=job.title or "", jd_text=job.why or "")
+        status = store.pdf_status().get(picked["slug"]) or {"state": "missing"}
+        if status["state"] == "ready":
+            return status["pdf"]
+
+        how = "按岗位匹配到" if picked.get("matched") else "没匹配上、按激活份兜底选中"
+        raise ValueError(
+            f"这个岗位（{job.title}）{how}「{picked['name']}」，但它{self._PDF_STATE_HINT.get(status['state'], status['state'])}——"
+            f"请先在 Dashboard「简历」页打开这一份并导出 PDF，再跑 m2。"
+            f"（不会替你改发别的简历：发错一份的后果是它躺在对方的申请表里）"
+        )
     def _run_multisite_fill(self, overrides: dict[str, Any]) -> tuple[str, dict]:
         """m2：对**一个已批准的岗位**打开申请表、上传简历、扫描空字段。
 
@@ -219,13 +257,7 @@ class OrchestrationService:
             # 没批准就填表 = 绕过 Checkpoint 1。这一层是队列的守门，不是 UI 的。
             raise ValueError(f"pending_job {job_id} 状态是 {job.status}，只有 approved 才能填表")
 
-        from services.resume_store import ResumeStore
-
-        resume = str(overrides.get("resume_pdf_path") or "") or \
-            ResumeStore(str(self._data_dir)).latest_export_path()
-        if not resume:
-            raise ValueError("没有可用的简历 PDF：先在 Dashboard「简历」页导出一份，"
-                             "或在参数里给 resume_pdf_path")
+        resume = str(overrides.get("resume_pdf_path") or "") or self._resume_for(job)
         state = asyncio.run(run_layer1(
             resume_pdf_path=resume,
             site_name=job.site_name,

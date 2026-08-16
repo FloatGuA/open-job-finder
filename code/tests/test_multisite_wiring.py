@@ -193,6 +193,7 @@ class _Args:
         self.max_pages = 8
         self.select_only = False
         self.dashboard = "http://127.0.0.1:8765"
+        self.resume = None
         self.__dict__.update(kw)
 
 
@@ -219,7 +220,7 @@ class TestCliEnqueuesFullParams:
         monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
         rc = cli._enqueue_via_dashboard(
-            _Args(search_url="https://x/jobs", max_pages=3), "", {"开发": 5})
+            _Args(search_url="https://x/jobs", max_pages=3), {"开发": 5})
 
         assert rc == 0
         import json
@@ -227,6 +228,37 @@ class TestCliEnqueuesFullParams:
         assert body["workflow"] == "m1"
         assert body["params"]["categories"] == {"开发": 5}
         assert body["params"]["max_pages"] == 3
+
+    def test_m2_body_does_not_pin_a_resume_by_default(self, monkeypatch):
+        """CLI **不再自己挑简历**。它原本塞的是「最近导出的那份」，而那条规则已经
+        被队列侧的闸门取代（按岗位匹配 + 要求 PDF 不旧于简历）——CLI 一旦塞了
+        `resume_pdf_path`，就正好走进"显式指定优先"的分支，把闸门整个绕过去。
+
+        同一件事两份实现，其中一份是旧规则：这正是那个函数的注释里警告过的漂移。
+        """
+        cli = _load_cli()
+        sent = {}
+
+        class _Resp:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *a):
+                return False
+
+            def read(self_inner):
+                return b'{"status": "pending", "id": "1"}'
+
+        def fake_urlopen(req, timeout=10):
+            sent["body"] = req.data.decode("utf-8")
+            return _Resp()
+
+        import urllib.request
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        cli._enqueue_via_dashboard(_Args(search_url="https://x/jobs"), None)
+
+        import json
+        assert "resume_pdf_path" not in json.loads(sent["body"])["params"]
 
     def test_dashboard_down_does_not_fall_back_to_direct(self, monkeypatch):
         """连不上就退出并给出提示，**绝不静默改走 --direct**——"安全路径失败时
@@ -240,4 +272,4 @@ class TestCliEnqueuesFullParams:
 
         monkeypatch.setattr(urllib.request, "urlopen", boom)
         with pytest.raises(SystemExit):
-            cli._enqueue_via_dashboard(_Args(search_url="https://x/jobs"), "", None)
+            cli._enqueue_via_dashboard(_Args(search_url="https://x/jobs"), None)

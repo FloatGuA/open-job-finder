@@ -957,8 +957,23 @@ async def compose_resume(body: dict[str, Any] = Body(...)) -> JSONResponse:
 # ── 多份简历管理（v2.15 简历制作台：每份独立完整，存储只在 resumes/{slug}.yaml）──
 @app.get("/api/resumes")
 async def list_resumes() -> JSONResponse:
+    """简历列表，每项带上 `pdf_state`（ready / stale / missing）。
+
+    **跟列表一起返回而不是单开端点**：界面上原本有两个互不相干的列表（简历、导出
+    存档），谁也不知道某一份到底能不能发出去——2026-08-16 那三次 m2 就是用了一份
+    比简历还旧的 PDF，全程没有任何提示。分两次请求只会让"状态还没到"变成一种可能
+    的中间状态。
+    """
     from services.resume_store import ResumeStore
-    return JSONResponse(ResumeStore(str(DATA_DIR)).list())
+
+    store = ResumeStore(str(DATA_DIR))
+    index = store.list()
+    status = store.pdf_status()
+    for item in index.get("items") or []:
+        st = status.get(item["slug"]) or {}
+        item["pdf_state"] = st.get("state", "missing")
+        item["pdf_exported_at"] = st.get("exported_at", "")
+    return JSONResponse(index)
 
 
 @app.post("/api/resumes")
@@ -1173,7 +1188,12 @@ async def print_resume_pdf(body: dict[str, Any] = Body(...)):
     if not html.strip():
         raise HTTPException(status_code=400, detail="html is required")
     # 每次导出按时间戳存档（「最近生成」列表的数据源），不互相覆盖，滚动上限修剪。
-    out = ResumeStore(str(DATA_DIR)).export_path(str(body.get("name") or "resume"))
+    # 存档文件名带 slug：两份同名简历（真实数据里就有两份「游戏岗版」）否则分不清
+    # 谁是谁，而分不清的后果是给 A 岗位发了 B 的简历。不给 slug 就按激活份存。
+    store = ResumeStore(str(DATA_DIR))
+    slug = str(body.get("slug") or "") or (store.list().get("active") or "")
+    out = store.export_path_for(slug) if slug else store.export_path(
+        str(body.get("name") or "resume"))
     resume_tailor.render_html_to_pdf(html, out)
     return FileResponse(out, media_type="application/pdf", filename=os.path.basename(out))
 

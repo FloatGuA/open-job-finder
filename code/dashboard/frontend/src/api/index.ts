@@ -589,11 +589,18 @@ export interface ResumeBlocks {
   sections: ResumeSection[]
 }
 
+// 「这份简历能不能真的发出去」——多站点投递只能用**已导出的 PDF**（后端不渲染，
+// A4 排版的唯一实现在前端 resumeHtml.ts）。ready=有且不旧于简历内容；
+// stale=有但简历改过之后没重新导出；missing=从没导出过。
+export type ResumePdfState = 'ready' | 'stale' | 'missing'
+
 export interface ResumeMeta {
   slug: string
   name: string
   target: string
   updated_at: string
+  pdf_state?: ResumePdfState
+  pdf_exported_at?: string
 }
 export interface ResumeIndex {
   active: string

@@ -222,6 +222,27 @@ function A4Preview({ html }: { html: string }) {
 }
 
 // \u65b0\u5efa\u7b80\u5386\u7684\u9ed8\u8ba4\u540d\uff1a\u65e5\u671f_\u59d3\u540d_\u76ee\u6807\u5c97\u4f4d\uff08\u6ca1\u586b\u76ee\u6807\u5c97\u4f4d\u5c31\u9000\u6210\u300c\u7b80\u5386\u300d\uff09
+const PDF_STATE_META: Record<string, { label: string; hint: string; fg: string; bg: string }> = {
+  ready: { label: '\u53ef\u53d1\u9001', hint: '\u6709\u5df2\u5bfc\u51fa\u7684 PDF\uff0c\u4e14\u4e0d\u65e7\u4e8e\u7b80\u5386\u5185\u5bb9', fg: '#30d158', bg: 'rgba(48,209,88,0.14)' },
+  stale: { label: 'PDF \u8fc7\u671f', hint: '\u7b80\u5386\u6539\u8fc7\u4e4b\u540e\u6ca1\u6709\u91cd\u65b0\u5bfc\u51fa\uff0cm2 \u4f1a\u62d2\u7edd\u4f7f\u7528\u8fd9\u4e00\u4efd', fg: '#ff9f0a', bg: 'rgba(255,159,10,0.16)' },
+  missing: { label: '\u672a\u5bfc\u51fa', hint: '\u4ece\u6ca1\u5bfc\u51fa\u8fc7 PDF\uff0c\u591a\u7ad9\u70b9\u6295\u9012\u7528\u4e0d\u4e86\uff08\u540e\u7aef\u4e0d\u80fd\u66ff\u4f60\u6e32\u67d3\uff09', fg: 'rgba(255,255,255,0.45)', bg: 'rgba(255,255,255,0.07)' },
+}
+
+/** 「能不能发出去」的小徽章。没有它，简历列表和导出存档是两个互不相干的列表，
+ *  人无从知道某一份到底能不能用——那正是 m2 传出一份过期 PDF 而无人察觉的原因。 */
+function PdfStatePill({ state, exportedAt }: { state?: string; exportedAt?: string }) {
+  const meta = PDF_STATE_META[state || 'missing'] ?? PDF_STATE_META.missing
+  return (
+    <span
+      className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
+      style={{ background: meta.bg, color: meta.fg }}
+      title={exportedAt ? `${meta.hint}\uff1b\u5bfc\u51fa\u4e8e ${exportedAt}` : meta.hint}
+    >
+      {meta.label}
+    </span>
+  )
+}
+
 export function defaultResumeName(person: string, target: string): string {
   const d = new Date()
   const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
@@ -1000,12 +1021,18 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
                         value={it.name} onChange={(e) => updateMeta(it.slug, { name: e.target.value })} />
                       <input className="w-full rounded bg-bg-card px-2 py-1 text-[11px] text-text-2 focus:outline-none" style={inputStyle}
                         placeholder={'\u76ee\u6807\u5c97\u4f4d'} value={it.target} onChange={(e) => updateMeta(it.slug, { target: e.target.value })} />
-                      <p className="text-[11px] text-signal-bright">{'\u25cf \u6b63\u5728\u7f16\u8f91'}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-[11px] text-signal-bright">{'\u25cf \u6b63\u5728\u7f16\u8f91'}</p>
+                        <PdfStatePill state={it.pdf_state} exportedAt={it.pdf_exported_at} />
+                      </div>
                     </>
                   ) : (
                     <div className="flex items-start justify-between gap-1">
                       <div className="min-w-0">
-                        <p className="truncate text-xs font-medium text-text-1">{it.name}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="truncate text-xs font-medium text-text-1">{it.name}</p>
+                          <PdfStatePill state={it.pdf_state} exportedAt={it.pdf_exported_at} />
+                        </div>
                         <p className="truncate text-[11px] text-text-3">{it.target || '\u672a\u8bbe\u76ee\u6807\u5c97\u4f4d'}</p>
                       </div>
                       <div className="flex shrink-0 items-center gap-1">

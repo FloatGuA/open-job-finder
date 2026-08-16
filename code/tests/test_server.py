@@ -181,6 +181,44 @@ def _write_run_log(runs_dir: Path, filename: str, events: list[dict]) -> None:
     (runs_dir / filename).write_text(content, encoding="utf-8")
 
 
+class TestResumePdfStatusApi:
+    """简历池要能看到「哪几份真的能发出去」。
+
+    此前界面上有两个互不相干的列表（简历 / 导出存档），**没有任何地方把它们连起来**，
+    于是 2026-08-16 那三次 m2 用了一份比简历还旧的 PDF，全程无提示。
+    """
+
+    def test_resume_list_carries_pdf_state(self, client):
+        from services.resume_store import ResumeStore
+        from dashboard.server import DATA_DIR
+
+        item = ResumeStore(str(DATA_DIR)).create("游戏岗版", target="游戏")
+        got = client.get("/api/resumes").json()
+
+        entry = next(i for i in got["items"] if i["slug"] == item["slug"])
+        assert entry["pdf_state"] == "missing"      # 没导出过 = 发不出去
+
+    def test_export_filename_carries_the_slug(self, client, monkeypatch):
+        """导出的文件名要带 slug，否则两份同名简历的 PDF 分不清谁是谁。"""
+        from services import resume_tailor
+        from services.resume_store import ResumeStore
+        from dashboard.server import DATA_DIR
+
+        written = {}
+
+        def fake_render(html, out):
+            written["path"] = out
+            with open(out, "wb") as f:
+                f.write(b"%PDF-1.4")
+
+        monkeypatch.setattr(resume_tailor, "render_html_to_pdf", fake_render)
+        item = ResumeStore(str(DATA_DIR)).create("游戏岗版", target="游戏")
+
+        r = client.post("/api/resume/print-pdf",
+                        json={"html": "<html></html>", "name": "游戏岗版", "slug": item["slug"]})
+        assert r.status_code == 200
+        assert item["slug"] in written["path"]
+
 class TestM1ConsoleEntry:
     """m1 从 Dashboard 控制台触发所需的后端支撑。
 
