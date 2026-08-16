@@ -29,9 +29,15 @@ from services.boss_search_url import (
     BOSS_INDUSTRIES_PATH as _BOSS_INDUSTRIES_PATH,
 )
 from services.config_manager import get_config_manager
+from services.console_utf8 import force_utf8_stdout
 from services.llm_client import build_model_router, load_config
 from services.onboarding import OnboardingChecker
 from services.progress_emitter import ProgressEmitter, ProgressEvent
+
+# uvicorn 进程的 stdout 在 Windows 上默认是 GBK，而 m1/m2 的 agent 追踪经由本进程
+# 打印——2026-08-16 一句带 ✅ 的话就抛 UnicodeEncodeError，异常冒泡打死了整条 run，
+# 已经找到的 8 个岗位全丢。CLI 那条路径一直有这层保护，控制台这条没有。
+force_utf8_stdout()
 from services.prompt_manager import EDITABLE_PROMPTS, PromptManager
 from services.tracker import ApplicationTracker
 from tools.biz_logic.wechat_id import wechat_id_from
@@ -2642,8 +2648,12 @@ async def add_workflow_queue_batch(body: dict | None = None) -> JSONResponse:
     items = body.get("items") or []
     ids = []
     for it in items:
+        # 白名单引用队列那一份，不手抄——这是同一个列表在本文件里的第三处，
+        # 前两处都因为漏了 m1/m2 出过问题。
+        from services.workflow_queue import VALID_WORKFLOWS
+
         wf = it.get("workflow")
-        if wf not in ("w1", "w2", "w3"):
+        if wf not in VALID_WORKFLOWS:
             raise HTTPException(status_code=400, detail=f"bad workflow {wf!r}")
         qi = app.state.workflow_queue.enqueue(wf, it.get("params") or {}, source="queue")
         ids.append(qi.id)

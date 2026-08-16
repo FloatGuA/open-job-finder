@@ -40,12 +40,11 @@ CODE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(CODE_DIR))
 
 # Windows 上 stdout 重定向到文件时默认走 GBK，agent 追踪里的中文岗位名会被写成
-# 不可逆的替换字符（? / �）——真机第一次跑完就是这样，日志里岗位标题全成了
-# 乱码，等于追踪白打。追踪的全部意义就是事后能读，所以这里强制 UTF-8。
-for _stream in ("stdout", "stderr"):
-    _s = getattr(sys, _stream)
-    if isinstance(_s, io.TextIOWrapper) and (_s.encoding or "").lower() not in ("utf-8", "utf8"):
-        _s.reconfigure(encoding="utf-8", errors="replace")
+# 不可逆的替换字符，更糟的是 ✅ 这类字符会直接抛 UnicodeEncodeError 打死整条 run。
+# 实现收敛在 services/console_utf8——Dashboard 那条路径（uvicorn 进程）要用同一份。
+from services.console_utf8 import force_utf8_stdout
+
+force_utf8_stdout()
 
 from dotenv import load_dotenv
 

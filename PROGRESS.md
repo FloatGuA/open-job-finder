@@ -5,12 +5,82 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-16（v2.24.7 m1 有 Dashboard 触发入口了；此前 v2.24.5 接线五处修复 → v2.24.6 其中两处按 TDD 重写） |
-| 当前版本 | 2.24.7                         |
+| 最后更新 | 2026-08-16（v2.24.8 **m1 首次从 Dashboard 真机跑通**：16 个岗位、名额全满；顺带修掉一次日志打死整条 run 的全损） |
+| 当前版本 | 2.24.8                         |
 
 > ⚠️ **下一轮动手前先读**：Layer 1 已按 2026-08-13 的对齐改完并真机验证。**SDK 继续 LangGraph 是用户拍板的（理由是他本人正求职 agent 开发岗位、亲手做工程本身是目标），后续会话不要因为技术理由自作主张换成 Anthropic/Codex SDK。** 完整取舍见 `DECISION.md` 三条：「Layer 1 的导航/找入口/选岗交给 agent 自主决策」「选岗结果用 record_job 边找边落袋」「提交防线从不给工具改成点击工具自己拒绝」。
 
 ## 待跟进（另开会话）
+
+### 📱 把这套流程搬到安卓模拟器里跑（2026-08-16 用户提出，**只记需求，未对齐**）
+
+用户原话：「mark 一下这一套流程在安卓模拟机里实现」。**细节完全未讨论**，下面只是记录动手前
+必须先问清楚的几件事，不要当成已定方案：
+
+- **哪一套流程**：Boss 的 W1/W2（对应 Boss APP），还是多站点 m1/m2（企业招聘系统多为 H5，
+  安卓上仍是浏览器）？两者代价差一个数量级。
+- **技术栈是硬约束**：现有全部浏览器操作建立在 **DrissionPage 操控桌面 Chrome** 之上
+  （`services/browser_context.py` + `tools/browser/*` 几十个工具、选择器、`run_js` 探针）。
+  安卓 APP 自动化是另一条链（uiautomator2 / Appium + ADB），**没有一行能直接复用**；
+  模拟器里跑安卓版 Chrome 也不等于能用 DrissionPage（它要的是本机 CDP + user-data 目录）。
+- **登录态**：现在的权威登录态是 `data/browser_profile/` 这个 Chrome user-data 目录，
+  安卓侧要另起一套，`VerifySessionStep` 那条唯一校验路径也要有对应实现。
+- **要先回答的产品问题**：为什么要上安卓——是 Boss APP 有网页端没有的功能/更少风控，还是想
+  脱离本机常开一台 Windows？答案不同，做法完全不同（前者要重写工具层，后者可能只是部署问题）。
+
+**优先建议**：先只谈"为什么要安卓"，别先谈"怎么实现"。
+
+### 🧩 WorkflowPanel 参数堆在一起，应该改成分页（2026-08-16 用户提出）
+
+`code/dashboard/frontend/src/components/workflow/WorkflowPanel.tsx`（DevLabel 名 `WorkflowPanel`，
+用户口中的 "workflow control"）现在把 **W1 投递参数 + W2 检查参数 + M1 选岗参数 + 运行时开关 + 5 个
+动作按钮**全部竖着堆在一张卡片里，用分隔线隔开。M1 组是 v2.24.7 刚加的，加完就到了不可读的长度。
+
+**要做的**：按 workflow 分页（W1 / W2 / M1），每页只显示自己的参数和自己的动作按钮。
+
+**动手前要定的**（别自作主张）：
+1. `headless` / `debug` 是三条流程共用的运行时开关，放在 tab 外面常驻，还是每个 tab 各一份？
+2. 「W1 → W2 连跑」这个按钮属于哪一页（它跨两条流程）？
+3. 切 tab 时未保存的参数编辑要不要保留（现在是同一组 state，拆页后容易切一下就丢）。
+4. 各页的「设为默认」（`renderSaveDefault`）逻辑不变，只是位置跟着走。
+
+### 🔌 大模型统一入口在哪 + 设置页「模型」下拉是坏的（2026-08-16 查证，**bug 未修**）
+
+**先回答"配置在哪"——主链路是统一的，但有三处绕过它：**
+
+| 入口 | 配置源 | 谁在用 |
+|------|--------|--------|
+| ✅ **统一入口** `services/llm_client.py::build_model_router()` | `code/config.yaml` 的 `llm.capabilities`（fast/balanced/powerful/vision 四条 FallbackChain） | W1 评分、W2 意图/回复、简历解析/生成 —— 几乎全部业务逻辑走 `balanced` = `openai_compatible` + `deepseek-chat` |
+| ❌ 绕过 | `multisite/agent_runtime.py::build_model()` **硬编码** `model="deepseek-chat"` / `base_url` / `os.environ["DEEPSEEK_API_KEY"]` | m1/m2 多站点 agent（LangGraph）。**换模型只能改代码**，config.yaml 对它无效 |
+| ❌ 绕过 | `services/intent_classifier.py` 硬编码 `OLLAMA_MODEL = "qwen3:8b"` 直连 ollama | 需查消费方，可能已无生产调用 |
+| ❌ 绕过 | `services/chat_agent.py` 同上 | 已知技术债，`--chat` 模式已禁用 |
+
+**Prompt 侧是起效的**：模板在仓库根 `prompts/*.md`，覆盖层写到 `code/data/prompts_override/{name}.md`
+（`PromptManager.load` 覆盖优先），W1/W2/简历全部经 `pm.render()` 取值 → **设置页存的 prompt 确实生效**。
+当前覆盖目录是空的（0 个 override），所以跑的都是默认模板。
+**但** `EDITABLE_PROMPTS` 只有 10 个（system / score_job / analyze_intent / generate_reply / resume_*），
+多站点用的 `classify_field` / `layer1_find_jobs` / `layer1_open_application` **不在里面**——
+`layer1_agent.py` 会读它们的 override，只是设置页看不到也改不了。
+
+**用户看到的「明明是 deepseek 却显示 ollama 的 qwen」是显示层 bug，配置本身没错**：
+
+- `GET /api/config/llm` 的 `capabilities` 返回的是 provider **类型**（`ollama` / `openai_compatible` / `claude_cli`，
+  `server.py` 取 `providers[0]["type"]`）；
+- 同一个响应里的 `available_providers` 返回的却是 provider **实例名**
+  （`configured_provider_names()` → `ollama_qwen3:8b` / `openai_compat_deepseek-chat` / …）；
+- `Settings.tsx::ModelTab` 用后者填 `<option>`、用前者当 `<select value>` → **value 在选项里根本不存在**，
+  浏览器回退显示第一项，也就是 `ollama_qwen3:8b`。**一个下拉框同时服务两种词汇，这是同构漂移的老毛病。**
+
+⚠️ **还有个雷**：这个下拉一旦被用户动一下再点保存，写进 `config.yaml` 的 `type` 就成了 `ollama_qwen3:8b`，
+`_build_chain` 会抛 `ValueError: Unknown provider type` —— 而 **config.yaml 此时已经写坏了**，
+保存端点里的 `build_model_router` 随即 500，下次重启后端直接起不来。目前没炸只是因为没人动过它。
+在修好之前**不要碰设置页的模型下拉**。
+
+另：`vision` 档在 UI 里完全不可见（后端只遍历 fast/balanced/powerful 三档），简历视觉解析的链路无从查看。
+
+**修法（择一收敛，不要两边兼容）**：要么两端统一用 provider 类型（下拉只列 `ollama`/`openai_compatible`/…，
+但那样就分不出同类型的不同模型），要么统一用实例名（`save_llm_settings` 需要能按实例名反查并整条替换
+provider dict，而不是只改 `providers[0]["type"]`）。顺带把 `vision` 档纳入展示。
 
 ### 🗂️ 简历选择与多简历投递（2026-08-15 用户提出，**待专门讨论后再动**）
 
@@ -261,6 +331,14 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 - **[已收口 2026-07-06] ~~两表关联断裂~~**：本次 job_id 硬关联升级从根上解决（见"已完成"）。原 hr_name 路径的待办已大多变无关——①空 hr_name 不再影响关联（改按 job_id 硬 JOIN，405 条空 hr_name 应聘照样关联）；②sync 复活本次 W1+W2 真机跑通；③"一公司多 HR"边界对 job_id 硬键无影响；④真机已验证（W1 3/3 投递建占位 + W2 200 处理 sync 生效 + backfill 补 96）。仅遗留：532 条历史无 job_id 软键会话随后续 W2 逐步"即时吸收"收敛（无害，无需干预）。
 
 ## 已完成
+
+- **m1 首次从 Dashboard 跑通（16 个岗位，名额全满）+ 修掉一次全损**（2026-08-16，v2.24.8，pytest 全量绿 EXIT=0（+6），build 绿）
+  - **第一次跑：全损。** agent 正常跑了十几步、已 `record_job` 记下 8 个岗位，然后整条 run 失败、库里一条没有。根因是**追踪日志的一句 `print` 打死了整条 run**：agent 说了句带 ✅ 的话 → `UnicodeEncodeError`（GBK stdout）→ 异常冒泡打死 `find_jobs` → 下游 `write_pending_jobs` 从没执行。`scripts/run_layer1.py` 一直有 `stdout.reconfigure(utf-8)`，**而 Dashboard 走的是 uvicorn 进程、拿不到那一行**——同一件事两份实现且其中一份漏了。详见 `PITFALLS.md`「追踪日志的一句 print 能打死整条 run」。
+  - **两道修复**：①进程级编码修复收敛到 `services/console_utf8.force_utf8_stdout()`，CLI 与 uvicorn 共用；②agent 追踪改 `safe_print`（写不出去就退化，绝不抛）——**这是 fail fast 的一个刻意例外**，理由见 `DECISION.md` 对应条目（吞的是日志自身的失败，不是业务失败）。顺带修掉 `/api/workflow/queue/batch` 里第三份手抄的 workflow 白名单。
+  - **第二次跑：完整通过。** 16 个岗位，五类名额全满（开发 5/5、AI NATIVE 3/3、产品 3/3、运营 3/3、测试 2/2；游戏类按 `site_overrides` 跳过）。
+  - **两个此前的待观察项都翻篇了**：①`bucket` 全部有值（研发类 9 / 非研发类 6 / 暑期实习 1），此前 24 条全空；②`site_briefs` 首次写进一条，且是有用的经验而非套话（记下了「物流运营/服务运营不属于目标运营方向」「产品服务代表是客服不是产品岗」「GTM 职能分类是市场&销售但实际做产品操盘」这类归类判断）。
+  - **`site_limits` 这次为空是对的**：投递上限印在申请页上，选岗阶段结构上看不到（原来那条是 m2 发现的）。
+  - **观测层经受住了检验**：失败那次的 run 日志是 `find_jobs failed` + 报错原文 + `run_end failed`；成功那次是三个阶段齐全 + `run_end done {found:16, new_pending_jobs:16}`。**没有这一层，第一次失败的表现就只是"跑了几分钟，库里啥也没有"。**
 
 - **m1 的 Dashboard 触发入口 + m1/m2 过程可视化**（2026-08-16，v2.24.7，pytest 全量绿 EXIT=0（+9），前端 4 个测试文件绿、build 绿）
   - **背景**：用户指出前端没有 m1/m2 的触发入口。查实：**m2 其实有**（批准 Checkpoint 1 即自动入队），**m1 完全没有**，只能开终端；而审批和看结果都在 Dashboard。审批 UI 本身早就有（「跨站点投递」页两个 tab）。

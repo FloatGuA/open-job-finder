@@ -233,6 +233,21 @@ class TestM1ConsoleEntry:
             "workflow": "m1", "updates": {"search_url": "https://a/", "nonsense": 1}})
         assert "nonsense" not in r.json()["m1"]
 
+    def test_batch_enqueue_accepts_every_valid_workflow(self, client):
+        """批量入队的白名单是**第三份**手抄的 workflow 列表（单个入队、run 日志
+        筛选各一份）。前两份都因为漏了 m1/m2 出过问题，这份也漏了。"""
+        from services.workflow_queue import VALID_WORKFLOWS
+
+        app.state.emitter.current_workflow = 'busy'   # 挂住 worker，别真跑起来
+        try:
+            r = client.post("/api/workflow/queue/batch", json={
+                "items": [{"workflow": wf, "params": {}} for wf in VALID_WORKFLOWS]})
+            assert r.status_code == 200, r.text
+            assert len(r.json()["ids"]) == len(VALID_WORKFLOWS)
+        finally:
+            app.state.workflow_queue.clear()
+            app.state.emitter.current_workflow = None
+
     def test_run_logs_can_be_filtered_by_m1_and_m2(self, client):
         # 日志文件叫 m1_*.jsonl，端点的 pipeline 白名单是另写的一份——不同步的
         # 表现是"日志在磁盘上，一按筛选就 400"。

@@ -52,6 +52,7 @@ from pydantic import BaseModel, Field
 from multisite import agent_runtime, chrome_mcp_client, preferences, safe_tools
 from multisite.observability import run_scope, traced_stage
 from multisite.personal_info_loader import load_candidates, load_personal_info, match_value
+from services.console_utf8 import safe_print
 from services.prompt_manager import PromptManager
 from services.tracker import ApplicationTracker
 
@@ -827,7 +828,9 @@ def build_graph(
             shutil.move(str(tmp), str(dest_dir / name))
             return name
         except Exception as exc:  # noqa: BLE001 — 见 docstring：截图失败不该毁掉整次 run
-            print(f"[layer1] 表单截图失败（不影响落库）：{exc}", flush=True)
+            # safe_print 而不是 print：异常消息的内容不受我们控制（其余几处打的
+            # 都是固定文案 + 整数，不会有写不出去的字符）。
+            safe_print(f"[layer1] 表单截图失败（不影响落库）：{exc}", flush=True)
             return ""
 
     def _agent_tools(passthrough: tuple) -> list:

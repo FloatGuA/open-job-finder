@@ -294,3 +294,25 @@ netsh interface ipv4 show excludedportrange protocol=tcp
 **判据**：**一个参数只要跨了进程/队列边界，验证它生效必须在终点做**——看接收方拿到的值，或者在终点打日志。起点的打印在这类缺陷里恰好总是对的。
 
 **已由 `tests/test_multisite_wiring.py::TestSelectPassthrough` 守门**（断言 run_layer1 实际收到的 kwargs）。
+
+## 追踪日志的一句 `print` 能打死整条 run —— 而且只在某一个入口炸
+
+**现象**（2026-08-16 首次从 Dashboard 触发 m1）：agent 正常跑了十几步、已经 `record_job` 记下 8 个岗位，然后整条 run 失败，**库里一条都没有**。
+
+**真因**：agent 说了一句带 ✅ 的话，`agent_runtime._trace` 的 `print` 在 GBK 的 stdout 上抛 `UnicodeEncodeError`，异常从 LangGraph 节点里冒出去打死了 `find_jobs`——于是下游的 `write_pending_jobs` **从来没执行**，内存里那 8 条记录随异常一起蒸发。
+
+```
+UnicodeEncodeError: 'gbk' codec can't encode character '\u2705'
+  agent_runtime.py:134  print(f"  [{step:02d}] 说: {text}")
+  During task with name 'find_jobs'
+```
+
+**为什么以前从没撞到**：`scripts/run_layer1.py` 开头一直有 `sys.stdout.reconfigure(encoding="utf-8")`，而**从 Dashboard 跑走的是 uvicorn 进程，拿不到那一行**。同一件事两份实现、其中一份漏了——CLI 那条路径被保护着，新加的控制台入口没有。
+
+**判据（比这个具体 bug 更值钱）**：**任何"进程级"的设置——stdout 编码、locale、信号处理、warnings 过滤——如果只写在某一个入口脚本里，换个入口就静默失效。** 加新入口时要专门问一遍："老入口在 main 之前做了哪些进程级设置？" 这类设置不会在代码里表现为被调用的函数，grep 调用方是找不到它们的。
+
+**两道修复**（都做了，v2.24.8）：
+1. 收敛进程级编码修复到 `services/console_utf8.force_utf8_stdout()`，CLI 与 uvicorn 两个入口共用同一份。
+2. **日志不该有杀死流程的权力**：agent 追踪改用 `safe_print`（写不出去就退化成 backslashreplace，绝不抛）。第 1 条修好之后第 2 条仍然必要——换个终端、换个重定向目标，照样可能有写不出去的字符。
+
+**这次能查出来是因为**观测层刚接上：run 日志里明明白白是 `find_jobs failed` + 那句报错 + `run_end failed`。在此之前同样的失败只会表现为"跑了几分钟，库里啥也没有"。

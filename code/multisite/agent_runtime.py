@@ -24,6 +24,10 @@ from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
+# agent 的输出里什么字符都可能有（真机撞到过 ✅）。追踪是纯日志，**没有资格中断
+# 业务流程**——用 safe_print 而不是 print，见 services/console_utf8 的模块说明。
+from services.console_utf8 import safe_print
+
 # 一次 agent 循环最多允许的模型轮次。超过就当这一步失败——比让它烧穿上下文再
 # 报一个看不懂的错要好定位得多。
 #
@@ -128,14 +132,14 @@ def _trace(msg: BaseMessage, step: int) -> None:
     if isinstance(msg, AIMessage):
         for call in (msg.tool_calls or []):
             args = {k: str(v)[:120] for k, v in (call.get("args") or {}).items()}
-            print(f"  [{step:02d}] -> {call.get('name')}({args})", flush=True)
+            safe_print(f"  [{step:02d}] -> {call.get('name')}({args})", flush=True)
         text = msg.content if isinstance(msg.content, str) else ""
         if text.strip():
-            print(f"  [{step:02d}] 说: {text.strip()[:300]}", flush=True)
+            safe_print(f"  [{step:02d}] 说: {text.strip()[:300]}", flush=True)
     elif isinstance(msg, ToolMessage):
         body = msg.content if isinstance(msg.content, str) else str(msg.content)
         first = body.strip().splitlines()[0] if body.strip() else "(空)"
-        print(f"  [{step:02d}] <- {msg.name}: {len(body)} 字符 | {first[:160]}", flush=True)
+        safe_print(f"  [{step:02d}] <- {msg.name}: {len(body)} 字符 | {first[:160]}", flush=True)
 
 
 async def run_agent(agent, user_message: str, max_steps: int = MAX_STEPS, trace: bool = True) -> dict:
@@ -170,8 +174,8 @@ async def run_agent(agent, user_message: str, max_steps: int = MAX_STEPS, trace:
             step += 1
     if hit_step_limit(final):
         # 大声说出来。这条路径是"没干完"，不是"干完了"，而两者的返回值一模一样。
-        print(f"  [!!] agent 步数耗尽（MAX_STEPS={max_steps}），任务未完成就返回了。"
-              f"结果是部分的。", flush=True)
+        safe_print(f"  [!!] agent 步数耗尽（MAX_STEPS={max_steps}），任务未完成就返回了。"
+                   f"结果是部分的。", flush=True)
     return final
 
 
