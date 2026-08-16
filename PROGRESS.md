@@ -5,8 +5,8 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-16（v2.24.8 **m1 首次从 Dashboard 真机跑通**：16 个岗位、名额全满；顺带修掉一次日志打死整条 run 的全损） |
-| 当前版本 | 2.24.8                         |
+| 最后更新 | 2026-08-16（v2.24.9 控制台按 workflow 分页；v2.24.8 **m1 首次从 Dashboard 真机跑通**：16 个岗位、名额全满） |
+| 当前版本 | 2.24.9                         |
 
 > ⚠️ **下一轮动手前先读**：Layer 1 已按 2026-08-13 的对齐改完并真机验证。**SDK 继续 LangGraph 是用户拍板的（理由是他本人正求职 agent 开发岗位、亲手做工程本身是目标），后续会话不要因为技术理由自作主张换成 Anthropic/Codex SDK。** 完整取舍见 `DECISION.md` 三条：「Layer 1 的导航/找入口/选岗交给 agent 自主决策」「选岗结果用 record_job 边找边落袋」「提交防线从不给工具改成点击工具自己拒绝」。
 
@@ -30,19 +30,6 @@
 
 **优先建议**：先只谈"为什么要安卓"，别先谈"怎么实现"。
 
-### 🧩 WorkflowPanel 参数堆在一起，应该改成分页（2026-08-16 用户提出）
-
-`code/dashboard/frontend/src/components/workflow/WorkflowPanel.tsx`（DevLabel 名 `WorkflowPanel`，
-用户口中的 "workflow control"）现在把 **W1 投递参数 + W2 检查参数 + M1 选岗参数 + 运行时开关 + 5 个
-动作按钮**全部竖着堆在一张卡片里，用分隔线隔开。M1 组是 v2.24.7 刚加的，加完就到了不可读的长度。
-
-**要做的**：按 workflow 分页（W1 / W2 / M1），每页只显示自己的参数和自己的动作按钮。
-
-**动手前要定的**（别自作主张）：
-1. `headless` / `debug` 是三条流程共用的运行时开关，放在 tab 外面常驻，还是每个 tab 各一份？
-2. 「W1 → W2 连跑」这个按钮属于哪一页（它跨两条流程）？
-3. 切 tab 时未保存的参数编辑要不要保留（现在是同一组 state，拆页后容易切一下就丢）。
-4. 各页的「设为默认」（`renderSaveDefault`）逻辑不变，只是位置跟着走。
 
 ### 🔌 大模型统一入口在哪 + 设置页「模型」下拉是坏的（2026-08-16 查证，**bug 未修**）
 
@@ -332,6 +319,11 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 
 ## 已完成
 
+- **WorkflowPanel 按 workflow 分页**（2026-08-16，v2.24.9，前端 5 个测试文件绿、build 绿）
+  - **起因**：M1 组加完，控制台把 W1/W2/M1 三组参数 + 运行时开关 + 5 个按钮竖着堆在一张卡片里，长到读不下去（用户提出）。
+  - **交付**：tab 栏（W1 投递 / W2 检查 / M1 选岗），每页只显示自己的参数、自己的「设为默认」和自己的触发按钮；抽出 `ActionButton` 让四个动作按钮的样式只写一份。
+  - **四条待定的结论**（用户拍板）：①`headless`/`debug` **留在 tab 外常驻**——它们描述的是浏览器怎么跑，不是某条流程的参数，各 tab 一份会出现"在 W1 页关了、切到 M1 又是开的"，而真正传给队列的只有一个值；②「⚡W1+W2」「中止」「清除缓存」同理留在常驻区（跨流程动作），W3「发送已批准回复」因为没有参数也放这里；③**切 tab 保留正在编辑的值**——state 全在 panel 顶层，所以这是"不做事"换来的，正因如此特别容易被以后某次重构无声破坏，专门加了测试守；④「设为默认」逻辑不变，位置跟着各 tab 走。
+  - **测试**：`WorkflowPanel.tabs.test.tsx` 4 例（一次只显示一条流程 / 切 tab / 切走再切回不丢编辑 / 运行时开关每页都在），三处变异验证全部变红。**顺带踩到一个**：vitest 没开 `globals`，RTL 的自动 cleanup 不生效，多次 render 累积后症状是 "Found multiple elements" 而不是断言失败——很容易误诊成选择器写错，实际要显式 `afterEach(cleanup)`。
 - **m1 首次从 Dashboard 跑通（16 个岗位，名额全满）+ 修掉一次全损**（2026-08-16，v2.24.8，pytest 全量绿 EXIT=0（+6），build 绿）
   - **第一次跑：全损。** agent 正常跑了十几步、已 `record_job` 记下 8 个岗位，然后整条 run 失败、库里一条没有。根因是**追踪日志的一句 `print` 打死了整条 run**：agent 说了句带 ✅ 的话 → `UnicodeEncodeError`（GBK stdout）→ 异常冒泡打死 `find_jobs` → 下游 `write_pending_jobs` 从没执行。`scripts/run_layer1.py` 一直有 `stdout.reconfigure(utf-8)`，**而 Dashboard 走的是 uvicorn 进程、拿不到那一行**——同一件事两份实现且其中一份漏了。详见 `PITFALLS.md`「追踪日志的一句 print 能打死整条 run」。
   - **两道修复**：①进程级编码修复收敛到 `services/console_utf8.force_utf8_stdout()`，CLI 与 uvicorn 共用；②agent 追踪改 `safe_print`（写不出去就退化，绝不抛）——**这是 fail fast 的一个刻意例外**，理由见 `DECISION.md` 对应条目（吞的是日志自身的失败，不是业务失败）。顺带修掉 `/api/workflow/queue/batch` 里第三份手抄的 workflow 白名单。

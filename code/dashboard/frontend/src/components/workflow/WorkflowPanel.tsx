@@ -33,6 +33,9 @@ export default function WorkflowPanel() {
   const [m1Site, setM1Site] = useState('')
   const [m1SearchUrl, setM1SearchUrl] = useState('')
   const [m1MaxPages, setM1MaxPages] = useState(8)
+  // 参数按 workflow 分页，但 state 全部留在这一层——切 tab 因此**天然**保住正在
+  // 编辑的值（把它们下放进各 tab 子组件才会丢，而那种丢法没人会当成 bug）。
+  const [tab, setTab] = useState<DefaultableWorkflow>('w1')
   const m1Issues = checkM1Form(m1Site, m1SearchUrl)
 
   // Backfill from resolved Layer-3 defaults (config.yaml < user_settings.yaml) so
@@ -269,134 +272,158 @@ export default function WorkflowPanel() {
         <p className="mb-4 rounded-lg bg-signal-red/10 px-3 py-2 text-xs text-signal-red">{error}</p>
       )}
 
-      {/* W1 group */}
-      <div className="mb-3 flex items-center gap-2">
-        <GroupHeader wf="w1" title={'\u6295\u9012\u53c2\u6570'} inline />
-        {renderSaveDefault('w1')}
+      {/* Tab bar. 一次只看一条流程的参数——三组堆在一起时这张卡片长到读不下去。 */}
+      <div className="mb-4 flex gap-1.5">
+        {PANEL_TABS.map((t) => {
+          const active = tab === t.id
+          return (
+            <button
+              key={t.id}
+              type="button"
+              data-tab={t.id}
+              onClick={() => setTab(t.id)}
+              className={`flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm transition ${
+                active ? 'bg-bg-card2 text-text-1' : 'text-text-3 hover:bg-white/[0.04] hover:text-text-2'
+              }`}
+              style={active ? { border: '1px solid rgba(255,255,255,0.10)' } : undefined}
+            >
+              <span className={`rounded font-mono text-[11px] font-bold px-1.5 py-0.5 ${GROUP_CLS[t.id]}`}>
+                {t.badge}
+              </span>
+              <span>{t.title}</span>
+            </button>
+          )
+        })}
       </div>
-      <div className="space-y-2.5">
-        <FieldNum label="score_threshold" value={scoreThreshold} onChange={setScoreThreshold} min={0} max={100} />
-        <FieldNum label={'max_cards\uff080=\u7528\u9ed8\u8ba4\uff09'} value={applyLimit} onChange={setApplyLimit} min={0} max={100} />
-        <FieldToggle label="dry_run" checked={dryRun} onChange={setDryRun} />
-        <FieldToggle label={'\u81ea\u5b9a\u4e49\u641c\u7d22 URL'} checked={customUrlEnabled} onChange={setCustomUrlEnabled} />
-        {customUrlEnabled && (
-          <div className="space-y-2 pl-1">
-            <input
-              type="text"
-              value={customUrl}
-              onChange={e => setCustomUrl(e.target.value)}
-              placeholder={'https://www.zhipin.com/web/geek/jobs?...'}
-              className="w-full rounded-lg bg-bg-card2 px-3 py-1.5 font-mono text-xs text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue"
-              style={{ border: '1px solid rgba(255,255,255,0.08)' }}
-            />
-            {urlHistory.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {urlHistory.map((u, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setCustomUrl(u)}
-                    className="max-w-xs truncate rounded-full bg-bg-card2 px-2 py-0.5 font-mono text-xs text-text-3 transition hover:bg-bg-hover hover:text-text-1"
-                    title={u}
-                  >
-                    {u.length > 45 ? u.slice(0, 42) + '\u2026' : u}
-                  </button>
-                ))}
+
+      {tab === 'w1' && (
+        <div>
+          <div className="mb-3 flex items-center gap-2">
+            <GroupHeader wf="w1" title={'\u6295\u9012\u53c2\u6570'} inline />
+            {renderSaveDefault('w1')}
+          </div>
+          <div className="space-y-2.5">
+            <FieldNum label="score_threshold" value={scoreThreshold} onChange={setScoreThreshold} min={0} max={100} />
+            <FieldNum label={'max_cards\uff080=\u7528\u9ed8\u8ba4\uff09'} value={applyLimit} onChange={setApplyLimit} min={0} max={100} />
+            <FieldToggle label="dry_run" checked={dryRun} onChange={setDryRun} />
+            <FieldToggle label={'\u81ea\u5b9a\u4e49\u641c\u7d22 URL'} checked={customUrlEnabled} onChange={setCustomUrlEnabled} />
+            {customUrlEnabled && (
+              <div className="space-y-2 pl-1">
+                <input
+                  type="text"
+                  value={customUrl}
+                  onChange={e => setCustomUrl(e.target.value)}
+                  placeholder={'https://www.zhipin.com/web/geek/jobs?...'}
+                  className="w-full rounded-lg bg-bg-card2 px-3 py-1.5 font-mono text-xs text-text-1 focus:outline-none focus:ring-1 focus:ring-signal-blue"
+                  style={{ border: '1px solid rgba(255,255,255,0.08)' }}
+                />
+                {urlHistory.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {urlHistory.map((u, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setCustomUrl(u)}
+                        className="max-w-xs truncate rounded-full bg-bg-card2 px-2 py-0.5 font-mono text-xs text-text-3 transition hover:bg-bg-hover hover:text-text-1"
+                        title={u}
+                      >
+                        {u.length > 45 ? u.slice(0, 42) + '\u2026' : u}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
-      </div>
+          <div className="mt-4">
+            <ActionButton
+              onClick={() => void handleApply()}
+              disabled={disabled}
+              dot="#0a84ff"
+              label={pending === 'apply' ? '\u6295\u9012\u4e2d\u2026' : '\u5f00\u59cb\u6295\u9012'}
+            />
+          </div>
+        </div>
+      )}
+
+      {tab === 'w2' && (
+        <div>
+          <div className="flex items-center gap-2">
+            <GroupHeader wf="w2" title={'\u68c0\u67e5\u53c2\u6570'} inline />
+            {checkInterval > 0 && (
+              <span className="rounded-full bg-signal-blue/15 px-2 py-0.5 text-xs text-signal-bright">
+                {'\u6bcf '}{checkInterval}{' \u5206\u81ea\u52a8\u626b\u63cf'}
+              </span>
+            )}
+            {renderSaveDefault('w2')}
+          </div>
+          <div className="mt-3 space-y-2.5">
+            <FieldNum label="max_conversations" value={maxConversations} onChange={setMaxConversations} min={1} max={200} />
+            <FieldNum label="no_response_days" value={days} onChange={setDays} min={1} max={90} />
+            <FieldNum label={'auto_interval\uff08\u5206\uff0c0=\u5173\uff09'} value={checkInterval} onChange={setCheckInterval} min={0} max={240} />
+          </div>
+          <div className="mt-4">
+            <ActionButton
+              onClick={() => void handleCheck()}
+              disabled={disabled}
+              dot="#bf5af2"
+              label={pending === 'check' ? '\u626b\u63cf\u4e2d\u2026' : '\u626b\u63cf\u56de\u590d'}
+            />
+          </div>
+        </div>
+      )}
+
+      {tab === 'm1' && (
+        <div>
+          {/* 多站点选岗（Checkpoint 1）。对外零副作用：只浏览 + 写自己的审批队列。 */}
+          <div className="flex items-center gap-2">
+            <GroupHeader wf="m1" title={'\u9009\u5c97\u53c2\u6570'} inline />
+            {renderSaveDefault('m1')}
+          </div>
+          <div className="mt-3 space-y-2.5">
+            <FieldText label={'\u7ad9\u70b9\u6807\u8bc6'} value={m1Site} onChange={setM1Site} placeholder="bambulab" />
+            <FieldText
+              label={'\u5165\u53e3\u9875 URL'}
+              value={m1SearchUrl}
+              onChange={setM1SearchUrl}
+              placeholder="https://xxx.jobs.feishu.cn/campus/"
+            />
+            <FieldNum label="max_pages" value={m1MaxPages} onChange={setM1MaxPages} min={1} max={30} />
+            <p className="text-xs text-text-3">{'\u5165\u53e3\u9875\u586b\u62db\u8058\u9996\u9875\uff0c\u522b\u5e26\u7b5b\u9009\u53c2\u6570\u2014\u2014\u7b5b\u9009\u6761\u4ef6\u7531 profile \u7684\u6c42\u804c\u504f\u597d\u8868\u8fbe\uff0cagent \u81ea\u5df1\u53bb\u9875\u9762\u4e0a\u627e'}</p>
+            {m1Issues.warning && (
+              <p className="rounded-lg bg-signal-amber/10 px-3 py-2 text-xs text-signal-amber">{m1Issues.warning}</p>
+            )}
+          </div>
+          <div className="mt-4">
+            <ActionButton
+              onClick={() => void handleSelect()}
+              disabled={disabled || Boolean(m1Issues.blocking)}
+              dot="#ff9f0a"
+              title={m1Issues.blocking ?? '\u6309\u6c42\u804c\u504f\u597d\u5728\u76ee\u6807\u7ad9\u70b9\u81ea\u4e3b\u9009\u5c97\uff0c\u4ea7\u51fa\u5f85\u5ba1\u6279\u5019\u9009\uff08\u4e0d\u6295\u9012\u3001\u4e0d\u4e0a\u4f20\uff09'}
+              label={pending === 'select' ? '\u9009\u5c97\u4e2d\u2026' : '\u5f00\u59cb\u9009\u5c97'}
+            />
+          </div>
+        </div>
+      )}
 
       <div className="my-4 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
 
-      {/* W2 group */}
-      <div className="flex items-center gap-2">
-        <GroupHeader wf="w2" title={'\u68c0\u67e5\u53c2\u6570'} inline />
-        {checkInterval > 0 && (
-          <span className="rounded-full bg-signal-blue/15 px-2 py-0.5 text-xs text-signal-bright">
-            {'\u6bcf '}{checkInterval}{' \u5206\u81ea\u52a8\u626b\u63cf'}
-          </span>
-        )}
-        {renderSaveDefault('w2')}
-      </div>
-      <div className="mt-3 space-y-2.5">
-        <FieldNum label="max_conversations" value={maxConversations} onChange={setMaxConversations} min={1} max={200} />
-        <FieldNum label="no_response_days" value={days} onChange={setDays} min={1} max={90} />
-        <FieldNum label={'auto_interval\uff08\u5206\uff0c0=\u5173\uff09'} value={checkInterval} onChange={setCheckInterval} min={0} max={240} />
-      </div>
-
-      <div className="my-4 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
-
-      {/* M1 group -- multi-site job selection (Checkpoint 1). Zero outward side
-          effects: it only browses and writes our own approval queue. */}
-      <div className="flex items-center gap-2">
-        <GroupHeader wf="m1" title={'\u9009\u5c97\u53c2\u6570'} inline />
-        {renderSaveDefault('m1')}
-      </div>
-      <div className="mt-3 space-y-2.5">
-        <FieldText label={'\u7ad9\u70b9\u6807\u8bc6'} value={m1Site} onChange={setM1Site} placeholder="bambulab" />
-        <FieldText
-          label={'\u5165\u53e3\u9875 URL'}
-          value={m1SearchUrl}
-          onChange={setM1SearchUrl}
-          placeholder="https://xxx.jobs.feishu.cn/campus/"
-        />
-        <FieldNum label="max_pages" value={m1MaxPages} onChange={setM1MaxPages} min={1} max={30} />
-        <p className="text-xs text-text-3">{'\u5165\u53e3\u9875\u586b\u62db\u8058\u9996\u9875\uff0c\u522b\u5e26\u7b5b\u9009\u53c2\u6570\u2014\u2014\u7b5b\u9009\u6761\u4ef6\u7531 profile \u7684\u6c42\u804c\u504f\u597d\u8868\u8fbe\uff0cagent \u81ea\u5df1\u53bb\u9875\u9762\u4e0a\u627e'}</p>
-        {m1Issues.warning && (
-          <p className="rounded-lg bg-signal-amber/10 px-3 py-2 text-xs text-signal-amber">{m1Issues.warning}</p>
-        )}
-      </div>
-
-      <div className="my-4 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
-
-      {/* Runtime */}
+      {/* 常驻区：三条流程共用的运行时开关 + 跨流程动作。
+          headless/debug 刻意不进 tab——它们描述的是浏览器怎么跑，不是某条流程的参数，
+          各 tab 一份会出现"在 W1 页关了、切到 M1 又是开的"，而真正传给队列的只有一个值。 */}
       <div className="flex flex-wrap gap-x-6 gap-y-2.5">
         <FieldToggle label={'headless'} checked={headless} onChange={setHeadless} compact />
         <FieldToggle label={'debug'} checked={debug} onChange={setDebug} compact />
       </div>
 
-      {/* Actions */}
       <div className="mt-5 flex flex-wrap items-center gap-2.5">
-        <button
-          type="button"
-          onClick={() => void handleApply()}
-          disabled={disabled}
-          className="inline-flex items-center gap-2 rounded-[10px] border border-border-subtle bg-bg-card2 px-4 py-2 text-sm text-text-1 transition hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <span className="h-1.5 w-1.5 rounded-full bg-signal-blue" style={{ boxShadow: '0 0 8px #0a84ff' }} />
-          {pending === 'apply' ? '\u6295\u9012\u4e2d\u2026' : '\u5f00\u59cb\u6295\u9012'}
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleCheck()}
-          disabled={disabled}
-          className="inline-flex items-center gap-2 rounded-[10px] border border-border-subtle bg-bg-card2 px-4 py-2 text-sm text-text-1 transition hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <span className="h-1.5 w-1.5 rounded-full bg-signal-purple" style={{ boxShadow: '0 0 8px #bf5af2' }} />
-          {pending === 'check' ? '\u626b\u63cf\u4e2d\u2026' : '\u626b\u63cf\u56de\u590d'}
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleSelect()}
-          disabled={disabled || Boolean(m1Issues.blocking)}
-          title={m1Issues.blocking ?? '\u6309\u6c42\u804c\u504f\u597d\u5728\u76ee\u6807\u7ad9\u70b9\u81ea\u4e3b\u9009\u5c97\uff0c\u4ea7\u51fa\u5f85\u5ba1\u6279\u5019\u9009\uff08\u4e0d\u6295\u9012\u3001\u4e0d\u4e0a\u4f20\uff09'}
-          className="inline-flex items-center gap-2 rounded-[10px] border border-border-subtle bg-bg-card2 px-4 py-2 text-sm text-text-1 transition hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#ff9f0a', boxShadow: '0 0 8px #ff9f0a' }} />
-          {pending === 'select' ? '\u9009\u5c97\u4e2d\u2026' : '\u5f00\u59cb\u9009\u5c97'}
-        </button>
-        <button
-          type="button"
+        <ActionButton
           onClick={() => void handleReply()}
           disabled={disabled}
-          className="inline-flex items-center gap-2 rounded-[10px] border border-border-subtle bg-bg-card2 px-4 py-2 text-sm text-text-1 transition hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+          dot="#30d6c0"
           title={'\u53d1\u9001\u6240\u6709\u5df2\u6279\u51c6\u7684 HR \u56de\u590d\uff08\u641c\u7d22\u5b9a\u4f4d + \u6295\u9012\u9a8c\u8bc1\uff09'}
-        >
-          <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#30d6c0', boxShadow: '0 0 8px #30d6c0' }} />
-          {pending === 'reply' ? '\u53d1\u9001\u4e2d\u2026' : '\u53d1\u9001\u5df2\u6279\u51c6\u56de\u590d'}
-        </button>
+          label={pending === 'reply' ? '\u53d1\u9001\u4e2d\u2026' : '\u53d1\u9001\u5df2\u6279\u51c6\u56de\u590d'}
+        />
         <button
           type="button"
           onClick={() => void handleAll()}
@@ -430,6 +457,40 @@ export default function WorkflowPanel() {
         </button>
       </div>
     </div>
+  )
+}
+
+const PANEL_TABS = [
+  { id: 'w1' as const, badge: 'W1', title: '\u6295\u9012' },
+  { id: 'w2' as const, badge: 'W2', title: '\u68c0\u67e5' },
+  { id: 'm1' as const, badge: 'M1', title: '\u9009\u5c97' },
+]
+
+/** 带信号点的动作按钮。四处共用，样式只写一份。 */
+function ActionButton({
+  onClick,
+  disabled,
+  dot,
+  label,
+  title,
+}: {
+  onClick: () => void
+  disabled?: boolean
+  dot: string
+  label: string
+  title?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="inline-flex items-center gap-2 rounded-[10px] border border-border-subtle bg-bg-card2 px-4 py-2 text-sm text-text-1 transition hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: dot, boxShadow: `0 0 8px ${dot}` }} />
+      {label}
+    </button>
   )
 }
 
