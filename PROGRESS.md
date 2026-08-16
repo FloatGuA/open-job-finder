@@ -34,20 +34,41 @@ agent 推理的过程。」
 - 💡 数据已经在手上：`run_agent` 用 `astream` 逐条拿到每次模型轮次（工具名 + 参数 + 结果 + agent 说的话），
   现在只是 `print` 掉。要做的是**把它送进 RunLogger**，不是新造一条数据源
 
-**动手前要定的**（别自作主张）：
-1. **agent 的每一步挂在树的哪一层？** `RunLogger.log_tool(step, tool, …)` 的 step/tool 两级天然对得上
-   （step=`find_jobs`，tool=`take_snapshot`/`click`/`record_job`），但前端 `InstanceDetail` 是按
-   `SKELETON` 的固定 tool 列表渲染的，动态 tool 名进去会怎样要先看。
-2. **agent 的「说」放哪？** 它不是工具调用（`AIMessage.content` 的自由文本，正是「推理过程」本身），
-   `log_tool` 塞不进去。候选：business event（`logger.log(event=...)`，但那条通道 SSE 只在 debug 时推）／
-   一种伪 tool（`tool="reasoning"`）／新事件类型。**这条决定了 UI 长什么样**，得先定。
-3. **快照怎么截？** 每次 `take_snapshot` 返回 10KB+，一次 run 几十步 = 几百 KB 全落 JSONL。
-   截断到多少、截头还是截尾（uid 在行首、内容在行尾）、要不要只在失败时留全文。
-4. **实时性与量**：一次 run 几十条 SSE 事件，前端要能滚动跟随且不卡；`_BULKY_TOOLS` 的裁剪只作用于
-   喂给模型的上下文，不影响日志，两者别搞混。
-5. **m2 一起做吗**：`open_application` 内部同样是 agent 循环，结构相同；但 m2 有真实副作用，
-   出问题的代价更高，可视化的价值也更高。
+**形态已定（2026-08-16 用户给的方向）——三层地铁路线图 + agent 思考**：
 
+「m1/m2 不是结构化定死的 workflow，但 **LangGraph 这种状态图也是很结构化的步骤**，只是到 ReAct
+循环里 agent 做什么是不确定的。agent 用什么 tool 肯定是看情况，**这里用什么 tool 和 agent 的
+『说』这个思考过程天然同步**，可以做成地铁路线图（总体 workflow 到哪了 / LangGraph 到哪了 /
+内层循环到哪了）+ Agent 思考可视化。」
+
+拆成三层定位（每层的确定性不同，所以渲染方式也不同）：
+
+| 层 | 内容 | 确定性 | 渲染 |
+|----|------|--------|------|
+| 1 总体 workflow | m1 选岗 / m2 填表 | 固定 | 地铁线（哪条线在跑） |
+| 2 LangGraph 节点 | `ensure_ready` → `find_jobs` → `write_pending_jobs`（m2 多三个） | **固定，图定义就是权威源** | 地铁站（走到第几站、每站耗时/结果）|
+| 3 ReAct 内层循环 | agent 每一轮：思考 + 调哪个 tool + 结果 | 不确定，每次不同 | 时间线，流式追加 |
+
+**第 2 层是这次方向调整的关键**：我原先记的「m1 没有清晰 workflow」只对了一半——不确定的只有第 3 层，
+**第 1、2 层完全是结构化的，而且 LangGraph 的图定义就是那份权威骨架**（不像 W1/W2 的 `SKELETON` 要
+手维护、会漂移）。所以第 2 层反而比 W1/W2 更可靠：骨架能从 `build_graph` 的 stages 表直接导出。
+
+**已定的**：
+- ✅ **agent 的「说」跟 tool call 绑成一条**，不拆两种事件——它们来自同一个 `AIMessage`
+  （`content` 是思考、`tool_calls` 是动作），本来就同步发生。原问题 2 由此解决。
+- ✅ **m2 一起做**（原问题 5）。`open_application` 内部同样是 ReAct 循环，结构相同；m2 有真实副作用，
+  可视化价值更高。
+
+**仍待定**：
+1. **第 3 层挂在树的哪一层？** `RunLogger.log_tool(step, tool, …)` 的两级天然对得上（step=LangGraph
+   节点名，tool=`take_snapshot`/`click`/`record_job`），但前端 `InstanceDetail` 是按 `SKELETON` 的
+   固定 tool 列表渲染的，动态 tool 名进去会怎样要先看。
+3. **a11y 快照怎么截**（澄清：指 `take_snapshot` 返回的**可访问性树文本**，agent 的"眼睛"，一次 10KB+；
+   **不是** `_capture_form_screenshot` 那张给审批人看的整页 PNG，后者已经在存）。要看"agent 当时看到
+   了什么"就得存，但一次 run 几十次 = 几百 KB。截多少、截头还是截尾（uid 在行首、内容在行尾）、
+   要不要只在失败时留全文。
+4. **实时性与量**：一次 run 几十条 SSE 事件，前端要能滚动跟随且不卡；注意 `_BULKY_TOOLS` 的裁剪只作用
+   于喂给模型的上下文，不影响日志，两者别搞混。
 **参考**：`agent_runtime.run_agent` / `_trace`（数据源）、`pipeline/run_logger.py`（落点）、
 `WorkflowTrack.tsx` 的 `SKELETON`/`InstanceDetail`（渲染）、`multisite/observability.py`（现有接线）。
 ### 📱 把这套流程搬到安卓模拟器里跑（2026-08-16 用户提出，**只记需求，未对齐**）
