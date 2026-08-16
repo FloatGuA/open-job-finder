@@ -337,3 +337,35 @@ UnicodeEncodeError: 'gbk' codec can't encode character '\u2705'
 **顺带一个同源问题**：存档文件名原本只带简历名字，而真实数据里有两份都叫「游戏岗版」——一旦两份都导出就再也分不清谁是谁。现已改为 `{ts}_{slug}_{name}.pdf`；老存档按名字兜底匹配，但**名字重复时直接放弃**（宁可报"没有"让人重导一次，也不要猜错一份发进企业系统）。
 
 **已由 `tests/test_resume_pdf_status.py`（7 例）与 `tests/test_m2_resume_gate.py`（5 例）守门。**
+
+---
+
+## 2026-08-17 新增（Checkpoint 2 表单截图）
+
+## `fullPage: true` 拍出来仍然只有视口那么高——因为在滚的不是文档
+
+**现象**：Checkpoint 2 的表单截图三张尺寸一模一样（1209×1269），内容在「邮箱」处齐刷刷截断，
+审批人要核对的「学校名称」「起止时间」一个都看不见。代码里 `fullPage=True` 明明传了。
+
+**真因**：`fullPage` 量的是 `max(documentElement.scrollHeight, body.scrollHeight)`
+（chrome-devtools-mcp → Puppeteer → CDP 都是这个口径）。而这个站把整张表单放进了一个
+内部滚动容器（`section.atsx-layout`，`overflow-y:auto`，clientHeight 1269 / scrollHeight 2403），
+`body` 被写死 `height:1269px` ——**文档本身不滚动，所以"整页"就等于视口**。参数是对的，
+量的对象不对。SPA 里 `html,body{height:100%;overflow:hidden}` + 内层 scroller 是极常见布局，
+所以这不是某个站的怪癖。
+
+**为什么骗了这么久**：截图看起来完全正常——顶部是页头、底部是「提交简历」按钮栏（`position:fixed`
+的悬浮条正好停在视口底部），一张"到底了"的完整页面。没人会去数它高多少。
+
+**判据**：同一份代码对**不同页面**拍出**完全相同的像素高度**＝它拍的是视口，不是内容。
+一行 `evaluate_script` 就能定死：`documentElement.scrollHeight` 是否等于 `window.innerHeight`。
+
+**正确做法**：截图前临时注入样式，把 `html,body` 和**所有真正在滚的容器**
+（判据是 `overflowY ∈ {auto,scroll,overlay}` 且 `scrollHeight > clientHeight`，
+**不是**写死某个 class 名）解成 `height:auto;overflow:visible`，让文档自己变长，再 `fullPage`；
+`finally` 里一定还原。顺带把 `position:fixed` 改 `absolute`——否则整页截图里那种悬浮条会停在
+原视口底部，正好压掉一整行字段（真机确认它盖住了「您从哪些渠道了解到该岗位招聘信息？」）。
+
+**连带的判据**：解锁失败就**别拍**。半截图比没有截图更糟——审批人看到一张图会以为
+"表单就这些字段"，而真正要核对的正好在被裁掉的下半页。已由
+`tests/test_form_screenshot.py::TestNoMisleadingHalfShot` 守门。

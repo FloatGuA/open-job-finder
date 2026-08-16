@@ -40,6 +40,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from collections import Counter
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -336,6 +337,95 @@ def _dump_debug_snapshot(tag: str, snapshot_text: str) -> None:
     字符串猜页面长什么样——上一次真机排查就是因为没有这个才多跑了一轮。"""
     _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     (_DEBUG_DIR / f"{tag}.txt").write_text(snapshot_text, encoding="utf-8")
+
+
+_SCREENSHOT_DIR = Path(__file__).resolve().parent.parent / "data" / "multisite_screenshots"
+
+# 注入的样式表 id 和打标属性名：解锁和还原必须用同一份名字，散成两处必漂移。
+_UNLOCK_NAMES = {
+    "style": "__ojf_capture_unlock__",
+    "mark": "data-ojf-capture-unlock",
+    "fixed": "data-ojf-capture-fixed",
+}
+
+# 判据是"谁在滚"（overflowY + scrollHeight > clientHeight），不是某个站点的 class 名。
+# 拓竹那个容器叫 `section.atsx-layout`，写死它等于只修好这一个站。
+# position:fixed 一并落到文档流：整页截图里那种"提交"悬浮条会停在原视口底部，
+# 正好压住一整行字段（真机看到它盖掉了「您从哪些渠道了解到该岗位招聘信息？」）。
+_UNLOCK_JS = """() => {
+  document.querySelectorAll('*').forEach(el => {
+    const cs = getComputedStyle(el);
+    const oy = cs.overflowY;
+    if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay')
+        && el.scrollHeight > el.clientHeight + 20) {
+      el.setAttribute('%(mark)s', '1');
+    }
+    if (cs.position === 'fixed') el.setAttribute('%(fixed)s', '1');
+  });
+  const st = document.createElement('style');
+  st.id = '%(style)s';
+  st.textContent =
+    'html,body{height:auto!important;max-height:none!important;overflow:visible!important}'
+    + '[%(mark)s]{height:auto!important;max-height:none!important;overflow:visible!important}'
+    + '[%(fixed)s]{position:absolute!important}';
+  document.head.appendChild(st);
+  return {docScrollHeight: document.documentElement.scrollHeight};
+}""" % _UNLOCK_NAMES
+
+_RESTORE_JS = """() => {
+  const st = document.getElementById('%(style)s');
+  if (st) st.remove();
+  document.querySelectorAll('[%(mark)s],[%(fixed)s]').forEach(el => {
+    el.removeAttribute('%(mark)s');
+    el.removeAttribute('%(fixed)s');
+  });
+  return {docScrollHeight: document.documentElement.scrollHeight};
+}""" % _UNLOCK_NAMES
+
+
+async def capture_form_screenshot(tools, dest_dir: Path = _SCREENSHOT_DIR) -> str:
+    """给当前表单拍一张**完整**截图，返回存进 dest_dir 的文件名。
+
+    **代码拍，不是 agent 拍。** DeepSeek 没有视觉，`take_screenshot` 也刻意不在
+    agent 的工具白名单里——这张图是给**审批人**看的：字段名本身常常不足以判断
+    该填什么（「学校名称」是问本科还是硕士？），得看它在页面上处于哪个分区。
+
+    **`fullPage` 一个人不够。** 它量的是 `documentElement/body.scrollHeight`；
+    站点把表单放进内部滚动容器时（拓竹 2026-08-17：容器 clientHeight 1269 /
+    scrollHeight 2403，而文档本身恒等于视口高度），fullPage 拍出来就是视口截图，
+    只有上半页——而审批人真正要核对的「学校名称」「起止时间」全在下半页。
+    所以先临时解锁页面上所有真正在滚的容器，让文档自己变长，再 fullPage。
+
+    改动是临时的，`finally` 里一定还原：留在页面上会让之后的 agent 操作面对一个
+    变形的表单。解锁失败则整个放弃这次截图——半截图比没有更糟，它会让审批人以为
+    "表单就这些字段"。截图失败不阻断流程：为一张辅助图丢掉整条待审批记录不划算。
+
+    先写系统临时目录再搬——chrome-devtools-mcp 没协商 MCP roots 时把文件写限制在
+    OS temp，直接给项目内路径会被它自己拒掉（`upload_file` 已经栽过一次）。
+    """
+    try:
+        evaluate = chrome_mcp_client.get_tool(tools, "evaluate_script")
+        shot_tool = chrome_mcp_client.get_tool(tools, "take_screenshot")
+        tmp = Path(tempfile.gettempdir()) / f"ojf_form_{os.getpid()}_{int(time.time())}.png"
+
+        await evaluate.ainvoke({"function": _UNLOCK_JS})
+        try:
+            await shot_tool.ainvoke({"filePath": str(tmp), "fullPage": True, "format": "png"})
+        finally:
+            await evaluate.ainvoke({"function": _RESTORE_JS})
+
+        if not tmp.is_file():
+            return ""
+        dest_dir = Path(dest_dir)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{time.strftime('%Y%m%d_%H%M%S')}_form.png"
+        shutil.move(str(tmp), str(dest_dir / name))
+        return name
+    except Exception as exc:  # noqa: BLE001 — 见 docstring：截图失败不该毁掉整次 run
+        # safe_print 而不是 print：异常消息的内容不受我们控制（其余几处打的
+        # 都是固定文案 + 整数，不会有写不出去的字符）。
+        safe_print(f"[layer1] 表单截图失败（不影响落库）：{exc}", flush=True)
+        return ""
 
 
 def _looks_blank(snapshot_text: str) -> bool:
@@ -799,40 +889,6 @@ def build_graph(
         _latest_snapshot["text"] = text
         return text
 
-    async def _capture_form_screenshot() -> str:
-        """给当前表单拍一张整页截图，返回存到 data/multisite_screenshots/ 的文件名。
-
-        **代码拍，不是 agent 拍。** DeepSeek 没有视觉，`take_screenshot` 也刻意不在
-        agent 的工具白名单里——这张图是给**审批人**看的：字段名本身常常不足以判断
-        该填什么（「学校名称」是问本科还是硕士？），得看它在页面上处于哪个分区。
-
-        `fullPage=True`：申请表通常比可视区长，只拍视口等于把上下文裁掉一半。
-
-        先写系统临时目录再搬——chrome-devtools-mcp 没协商 MCP roots 时把文件写限制在
-        OS temp，直接给项目内路径会被它自己拒掉（`upload_file` 已经栽过一次）。
-        失败不阻断流程：截图是辅助信息，为它丢掉整条待审批记录不划算，返回空串即可。
-        """
-        import shutil
-        import tempfile
-        import time as _time
-
-        try:
-            shot_tool = chrome_mcp_client.get_tool(tools, "take_screenshot")
-            tmp = Path(tempfile.gettempdir()) / f"ojf_form_{os.getpid()}_{int(_time.time())}.png"
-            await shot_tool.ainvoke({"filePath": str(tmp), "fullPage": True, "format": "png"})
-            if not tmp.is_file():
-                return ""
-            dest_dir = Path(__file__).resolve().parent.parent / "data" / "multisite_screenshots"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            name = f"{_time.strftime('%Y%m%d_%H%M%S')}_form.png"
-            shutil.move(str(tmp), str(dest_dir / name))
-            return name
-        except Exception as exc:  # noqa: BLE001 — 见 docstring：截图失败不该毁掉整次 run
-            # safe_print 而不是 print：异常消息的内容不受我们控制（其余几处打的
-            # 都是固定文案 + 整数，不会有写不出去的字符）。
-            safe_print(f"[layer1] 表单截图失败（不影响落库）：{exc}", flush=True)
-            return ""
-
     def _agent_tools(passthrough: tuple) -> list:
         return build_agent_toolset(
             tools,
@@ -1018,7 +1074,7 @@ def build_graph(
             # 只是在磁盘上多堆一张带个人信息的图。
             return {"empty_elements": [], "classified_fields": [], "form_screenshot": ""}
 
-        shot = await _capture_form_screenshot()
+        shot = await capture_form_screenshot(tools)
 
         # **只把必填项交给 LLM 作答。** 这类站点会解析上传的简历自动回填，剩下还空
         # 着的多半是选填——给全部字段生成内容，产出的就是「起止时间 → "请填写您在
