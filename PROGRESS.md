@@ -12,6 +12,44 @@
 
 ## 待跟进（另开会话）
 
+### 🔭 m1/m2 要能看到 agent 每一步和它的推理过程（2026-08-16 用户提出，**待做**）
+
+用户原话：「m1 有像 w1w2 那样清晰的 workflow 吗？此外可视化做了吗？我想看到每一步的进度和
+agent 推理的过程。」
+
+**先说清楚一个结构性差异，它决定了这件事不能照抄 W1/W2**：
+
+| | W1/W2/W3 | m1/m2 |
+|---|---|---|
+| 步骤从哪来 | **代码写死**，所以有静态骨架 `SKELETON`（`w1.fetch_jd = [click_card_open_panel, read_panel_jd, …]`） | `find_jobs` / `open_application` **内部是 agent 自主循环**，点哪个筛选器、翻到第几页每次都不同 |
+| 骨架的用途 | 「预期步骤 vs 实际步骤」对照——哪步没出现就是没跑到 | **对 agent 没有意义**：没有预期步骤这回事 |
+| 该用什么渲染 | 骨架式（固定树） | **时间线式**（按发生顺序流式追加） |
+
+所以 `SKELETON`/`LOOP_STEPS` 对 m1/m2 留空是对的（v2.24.7 的刻意选择），**但不等于不该可视化**——
+要的是另一种渲染，不是同一种渲染的补全。
+
+**现状**：
+- ✅ 图节点级已进 JSONL + SSE（`ensure_ready` / `find_jobs` / `write_pending_jobs`，带耗时与结果摘要）
+- ❌ **agent 内部几十步一条都没进**——只有 `agent_runtime._trace` 打到 uvicorn 的 stdout
+- 💡 数据已经在手上：`run_agent` 用 `astream` 逐条拿到每次模型轮次（工具名 + 参数 + 结果 + agent 说的话），
+  现在只是 `print` 掉。要做的是**把它送进 RunLogger**，不是新造一条数据源
+
+**动手前要定的**（别自作主张）：
+1. **agent 的每一步挂在树的哪一层？** `RunLogger.log_tool(step, tool, …)` 的 step/tool 两级天然对得上
+   （step=`find_jobs`，tool=`take_snapshot`/`click`/`record_job`），但前端 `InstanceDetail` 是按
+   `SKELETON` 的固定 tool 列表渲染的，动态 tool 名进去会怎样要先看。
+2. **agent 的「说」放哪？** 它不是工具调用（`AIMessage.content` 的自由文本，正是「推理过程」本身），
+   `log_tool` 塞不进去。候选：business event（`logger.log(event=...)`，但那条通道 SSE 只在 debug 时推）／
+   一种伪 tool（`tool="reasoning"`）／新事件类型。**这条决定了 UI 长什么样**，得先定。
+3. **快照怎么截？** 每次 `take_snapshot` 返回 10KB+，一次 run 几十步 = 几百 KB 全落 JSONL。
+   截断到多少、截头还是截尾（uid 在行首、内容在行尾）、要不要只在失败时留全文。
+4. **实时性与量**：一次 run 几十条 SSE 事件，前端要能滚动跟随且不卡；`_BULKY_TOOLS` 的裁剪只作用于
+   喂给模型的上下文，不影响日志，两者别搞混。
+5. **m2 一起做吗**：`open_application` 内部同样是 agent 循环，结构相同；但 m2 有真实副作用，
+   出问题的代价更高，可视化的价值也更高。
+
+**参考**：`agent_runtime.run_agent` / `_trace`（数据源）、`pipeline/run_logger.py`（落点）、
+`WorkflowTrack.tsx` 的 `SKELETON`/`InstanceDetail`（渲染）、`multisite/observability.py`（现有接线）。
 ### 📱 把这套流程搬到安卓模拟器里跑（2026-08-16 用户提出，**只记需求，未对齐**）
 
 用户原话：「mark 一下这一套流程在安卓模拟机里实现」。**细节完全未讨论**，下面只是记录动手前
