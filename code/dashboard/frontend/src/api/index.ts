@@ -96,7 +96,13 @@ export interface PendingReply {
   job_url?: string
 }
 
-export type PendingApplicationFieldKind = 'demographic' | 'open_question' | 'government_id'
+// unknown_fact = 事实性字段、但资料里没有：留空请人填。
+// 没有这一档时，它们会全部掉进 open_question，而那一档的指令是“生成一段文本”。
+export type PendingApplicationFieldKind =
+  | 'demographic'
+  | 'open_question'
+  | 'government_id'
+  | 'unknown_fact'
 
 export interface FieldCandidate {
   value: string
@@ -111,6 +117,8 @@ export interface PendingApplicationField {
   // 池里对应不止一个值时的候选（本科+硕士两段学历对一个「学校名称」框）。
   // **系统刻意不挑**——连本人都得看页面才知道填哪个。空/缺省 = 没有歧义。
   candidates?: FieldCandidate[]
+  // 页面上标了必填星号。旧记录可能没有这一列——当作必填处理（宁可多拦）。
+  required?: boolean
 }
 
 export interface PendingApplication {

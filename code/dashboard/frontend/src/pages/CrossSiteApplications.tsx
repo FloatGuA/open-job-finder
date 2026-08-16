@@ -100,12 +100,15 @@ const KIND_LABEL: Record<PendingApplicationFieldKind, string> = {
   demographic: '\u4eba\u53e3\u5b66\u5b57\u6bb5',
   open_question: '\u5f00\u653e\u95ee\u9898',
   government_id: '\u8bc1\u4ef6\u53f7\u7801',
+  unknown_fact: '\u8d44\u6599\u91cc\u6ca1\u6709',
 }
 
 const KIND_ACCENT: Record<PendingApplicationFieldKind, string> = {
   demographic: '#0a84ff',
   open_question: '#30d158',
   government_id: '#ff453a',
+  // 橙色：不是错，但要人动手。跟绿色的“已起草”分开。
+  unknown_fact: '#ff9f0a',
 }
 
 type Status = 'pending' | 'approved' | 'rejected'
@@ -920,8 +923,16 @@ function Checkpoint1() {
 // Checkpoint 2 -- field value approval (behaviour unchanged)
 // ---------------------------------------------------------------------------
 
+// 这个字段机器填不了，必须人来填。
+// 证件号：从来不代填。unknown_fact：事实性字段但资料里没有，只有本人知道。
+// **判据只写这一份**：列表徽章和批准闸共用它，否则加一档就会漏改其中一处，
+// 而那的表现是“能批准一条其实还空着必填项的申请”。
+export function needsHumanValue(f: PendingApplicationField): boolean {
+  return f.kind === 'government_id' || (f.kind === 'unknown_fact' && f.required !== false)
+}
+
 function missingGovId(fields: PendingApplicationField[]): boolean {
-  return fields.some((f) => f.kind === 'government_id' && !f.candidate_value.trim())
+  return fields.some((f) => needsHumanValue(f) && !f.candidate_value.trim())
 }
 
 function ApplicationRow({ app, active, onClick }: { app: PendingApplication; active: boolean; onClick: () => void }) {
@@ -979,7 +990,7 @@ function Checkpoint2() {
 
   const canApprove = useMemo(() => {
     if (!selected) return false
-    return selected.fields.every((f) => f.kind !== 'government_id' || (editedFields[f.field_id] ?? '').trim() !== '')
+    return selected.fields.every((f) => !needsHumanValue(f) || (editedFields[f.field_id] ?? '').trim() !== '')
   }, [selected, editedFields])
 
   async function handleApprove() {
@@ -1084,7 +1095,7 @@ function Checkpoint2() {
                 const isEmpty = !value.trim()
                 const editable = selected.status === 'pending'
                 return (
-                  <div key={f.field_id} className="rounded-xl p-3" style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${f.kind === 'government_id' && isEmpty && editable ? 'rgba(255,69,58,0.4)' : 'rgba(255,255,255,0.07)'}` }}>
+                  <div key={f.field_id} className="rounded-xl p-3" style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${needsHumanValue(f) && isEmpty && editable ? 'rgba(255,69,58,0.4)' : 'rgba(255,255,255,0.07)'}` }}>
                     <div className="mb-1.5 flex items-center gap-2">
                       <span className="text-[14px] font-medium text-text-1">{f.label}</span>
                       <span className="rounded-full px-1.5 py-px text-[11px] font-semibold" style={{ background: `${accent}26`, color: accent }}>
@@ -1096,9 +1107,9 @@ function Checkpoint2() {
                         type="text"
                         value={value}
                         onChange={(e) => setEditedFields((prev) => ({ ...prev, [f.field_id]: e.target.value }))}
-                        placeholder={f.kind === 'government_id' ? T_NEEDS_MANUAL : ''}
+                        placeholder={needsHumanValue(f) ? T_NEEDS_MANUAL : ''}
                         className="w-full rounded-lg px-3 py-1.5 text-[14px] text-white focus:outline-none"
-                        style={{ background: 'rgba(0,0,0,0.35)', border: `1px solid ${f.kind === 'government_id' && isEmpty ? 'rgba(255,69,58,0.4)' : 'rgba(255,255,255,0.1)'}` }}
+                        style={{ background: 'rgba(0,0,0,0.35)', border: `1px solid ${needsHumanValue(f) && isEmpty ? 'rgba(255,69,58,0.4)' : 'rgba(255,255,255,0.1)'}` }}
                       />
                     ) : (
                       <p className="text-[14px] text-text-2">{value || '\u2014'}</p>

@@ -21,7 +21,7 @@ DECISION.md「Layer 1 的导航/找入口/选岗交给 agent 自主决策」）�
    v2.22.1 之前是黑名单，于是 `evaluate_script`（任意 JS，一行就绕过守法点击）、
    `press_key`、`take_screenshot` 等 27 个工具全在 agent 手上，上面那条"代码强制"
    实际上是不成立的。见 DECISION.md 对应条目。
-3. government_id 类字段的候选值在 `_enforce_government_id_blank()` 里被无条件
+3. 除开放问题外，字段的候选值在 `_enforce_no_invented_values()` 里被无条件
    清空，不管 LLM 分类节点返回了什么。
 4. 整个 Layer 1 的产出只有一条 `pending_applications` 待审批记录——不做任何对外
    动作。
@@ -62,7 +62,10 @@ from services.tracker import ApplicationTracker
 #    时会直接忽略 output_schema 参数，这里改用 LangChain 原生结构化输出更可靠。
 #    这是本模块唯一游离于项目现有 LLM 路由之外的调用点，取舍见 DECISION.md。──
 
-_FieldKind = Literal["demographic", "open_question", "government_id"]
+# unknown_fact = 事实性字段（学校、城市、日期…），但已知资料里没有 → 留空请人填。
+# 没有这一档时，凡不在 personal_info 里的字段都会掉进 open_question，而
+# open_question 的指令是"生成一段候选文本"——于是机器对着事实编答案。
+_FieldKind = Literal["demographic", "open_question", "government_id", "unknown_fact"]
 
 
 class FieldClassification(BaseModel):
@@ -186,6 +189,69 @@ def _is_usable_landmark(name: str) -> bool:
     return True
 
 
+_REQUIRED_STAR = ("*", "＊")
+
+
+def _parse_rows(snapshot_text: str) -> list[dict]:
+    """把 a11y 文本快照拆成结构化行。两个解析器共用——地标判据要往前看一行
+    （见 `_accepts_landmark`），逐行流式处理做不到。"""
+    rows = []
+    for line in snapshot_text.splitlines():
+        m = _SNAPSHOT_LINE_RE.search(line)
+        if m:
+            rows.append({
+                "uid": m.group("uid"),
+                "role": m.group("role"),
+                "name": (m.group("name") or "").strip(),
+                "rest": m.group("rest") or "",
+                "indent": len(line) - len(line.lstrip()),
+            })
+    return rows
+
+
+def _has_descendant_value(rows: list[dict], i: int) -> bool:
+    """复合控件的值挂在**子节点**上：下拉框外壳 `combobox` 自己没有 value，
+    真正的值在缩进更深的那个 `textbox value="..."` 上。
+
+    真机 2026-08-17：「学校名称」页面上明明已经由简历解析填好了，外壳没有 value
+    就被判成空字段送进了 LLM——而 LLM 只能对着一个字段名编，编出来的是一句
+    「请填写您的学校名称（例如：…）」。填写说明冒充答案，还可能覆盖掉正确值。
+    """
+    indent = rows[i]["indent"]
+    for row in rows[i + 1:]:
+        if row["indent"] <= indent:
+            break
+        m = _VALUE_RE.search(row["rest"])
+        if m and m.group(1).strip():
+            return True
+    return False
+
+
+def _accepts_landmark(rows: list[dict], i: int, latched: bool) -> bool:
+    """rows[i] 这行文字能不能当"接下来那个输入框的字段名"。
+
+    真机 2026-08-17：「意向城市」下面印着一行「最多可选 2 个城市」，它比字段名
+    **更靠近**输入框，于是成了字段名——审批页上就出现了一个叫「最多可选 2 个城市」
+    的字段。它只有 9 个字，卡长度那道闸（>12 字且不是问句）根本拦不住。
+
+    区别不在长度，在**位置**：星号之后、输入框之前的文字是说明。所以星号一落下就
+    上闩，闩住期间不再接受新地标；输入框来了才解闩（`_parse_empty_input_elements`
+    里连必填标记一起吃掉——那个星号是它的，不能漏给下一个字段）。
+
+    唯一能压过闩的是"后面紧跟星号"——那是字段名最硬的信号。没有这条例外，
+    「手机号码 * +86 138-… 邮箱 * 输入框」这种版式里（手机号是纯展示、没有输入框，
+    闩永远等不到解），「邮箱」会被闩住，输入框最后认领到的是手机号那一段。
+    """
+    row = rows[i]
+    if row["role"] in _INPUT_ROLES or row["role"] in _STRUCTURAL_ROLES:
+        return False
+    if not _is_usable_landmark(row["name"]):
+        return False
+    if i + 1 < len(rows) and rows[i + 1]["name"] in _REQUIRED_STAR:
+        return True
+    return not latched
+
+
 def _looks_like_field_label(label: str) -> bool:
     """这个名字像不像一个真的表单字段名。不像就整个丢掉这个元素。
 
@@ -222,28 +288,52 @@ def _parse_empty_input_elements(snapshot_text: str) -> list[ScannedElement]:
     # 自上一个**有效地标**以来见没见过必填星号。被拒的地标（数字碎片、说明文字）
     # 不重置它——「起止时间」的星号正好落在日期碎片前面，重置了就检测不到。
     required_seen = False
-    for line in snapshot_text.splitlines():
-        m = _SNAPSHOT_LINE_RE.search(line)
-        if not m:
-            continue
-        role = m.group("role")
-        name = (m.group("name") or "").strip()
+    # 星号落下就上闩，输入框来了才解闩。见 `_accepts_landmark`。
+    latched = False
+    # 自上一个地标以来见过纯数字碎片＝后面那个复合控件**已经选好了值**。
+    # 见下面 `_DIGITS_ONLY_RE` 那一支。
+    value_fragments = False
+    rows = _parse_rows(snapshot_text)
+    for i, row in enumerate(rows):
+        role, name = row["role"], row["name"]
 
-        if role not in _INPUT_ROLES or role == "radio":
+        if role not in _INPUT_ROLES:
             # RootWebArea 的 name 是**页面标题**（"投递简历 - 欢迎加入 XX"），
             # 是文档根节点不是页面上的文字标签。真实快照里因为标题和第一个输入框
             # 之间总隔着别的文字所以没露馅，但它随时可能变成某个字段的名字。
-            if name in ("*", "＊"):
+            if name in _REQUIRED_STAR:
                 required_seen = True
-            elif role not in _STRUCTURAL_ROLES and _is_usable_landmark(name):
+                latched = True
+            elif _accepts_landmark(rows, i, latched):
                 landmark = name
                 required_seen = False
+                value_fragments = False
+            elif _DIGITS_ONLY_RE.fullmatch(name):
+                # 日期这类复合控件**已经选好**的值是平铺在输入框前面的 StaticText
+                # （"2019" "-" "09"），输入框自己永远是空的。没填的时候这里是
+                # `YYYY` / `MM` 格式占位符——数字 vs 占位符，正好把两种状态分开。
+                value_fragments = True
             continue
 
-        value_m = _VALUE_RE.search(m.group("rest") or "")
+        # 走到这里一定是输入类元素。**先把星号和闩吃掉**——不管这一行最后有没有
+        # 产出字段（可能已经有值、可能跟前面重名），前面那个星号都是它的；漏给
+        # 下一个字段的表现是"一个选填项被标成必填"，真机上就这么发生过。
+        is_required = required_seen or "*" in name
+        had_value_fragments = value_fragments
+        required_seen = False
+        latched = False
+        value_fragments = False
+        if role == "radio":
+            continue  # 单选题统一交给 _parse_radio_groups
+
+        value_m = _VALUE_RE.search(row["rest"])
         current_value = value_m.group(1) if value_m else ""
         if current_value.strip():
             continue  # 已有值（含简历解析自动回填的），不需要 Layer 1 处理
+        if _has_descendant_value(rows, i):
+            continue  # 值挂在内层节点上，外壳没有——照样是"已填"
+        if not name and had_value_fragments:
+            continue  # 没有自己名字的输入框 + 前面摆着已选好的值 = 复合控件，已填
 
         label = name or landmark
         if not label or label in seen_labels:
@@ -254,9 +344,7 @@ def _parse_empty_input_elements(snapshot_text: str) -> list[ScannedElement]:
             # 给「09」编了一段期望薪资。
             continue
         seen_labels.add(label)
-        # 字段自带的 name 里也可能直接带星号（"专业 *"）。
-        is_required = required_seen or "*" in name
-        elements.append({"uid": m.group("uid"), "role": role, "label": label,
+        elements.append({"uid": row["uid"], "role": role, "label": label,
                          "required": is_required})
     elements.extend(_parse_radio_groups(snapshot_text))
     return elements
@@ -274,41 +362,43 @@ def _parse_radio_groups(snapshot_text: str) -> list[ScannedElement]:
     groups: list[ScannedElement] = []
     landmark_name = ""
     required_seen = False
+    latched = False
     active: Optional[dict] = None  # {"uid","label","any_checked"}
     last_radio_name = None
+    rows = _parse_rows(snapshot_text)
 
     def _flush():
         if active is not None and not active["any_checked"]:
             groups.append({"uid": active["uid"], "role": "radio", "label": active["label"],
                            "required": bool(active.get("required"))})
 
-    for line in snapshot_text.splitlines():
-        m = _SNAPSHOT_LINE_RE.search(line)
-        if not m:
-            continue
-        role = m.group("role")
-        name = (m.group("name") or "").strip()
+    for i, row in enumerate(rows):
+        role, name = row["role"], row["name"]
         if role == "radio":
             if active is None:
-                active = {"uid": m.group("uid"), "label": landmark_name or name,
+                active = {"uid": row["uid"], "label": landmark_name or name,
                           "any_checked": False, "required": required_seen}
-            if "checked" in (m.group("rest") or ""):
+            if "checked" in row["rest"]:
                 active["any_checked"] = True
             last_radio_name = name
+            # 单选题也是输入元素：它吃掉前面那个星号和那道闩。
+            required_seen = False
+            latched = False
             continue
         # 非 radio 行：跟刚才那个选项同名就当装饰性重复，不打断当前组；
         # 否则视为下一个单选题的候选地标，并把当前组收尾。
         # 地标可用性走跟 _parse_empty_input_elements 同一个判据——两处各写一套的话，
         # 修好了一边另一边照样会把 `09` 当字段名（同一个日期控件两条路径都路过）。
-        if name in ("*", "＊"):
+        if name in _REQUIRED_STAR:
             required_seen = True
+            latched = True
             continue
         if name and name != last_radio_name:
             if active is not None:
                 _flush()
                 active = None
                 last_radio_name = None
-            if _is_usable_landmark(name):
+            if _accepts_landmark(rows, i, latched):
                 landmark_name = name
                 required_seen = False
     _flush()
@@ -744,10 +834,23 @@ def build_agent_toolset(
 # 语义不同，届时重写即可，不留一个没有消费方的函数在这里等着被误用。
 
 
-def _enforce_government_id_blank(fields: list[FieldClassification]) -> list[FieldClassification]:
-    """硬约束：government_id 类字段的 candidate_value 无条件清空。见模块 docstring。"""
+# 只有 open_question 允许带一段"生成"的值。demographic 的值由 record_application
+# 从 personal_info 取（不经 LLM），另外两类一律留空。
+_VALUE_ALLOWED_KINDS = ("open_question",)
+
+
+def _enforce_no_invented_values(fields: list[FieldClassification]) -> list[FieldClassification]:
+    """硬约束：除了开放问题，谁都不许带一段 LLM 生成的值。见模块 docstring。
+
+    government_id 是老约束（证件号绝不代填）。`unknown_fact` 是 2026-08-17 补的：
+    在那之前 kind 只有三档，"事实性字段、但资料里没有"没有地方可去，于是全部落进
+    open_question——而 open_question 的指令是"生成一段候选文本"。真机结果是
+    「学校名称」拿到了「请填写您的学校名称（例如：…）」，一句填写说明冒充答案。
+
+    补桶是 prompt 的事，兜底是代码的事：prompt 不听话的那一次，值也不该漏出去。
+    """
     for f in fields:
-        if f.kind == "government_id" and f.candidate_value:
+        if f.kind not in _VALUE_ALLOWED_KINDS and f.candidate_value:
             f.candidate_value = ""
     return fields
 
@@ -799,6 +902,11 @@ def record_application(tracker, state: dict, personal_info: dict) -> dict:
     if not state.get("empty_elements"):
         return {"pending_application_id": None}
 
+    # 写库前再过一遍同一道闸。分类节点已经过了一次，但这里是**落库**——真正决定
+    # 什么会被摆到审批人面前的是这一步，规则只有 `_enforce_no_invented_values`
+    # 一份实现，两处调用不算分叉。
+    classified = _enforce_no_invented_values(state.get("classified_fields") or [])
+
     fields_payload = [
         {
             "field_id": f.field_id,
@@ -820,7 +928,7 @@ def record_application(tracker, state: dict, personal_info: dict) -> dict:
             # 看页面才知道该填哪个，系统更没资格猜。空列表 = 没有歧义。
             "candidates": load_candidates(f.demographic_key or f.field_id),
         }
-        for f in state.get("classified_fields", [])
+        for f in classified
     ]
     # 选填项也进列表，但**值留空、不生成**——你得知道它们存在（对着截图能判断
     # 要不要顺手填），而机器不该替你编。kind 一律 open_question：没让 LLM 看过
@@ -1108,7 +1216,7 @@ def build_graph(
         result: ClassifyFieldsOutput = await llm.with_structured_output(
             ClassifyFieldsOutput, method="function_calling"
         ).ainvoke(prompt)
-        classified = _enforce_government_id_blank(result.fields)
+        classified = _enforce_no_invented_values(result.fields)
         return {"empty_elements": empty_elements, "classified_fields": classified,
                 "form_screenshot": shot}
 

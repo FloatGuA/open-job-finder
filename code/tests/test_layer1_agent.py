@@ -7,7 +7,7 @@ is the site's own display, not something this project unmasked).
 """
 from multisite.layer1_agent import (
     FieldClassification,
-    _enforce_government_id_blank,
+    _enforce_no_invented_values,
     _extract_text,
     _looks_blank,
     _looks_logged_out,
@@ -157,19 +157,21 @@ uid=1_0 RootWebArea
         assert _parse_empty_input_elements(snapshot) == []
 
 
-class TestEnforceGovernmentIdBlank:
+class TestEnforceNoInventedValues:
+    """只有开放问题允许带一段 LLM 生成的值。"""
+
     def test_clears_candidate_value_for_government_id(self):
         fields = [
             FieldClassification(field_id="身份证号", kind="government_id", candidate_value="110101199001011234"),
             FieldClassification(field_id="姓名", kind="demographic", demographic_key="name"),
         ]
-        result = _enforce_government_id_blank(fields)
+        result = _enforce_no_invented_values(fields)
         assert result[0].candidate_value == ""
         assert result[0].kind == "government_id"
 
     def test_other_kinds_untouched(self):
         fields = [FieldClassification(field_id="自我评价", kind="open_question", candidate_value="熟悉后端开发")]
-        result = _enforce_government_id_blank(fields)
+        result = _enforce_no_invented_values(fields)
         assert result[0].candidate_value == "熟悉后端开发"
 
 
@@ -189,6 +191,14 @@ uid=1_0 RootWebArea "投递简历" url="https://example.com/apply"
   uid=3_50 StaticText "09"
   uid=3_51 textbox
 """
+
+# 同一个控件**还没填**的样子：碎片是 YYYY / MM 格式占位符，不是已选好的年月。
+# （填好的那份现在会被整个跳过——「已填」的判定见 test_field_scan_quality.py，
+#   所以"地标回退到真字段名"只能在这份没填的快照上验。）
+EMPTY_DATE_WIDGET_SNAPSHOT = (DATE_WIDGET_SNAPSHOT
+                              .replace('"2019"', '"YYYY"')
+                              .replace('"2023"', '"YYYY"')
+                              .replace('"09"', '"MM"'))
 
 
 class TestLandmarkHeuristic:
@@ -212,7 +222,7 @@ class TestLandmarkHeuristic:
 
     def test_landmark_falls_back_to_the_real_field_name(self):
         """拒掉器碎片后，地标应该回退到它们前面那个真字段名。"""
-        assert self._labels(DATE_WIDGET_SNAPSHOT) == ["起止时间"]
+        assert self._labels(EMPTY_DATE_WIDGET_SNAPSHOT) == ["起止时间"]
 
     def test_help_text_is_not_a_field_name(self):
         # "无准确的毕业时间可填写预计毕业时间" 是页面说明，不是字段名。
@@ -302,9 +312,9 @@ uid=1_0 RootWebArea "投递简历" url="https://example.com"
   uid=2_1 StaticText "起止时间"
   uid=2_2 StaticText "*"
   uid=2_3 StaticText "无准确的毕业时间可填写预计毕业时间"
-  uid=2_4 StaticText "2019"
+  uid=2_4 StaticText "YYYY"
   uid=2_5 StaticText "-"
-  uid=2_6 StaticText "09"
+  uid=2_6 StaticText "MM"
   uid=2_7 textbox
 """
         assert self._scan(snap) == {"起止时间": True}
