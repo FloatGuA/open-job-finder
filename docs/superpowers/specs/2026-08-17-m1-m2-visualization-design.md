@@ -96,8 +96,12 @@ async def run_agent(agent, user_message, max_steps=MAX_STEPS,
 
 ```json
 {"event": "agent_step", "run_id": "m1_20260817_0930", "step": "find_jobs",
- "seq": 13, "kind": "think", "text": "…", "calls": [...], "ts": "2026-08-17T09:31:02Z"}
+ "record": {"kind": "think", "seq": 13, "text": "…", "calls": []},
+ "ts": "2026-08-17T09:31:02Z"}
 ```
+
+`record` **整体嵌一层**，不摊平到顶层：回放时要原样把它取回来，摊平就得靠
+「排除 event/run_id/step/ts 之外的键」来重建，加一个信封字段就悄悄污染 record。
 
 新增 `RunLogger.log_agent_step(step: str, record: dict) -> None`（`services/run_logger.py`），
 `pipeline/run_logger.py` 的适配层同名方法负责 JSONL + SSE 双写。
