@@ -4,6 +4,7 @@ import { useAppContext } from '@/context/app-context'
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
 import DevLabel from '@/components/dev/DevLabel'
 import { STEP_LABELS, SKIP_REASON_LABELS, interpretEvent } from './interpret'
+import MultisiteRunView from './MultisiteRunView'
 
 // Static step -> tools template, mirrors the registry.call() sites in the
 // pipeline step files (source of truth: pipeline/w1/**, pipeline/w2/**).
@@ -609,7 +610,7 @@ function LiveLog({ events }: { events: ProgressEvent[] }) {
 // realtime SSE stream (Console live) or a replayed JSONL run (Console after stop,
 // or the Logs page). Pure presentation: no run controls, no data fetching. The
 // caller resets per-instance selection by remounting (key=).
-export function RunView({
+function TreeRunView({
   events,
   workflowId,
   summary = null,
@@ -786,6 +787,27 @@ export function RunView({
       <LiveLog events={events} />
     </>
   )
+}
+
+// Dispatcher: **no hooks here**.
+// m1/m2 图节点内部是 agent 自主循环，是序列不是集合——buildTree 按 tool 名存 Map、
+// 后来者覆盖，take_snapshot 的几十次调用会塌成一个。所以它们走单独的三层视图。
+export function RunView(props: {
+  events: ProgressEvent[]
+  workflowId: string
+  summary?: Record<string, number> | null
+  isRunning?: boolean
+}) {
+  if (props.workflowId === 'm1' || props.workflowId === 'm2') {
+    return (
+      <MultisiteRunView
+        events={props.events}
+        workflowId={props.workflowId}
+        isRunning={props.isRunning ?? false}
+      />
+    )
+  }
+  return <TreeRunView {...props} />
 }
 
 function WorkflowCard({
