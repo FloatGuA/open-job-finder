@@ -3,6 +3,7 @@ import json
 
 from pipeline.run_logger import RunLogger, agent_event
 from services.progress_emitter import ProgressEvent, event_to_dict
+from services.run_log_reader import parse_run_events
 
 THINK = {"kind": "think", "seq": 13, "text": "先翻页",
          "calls": [{"id": "c1", "name": "click", "args": {"uid": "2_1"}}]}
@@ -75,3 +76,33 @@ class TestLogAgentStep:
         sent = [e for e in emitter.events if e.seq is not None]
         assert len(sent) == 1
         assert sent[0].workflow == "m1" and sent[0].detail == THINK
+
+
+class TestReplayMatchesLive:
+    """同一条 record 有两条路到达同一个前端组件：实时 SSE 和事后回放。
+    两边各写一套格式化必然分叉，所以这里直接把两条路的产出摆在一起比。"""
+
+    def test_replay_and_sse_produce_the_same_event(self, tmp_path, monkeypatch):
+        import services.run_logger as srl
+        monkeypatch.setattr(srl, "RUNS_DIR", tmp_path)
+        emitter = FakeEmitter()
+        logger = RunLogger(pipeline="m1", run_id="m1_same", emitter=emitter, debug=True)
+        logger.log_agent_step("find_jobs", THINK)
+        logger.close("done")
+
+        live = event_to_dict(next(e for e in emitter.events if e.seq is not None))
+        replayed = next(e for e in parse_run_events(tmp_path / "m1_same.jsonl")
+                        if e.get("seq") is not None)
+
+        assert {**live, "ts": 0} == {**replayed, "ts": 0}
+
+    def test_observe_events_replay_too(self, tmp_path, monkeypatch):
+        import services.run_logger as srl
+        monkeypatch.setattr(srl, "RUNS_DIR", tmp_path)
+        logger = RunLogger(pipeline="m1", run_id="m1_obs", debug=True)
+        logger.log_agent_step("find_jobs", OBSERVE)
+        logger.close("done")
+
+        got = next(e for e in parse_run_events(tmp_path / "m1_obs.jsonl")
+                   if e.get("seq") is not None)
+        assert got["tool"] == "take_snapshot" and got["detail"] == OBSERVE

@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pipeline.run_logger import _ui_status
+from pipeline.run_logger import _ui_status, agent_event
 
 
 def iter_run_files(runs_dir: Path, pipeline: str | None = None) -> list[Path]:
@@ -210,6 +210,10 @@ def parse_run_events(path: Path) -> list[dict[str, Any]]:
             tool = e.get("tool", "")
             out.append({"workflow": pipeline, "step": e.get("step", ""), "tool": tool, "status": _ui_status(status),
                         "message": f"[tool] {tool}: {status}", "scope": scope, "detail": data, "ts": ts})
+        elif event == "agent_step":
+            # agent 内层循环。格式化跟实时 SSE 共用 agent_event()——两边各写一套的
+            # 表现是"实时看着好好的、翻历史就少一半"，而那不会报错。
+            out.append(agent_event(pipeline, e.get("step", ""), e.get("record") or {}, ts))
         else:
             # business event. Skip file-only per-conversation traces the live SSE never
             # showed (visible=False), so replay mirrors the live view. Older logs
