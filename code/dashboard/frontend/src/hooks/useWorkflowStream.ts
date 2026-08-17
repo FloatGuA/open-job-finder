@@ -11,6 +11,8 @@ export interface ProgressEvent {
   scope?: Record<string, unknown> | null
   detail?: Record<string, unknown> | null
   ts?: number
+  // seq: agent 内层循环的轮次序号。非 null = 这是一条 agent 步事件（m1/m2 专有）。
+  seq?: number | null
 }
 
 export function useWorkflowStream(onEvent: (event: ProgressEvent) => void) {

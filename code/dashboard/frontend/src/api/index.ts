@@ -1035,6 +1035,10 @@ export const API = {
     requestJson(`/api/runs/${runId}`),
   getRunEvents: (runId: string): Promise<RunEventsResponse> =>
     requestJson(`/api/runs/${runId}/events`),
+  // m1/m2 第 2 层骨架。从后端图定义导出，不在前端手抄——W1/W2 的 SKELETON
+  // 就是手抄的，已经漂移过。
+  multisiteStages: (): Promise<{ m1: string[]; m2: string[] }> =>
+    requestJson('/api/multisite/stages'),
   getOpsArtifacts: (): Promise<OpsArtifactsResponse> =>
     requestJson('/api/ops/artifacts'),
   deleteOpsArtifacts: (body: { run_logs: string[]; screenshots: string[] }): Promise<DeleteOpsArtifactsResponse> =>
