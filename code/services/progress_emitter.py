@@ -19,6 +19,29 @@ class ProgressEvent:
     scope: Optional[dict] = field(default_factory=dict)
     detail: Optional[dict] = field(default_factory=dict)
     ts: float = field(default_factory=time.time)
+    # seq: agent 内层循环的轮次序号。非 None = 这是一条 agent 步事件（m1/m2 专有）。
+    # 普通 step/tool 事件没有序号概念，留 None。
+    seq: Optional[int] = None
+
+
+def event_to_dict(event: "ProgressEvent") -> dict:
+    """ProgressEvent → SSE / 回放共用的线上形状。
+
+    **别改成 dataclasses.asdict 之外的手写枚举**：这个函数存在的理由就是
+    server.py 原来在 SSE 生成器里逐字段手写，加一个字段要记得改那里，
+    忘了的表现是前端永远收不到它、而且不报错。
+    """
+    return {
+        "workflow": event.workflow,
+        "step": event.step,
+        "tool": event.tool,
+        "status": event.status,
+        "message": event.message,
+        "scope": event.scope,
+        "detail": event.detail,
+        "seq": event.seq,
+        "ts": event.ts,
+    }
 
 
 class ProgressEmitter:

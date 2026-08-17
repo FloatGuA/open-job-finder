@@ -8,6 +8,7 @@ Wraps services.run_logger.RunLogger with:
 - log_tool(...)                 -- tool trace
 - close(status, summary=None)   -- run_end + file close
 """
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -33,6 +34,27 @@ _UI_STATUS = {
 
 def _ui_status(status: str) -> str:
     return _UI_STATUS.get(status, status)
+
+
+def agent_event(pipeline: str, step: str, record: dict, ts: float) -> dict:
+    """一条 agent 记录 → 前端 ProgressEvent 形状。
+
+    **实时 SSE 和事后回放共用这一份**。两边各写一套的表现是"实时看着好好的、
+    翻历史就少一半"，而那种不一致没有任何东西会报错。
+    `services/run_log_reader.py` 也导入它（方向与 `_ui_status` 一致，反过来是循环导入）。
+    """
+    if record.get("kind") == "think":
+        names = ", ".join(c.get("name", "") for c in (record.get("calls") or []))
+        text = (record.get("text") or "")[:120]
+        message = " ".join(x for x in (f"说: {text}" if text else "",
+                                       f"-> {names}" if names else "") if x)
+        tool = None
+    else:
+        message = f"{record.get('tool', '')}: {record.get('chars', 0)} 字符"
+        tool = record.get("tool") or None
+    return {"workflow": pipeline, "step": step, "tool": tool, "status": "info",
+            "message": message, "scope": {}, "detail": record,
+            "seq": record.get("seq"), "ts": ts}
 
 
 class RunLogger:
@@ -167,6 +189,17 @@ class RunLogger:
                     scope=scope or {},
                     detail=data or {},
                 ))
+            except Exception:
+                pass
+
+    def log_agent_step(self, step: str, record: dict) -> None:
+        """JSONL 无条件写；SSE 只在 debug 时推（与 log_tool 一致）。"""
+        self._inner.log_agent_step(step=step, record=record)
+        if self._emitter is not None and self._debug:
+            try:
+                from services.progress_emitter import ProgressEvent
+                payload = agent_event(self._pipeline, step, record, time.time())
+                self._emitter.emit(ProgressEvent(**payload))
             except Exception:
                 pass
 

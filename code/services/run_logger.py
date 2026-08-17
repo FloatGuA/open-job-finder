@@ -99,6 +99,17 @@ class RunLogger:
             "ts": _now_iso(),
         })
 
+    def log_agent_step(self, step: str, record: dict) -> None:
+        """agent 内层循环的一轮。`record` 整体嵌一层，不摊平到顶层——回放时要
+        原样取回来，摊平就得靠"排除信封字段"来重建，加一个信封字段就会悄悄污染它。"""
+        self._write({
+            "event": "agent_step",
+            "run_id": self._run_id,
+            "step": step,
+            "record": record,
+            "ts": _now_iso(),
+        })
+
     def log_business_event(self, event: str, scope: dict, data: dict, visible: bool = True) -> None:
         # `visible` mirrors the SSE gate: file-only traces (visible=False, e.g. the
         # per-conversation filter_decision) are persisted for raw debugging but must

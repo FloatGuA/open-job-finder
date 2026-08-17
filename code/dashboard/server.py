@@ -32,7 +32,7 @@ from services.config_manager import get_config_manager
 from services.console_utf8 import force_utf8_stdout
 from services.llm_client import build_model_router, load_config
 from services.onboarding import OnboardingChecker
-from services.progress_emitter import ProgressEmitter, ProgressEvent
+from services.progress_emitter import ProgressEmitter, ProgressEvent, event_to_dict
 
 # uvicorn 进程的 stdout 在 Windows 上默认是 GBK，而 m1/m2 的 agent 追踪经由本进程
 # 打印——2026-08-16 一句带 ✅ 的话就抛 UnicodeEncodeError，异常冒泡打死了整条 run，
@@ -2157,19 +2157,7 @@ async def workflow_stream(request: Request):
                 try:
                     event: ProgressEvent = q.get_nowait()
                     yield {
-                        "data": json.dumps(
-                            {
-                                "workflow": event.workflow,
-                                "step": event.step,
-                                "tool": event.tool,
-                                "status": event.status,
-                                "message": event.message,
-                                "scope": event.scope,
-                                "detail": event.detail,
-                                "ts": event.ts,
-                            },
-                            ensure_ascii=False,
-                        ),
+                        "data": json.dumps(event_to_dict(event), ensure_ascii=False),
                     }
                 except queue.Empty:
                     await asyncio.sleep(0.2)
