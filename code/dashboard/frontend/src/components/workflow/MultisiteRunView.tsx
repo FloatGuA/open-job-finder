@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { API } from '@/api'
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
-import { agentRows, stageStatuses, type StageStatus } from './multisiteRun'
+import { agentRows, forWorkflow, stageStatuses, type StageStatus } from './multisiteRun'
 
 // \u7b2c 1 \u5c42\uff1a\u9759\u6001\u5168\u94fe\uff0c\u53ea\u9ad8\u4eae\u5f53\u524d\u6bb5\u3002**\u4e0d\u67e5\u8de8 run \u771f\u5b9e\u72b6\u6001**\u2014\u2014\u90a3\u8981\u5148\u628a layer \u4e4b\u95f4\u7684
 // \u72b6\u6001\u6d41\u8f6c\u5b9a\u6b7b\uff0c\u800c\u90a3\u662f\u7528\u6237\u660e\u786e\u8bf4"\u8fd8\u6ca1\u60f3\u6e05\u695a\u3001\u8981\u5355\u72ec\u7406"\u7684\u90e8\u5206\uff08spec \u00a73\uff09\u3002
@@ -33,6 +33,9 @@ export default function MultisiteRunView({
   const [stages, setStages] = useState<string[]>([])
   const [picked, setPicked] = useState<string | null>(null)
 
+  // 先滤掉别的 workflow 的事件，下面所有派生量都用 evs 而不是 events。
+  const evs = useMemo(() => forWorkflow(events, workflowId), [events, workflowId])
+
   // \u9aa8\u67b6\u4ece\u540e\u7aef\u56fe\u5b9a\u4e49\u53d6\uff0c\u4e0d\u5728\u524d\u7aef\u624b\u6284\u2014\u2014W1/W2 \u7684 SKELETON \u5c31\u662f\u624b\u6284\u7684\uff0c\u5df2\u7ecf\u6f02\u79fb\u8fc7\u3002
   useEffect(() => {
     let alive = true
@@ -44,7 +47,7 @@ export default function MultisiteRunView({
     }
   }, [workflowId])
 
-  const statuses = useMemo(() => stageStatuses(events, stages), [events, stages])
+  const statuses = useMemo(() => stageStatuses(evs, stages), [evs, stages])
 
   // \u9ed8\u8ba4\u8ddf\u968f"\u6700\u540e\u4e00\u4e2a\u5df2\u7ecf\u5f00\u8dd1\u7684\u7ad9"\uff1b\u7528\u6237\u70b9\u8fc7\u5c31\u56fa\u5b9a\u5728\u4ed6\u9009\u7684\u90a3\u4e2a\u3002
   const latest = useMemo(
@@ -52,13 +55,13 @@ export default function MultisiteRunView({
     [stages, statuses],
   )
   const active = picked && stages.includes(picked) ? picked : latest
-  const rows = useMemo(() => (active ? agentRows(events, active) : []), [events, active])
+  const rows = useMemo(() => (active ? agentRows(evs, active) : []), [evs, active])
 
   // \u5931\u8d25\u90a3\u4e00\u7ad9\u7684\u5b8c\u6574\u5feb\u7167\uff1a\u6587\u4ef6\u540d\u6765\u81ea\u5931\u8d25\u4e8b\u4ef6\u7684 detail\uff0c\u8ddf applyFailScreenshot
   // \u4ece\u4e8b\u4ef6 detail \u6260\u6587\u4ef6\u540d\u662f\u540c\u4e00\u4e2a\u8def\u5b50\u3002
-  const runId = (events.find((e) => e.step === 'start')?.detail?.run_id as string) || ''
+  const runId = (evs.find((e) => e.step === 'start')?.detail?.run_id as string) || ''
   const snapshotFile = active
-    ? ((events.find((e) => e.step === active && e.seq == null && e.status === 'error')
+    ? ((evs.find((e) => e.step === active && e.seq == null && e.status === 'error')
         ?.detail?.snapshot_file as string) || '')
     : ''
 

@@ -1,12 +1,35 @@
 import { describe, expect, it } from 'vitest'
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
-import { agentRows, stageStatuses } from './multisiteRun'
+import { agentRows, forWorkflow, stageStatuses } from './multisiteRun'
 
 const STAGES = ['ensure_ready', 'find_jobs', 'write_pending_jobs']
 
 function step(name: string, status: string, ts: number): ProgressEvent {
   return { workflow: 'm1', step: name, status, message: '', ts }
 }
+
+describe('forWorkflow', () => {
+  // RunView 拿到的 events 是**共享的 SSE 缓冲**，里面混着别的 workflow 的事件
+  // （现有 buildTree 自己 filter 了一遍，正说明这一点）。不过滤的后果最直接的一个：
+  // 从 events 里找 step==='start' 取 run_id 时，会捞到 w1/w2 那次 run 的 start，
+  // 于是失败快照的下载链接指向错误的 run。
+  it('drops events belonging to another workflow', () => {
+    const mine = step('find_jobs', 'done', 2)
+    const foreign: ProgressEvent = {
+      workflow: 'w1', step: 'start', status: 'running', message: '', ts: 1,
+      detail: { run_id: 'w1_20260817_0900' },
+    }
+    expect(forWorkflow([foreign, mine], 'm1')).toEqual([mine])
+  })
+
+  it('keeps run-level events of the asked workflow', () => {
+    const start: ProgressEvent = {
+      workflow: 'm1', step: 'start', status: 'running', message: '', ts: 1,
+      detail: { run_id: 'm1_20260817_0930' },
+    }
+    expect(forWorkflow([start], 'm1')).toEqual([start])
+  })
+})
 function agent(name: string, seq: number, tool: string | null, ts: number): ProgressEvent {
   return { workflow: 'm1', step: name, status: 'info', message: '', tool, seq, ts }
 }

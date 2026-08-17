@@ -431,6 +431,11 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 
 ## 已完成
 
+- **简历信息池语义检索设计定稿（未实现）**（2026-08-17，无版本号变更，纯文档产出，代码零改动）
+  - 给未来的网申"开放问题"字段生成能力（Copywriter agent，尚未设计）打基础：从信息池按查询检索最相关的经历片段，而不是整份塞进上下文。走完整 brainstorming 架构路径对齐，spec 见 `docs/superpowers/specs/2026-08-17-info-pool-semantic-retrieval-design.md`，决策回填 `DECISION.md`「简历信息池语义检索：只设计检索能力本身，不连同 Copywriter agent 一起设计」条。
+  - 设计要点：block 级检索单元、OpenAI `text-embedding-3-small`（新增 provider）、缓存索引按 `content_fingerprint` 失效、暴力 cosine 相似度（不引入向量库）、`tools/llm`+`services` 两层实现、现在就建 Recall@k/MRR eval harness（沿用意图 eval 三条硬约束）。
+  - **下一步**：实现这份 spec（`tools/llm/embed_text.py` + `services/pool_retriever.py` + eval harness + 测试）——目前刻意未实现，这次会话的目的是先把设计稿定下来（用于简历"设计了..."条目），实现可以滞后。
+
 - **Checkpoint 2 字段质量：假字段名 / 已填当空 / 结构性编造，一次修掉**（2026-08-17，v2.25.3，pytest 1151 passed（+13），前端 build 绿，7 处变异验证全红）
   - **起因**：用户实测——「比如这里向我索要字段」那条记录的 5 个字段**没有一个是对的**：两个是页面上早就填好的（LLM 编了填写说明当答案），一个是说明文字冒充字段名，kind 还全是 `open_question`。
   - **① 假字段名**：a11y 树是平的，「意向城市」→`*`→「最多可选 2 个城市」→输入框，取"最近的文字"必然拿到说明。**判据从长度改成位置**：星号一落下就上闩，闩住期间不接受新地标，输入框来了才解闩（顺带吃掉必填标记——原先它漏给了下一个字段）。唯一的例外是"这行后面紧跟星号"，否则「手机号 `*` +86 138-… 邮箱 `*` 输入框」这种纯展示版式会把「邮箱」闩死。

@@ -517,3 +517,12 @@
   ③**否掉"用 `load_candidates(field)` 有没有命中来自动定 kind"**——信息池能覆盖学校/专业这类，但覆盖不了「意向城市」，会留下一半靠代码一半靠 LLM 的分叉判据。
 - **代价 / 已知不足**：审批时人要多填几个格（`unknown_fact` 且必填的字段现在会挡住批准按钮）。这是有意的——放行一条必填项空着的申请，代价更大。
 - **什么情况下该重新考虑**：如果以后 personal_info / 信息池覆盖到大部分事实字段，`unknown_fact` 会自然变少；那时可以重新讨论要不要让它参与自动填充。
+
+## 简历信息池语义检索：只设计检索能力本身，不连同 Copywriter agent 一起设计
+
+- **日期 / 版本**：2026-08-17（设计阶段，未实现）
+- **背景**：`data/info_pool.yaml`（简历信息池）现在只有一种消费方式——整份塞进 LLM 上下文。池子只会越攒越大，而正在规划中的"网申开放问题字段生成"能力（见「网申表单字段：人口学字段规则填，开放问题字段 LLM 填 + 人工审批」条）需要的是"跟这条 JD/这个问题最相关的几段经历"，是检索问题，不是"塞更多上下文"能解决的。此次设计的直接动因是用户在准备"Agent 开发工程师"方向的简历，不是当前业务的紧急需求——不影响设计质量，但解释了下面几处偏工程完整性的选择为何优先于精简。
+- **选了什么**：①范围只设计检索能力本身，不设计消费方（Copywriter agent 的角色划分、如何接入 LangGraph、和 Filler 节点如何交接）——留给下一次设计。②检索最小单元用整个 block（不用单条 bullet），跟现有拖拽单位一致，检索结果自带上下文。③Embedding 用 OpenAI `text-embedding-3-small`（API），不用本地 Ollama——用户明确选的，需新增 `OPENAI_API_KEY`（项目目前只有 `DEEPSEEK_API_KEY`/`ANTHROPIC_API_KEY`）。④向量存储用缓存索引 `data/info_pool_embeddings.json`，按 block 内容指纹（`content_fingerprint`）失效，不是每次现算。⑤排序算法用暴力 cosine 相似度，不引入 faiss/chroma——池子只有几十个 block，专门的向量库是过度设计。⑥代码分层：`tools/llm/embed_text.py`（单个外部调用，ToolResult 契约）+ `services/pool_retriever.py`（编排），不并入 `resume_matcher.py`。⑦现在就建正式 eval harness（Recall@k/MRR），沿用意图 eval 的三条硬约束（金标 PII 只落 `data/eval/` gitignore、eval 忠实生产签名、ground truth 人标），尽管还没有真实消费方校准"检索准不准"。spec 见 `docs/superpowers/specs/2026-08-17-info-pool-semantic-retrieval-design.md`。
+- **否掉了什么，为什么**：①**否掉"连 Copywriter agent 一起设计"**——范围太大，且 agent 角色划分依赖检索能力先验证过效果，顺序应该是先做基础能力。②**否掉"本地 Ollama 做 embedding"**——虽然免费离线且不新增 provider，但用户明确选了 API 方案。③**否掉"在 `resume_matcher.py` 里加向量相似度 tie-break"**——这次只做池子语义检索这一个方案，`resume_matcher` 保持"确定性关键词匹配、不用 LLM/向量"的既有决策不变。④**否掉"先不建 eval，等 Copywriter 建好再评测"**——用户认为现在建 eval harness 本身就是想要的经验积累，不必等下游。
+- **代价 / 已知不足**：新增 `OPENAI_API_KEY` 依赖，是项目第一次引入 OpenAI 作为 provider；eval 金标集样本量会很小（预计 10-20 条，受限于池子本身规模），不足以支撑统计意义上的阈值判断，harness 只报数不设强制通过线。
+- **什么情况下该重新考虑**：Copywriter agent 真正设计/实现时，需要回来看这份检索能力的接口是否够用；如果 OpenAI embedding 的成本或网络依赖成为问题，需要重新评估本地 Ollama 方案。
