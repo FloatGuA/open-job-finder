@@ -595,8 +595,8 @@ async def get_multisite_stages() -> JSONResponse:
     # 所以走同一个端点。前端第 3 层用它显示「第 N / 上限 轮」——没有分母的话，
     # "跑了 34 轮"这个数字读者无从判断是宽裕还是快撞墙了。
     return JSONResponse({
-        "m1": list(stage_names(True)),
-        "m2": list(stage_names(False)),
+        "m1": list(stage_names("m1")),
+        "m2": list(stage_names("m2")),
         "max_steps": MAX_STEPS,
     })
 

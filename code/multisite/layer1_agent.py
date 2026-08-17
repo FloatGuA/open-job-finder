@@ -665,13 +665,27 @@ _PASSTHROUGH_OPEN_APPLICATION = ("navigate_page", "wait_for", "upload_file")
 # 图节点的名字与顺序。**第二个消费方是前端第 2 层骨架**（经 /api/multisite/stages），
 # 所以它不能只活在 build_graph 的局部变量里。真正的函数与 summarizer 仍在
 # build_graph 的 stages 表里，两者由建图时的对账保证不漂移。
-STAGE_ORDER = ("ensure_ready", "find_jobs", "write_pending_jobs",
-               "open_application", "scan_and_classify_fields", "write_pending_application")
+#
+# 两张图各自完整的节点顺序。**刻意不写成「m2 = m1 + 后缀」**——那正是拆图前的形状
+# （`STAGE_ORDER[:3]`），它把一个错误的假设编码进了代码：m2 根本不选岗，它拿到的是
+# 调用方指定的那一个岗位，`find_jobs` / `write_pending_jobs` 在 m2 里是幽灵节点。
+M1_STAGES = ("ensure_ready", "find_jobs", "write_pending_jobs")
+M2_STAGES = ("ensure_ready", "open_application",
+             "scan_and_classify_fields", "write_pending_application")
+
+_STAGES_BY_WORKFLOW = {"m1": M1_STAGES, "m2": M2_STAGES}
 
 
-def stage_names(select_only: bool) -> tuple[str, ...]:
-    """这次 run 会经过哪些图节点。select_only=True 只跑到 Checkpoint 1。"""
-    return STAGE_ORDER[:3] if select_only else STAGE_ORDER
+def stage_names(workflow: str) -> tuple[str, ...]:
+    """这个 workflow 会经过哪些图节点。前端第 2 层「地铁站」的骨架来源。
+
+    未知 workflow 直接抛——静默返回空元组会让前端画出一张空骨架，
+    跟「后端还没开始跑」长得一模一样。
+    """
+    try:
+        return _STAGES_BY_WORKFLOW[workflow]
+    except KeyError:
+        raise ValueError(f"未知 workflow: {workflow!r}，只有 {sorted(_STAGES_BY_WORKFLOW)}") from None
 
 
 @contextmanager
@@ -1306,9 +1320,16 @@ def build_graph(
 
     # 名字漂移在运行时表现为"骨架上有一站永远不亮"，跟"卡住了"一模一样、测不出来，
     # 所以在这里当场炸掉。这个分支在正确的构建里永远不可能进。
+    #
+    # **临时桥**：stage_names 已经改成按 workflow 字符串查表（m1/m2 两张图各自完整
+    # 的形状），但这个函数本身还没拆——select_only=False 时仍然按老写法把 m1 的
+    # 3 站接上 m2 的 3 站，建出跟新 M2_STAGES（4 站，无幽灵节点）对不上的图。
+    # 下一个任务把 build_graph 拆成两个 builder 后，这句桥接和下面的 mismatch
+    # 一起消失。
     built = tuple(name for name, _, _ in stages)
-    if built != stage_names(select_only):
-        raise RuntimeError(f"阶段表与 stage_names() 不一致：{built} vs {stage_names(select_only)}")
+    workflow = "m1" if select_only else "m2"
+    if built != stage_names(workflow):
+        raise RuntimeError(f"阶段表与 stage_names() 不一致：{built} vs {stage_names(workflow)}")
 
     graph = StateGraph(Layer1State)
     for name, fn, summarize in stages:
