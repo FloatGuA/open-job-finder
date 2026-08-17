@@ -424,3 +424,46 @@ UnicodeEncodeError: 'gbk' codec can't encode character '\u2705'
 调 prompt 没用——得补桶（这里加了 `unknown_fact`：事实性字段但资料里没有 → 留空请人填）。
 补桶是 prompt 的事，兜底是代码的事：`_enforce_no_invented_values` 保证只有 `open_question`
 带得出生成的值，prompt 不听话的那一次值也漏不出去。
+
+## 「重启后端」按钮在没带 `--reload` 起的进程上静默失效，还回报成功
+
+**现象**：点 Dashboard 的「重启后端」，界面无报错、按钮转一圈就好了，但后端跑的还是旧代码。
+表现出来是「新加的端点 404」「改的逻辑没生效」，而这两个症状跟"代码写错了"长得一模一样。
+2026-08-17 撞到时，`/api/multisite/stages` 一直 404，一度让人怀疑新代码有问题；
+实际是监听 8765 的进程**七小时前**起的，从没换过。
+
+**真因**：`/api/dev/restart` 的全部实现是 `Path(__file__).touch()` —— 它靠 **uvicorn 的
+`--reload` 监听文件变化**来完成重启。进程不是用 `--reload` 起的时候，touch 就是纯粹的
+无操作；而端点**照样返回 `{"status": "restarting"}`**。一个确信无疑的成功响应，对应一件
+没发生的事。
+
+**怎么确认后端到底是哪一版**：不要看进程在不在、也不要看按钮转没转，**问它要一个只有新代码
+才有的东西**：
+
+```bash
+curl -s http://localhost:8765/api/<某个新加的端点>     # 404 = 旧代码
+```
+
+再看进程的真实身份（创建时间 + 启动命令里有没有 `--reload`）：
+
+```powershell
+Get-NetTCPConnection -LocalPort 8765 -State Listen | Select OwningProcess
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Select ProcessId, CreationDate, CommandLine
+```
+
+**正确做法**：起后端一律带 `--reload`，否则那个按钮是装饰品：
+
+```bash
+cd code && python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8765 --reload
+```
+
+**判据（比这个具体案例更值钱的那一句）**：**一个"执行动作"的端点，如果它的成功响应不依赖
+动作真的发生，那它迟早会骗人。** `dev_restart` 返回的是"我已经 touch 了文件"，而调用方
+以为读到的是"后端已经重启了"。同类反例见 PITFALLS 里 `upload_resume_file` 那条
+（点完确定就报 ok、不验证送达）和 `schedule_log.jsonl` 那条（"接受了请求"与"真的跑完了"
+混成同一个 success）。
+
+**遗留**：这个按钮目前既不检测自己有没有生效，也不告诉调用方"我依赖 --reload"。
+要修的话，最小改法是让它回报**它实际做了什么**（touched file）而不是**它希望发生什么**
+（restarting），并在响应里带上进程启动时间，让前端能对比出"重启到底有没有发生"。
