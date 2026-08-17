@@ -873,14 +873,21 @@ git commit -m "feat(multisite): agent 每一轮接进 run 日志，按 LangGraph
 ### Task 7: 失败快照落进 `logs/runs/{run_id}/`
 
 **Files:**
-- Modify: `multisite/layer1_agent.py:425-431`（`_dump_debug_snapshot`）
+- Modify: `services/run_logger.py`（新增 `run_artifacts_dir`）
+- Modify: `multisite/layer1_agent.py`（`_dump_debug_snapshot` 接目标目录；`add_node` 那行传 provider）
 - Modify: `multisite/observability.py`（`traced_stage` 加 `snapshot_provider`）
-- Modify: `multisite/layer1_agent.py:1257`（`add_node` 那行传 provider）
 - Test: `tests/test_multisite_observability.py`（追加）
+
+> 行号一律**按符号名定位**，不要按计划里写的行号找——Task 5 会在 `layer1_agent.py`
+> 模块级插入常量，之后的行号全体下移。
 
 **Interfaces:**
 - Consumes: Task 6 的 logger
-- Produces: `traced_stage(name, fn, logger, summarize=None, snapshot_provider=None)`；失败时写 `logs/runs/{run_id}/{stage}_snapshot.txt`，并把文件名放进失败 step 的 `data["snapshot_file"]`
+- Produces:
+  - `services.run_logger.run_artifacts_dir(run_id: str, runs_dir: Path | None = None) -> Path`
+    （**写入、读取端点、清理三处共用这一个函数**，Task 8 也要用）
+  - `traced_stage(name, fn, logger, summarize=None, snapshot_provider=None)`；失败时写
+    `logs/runs/{run_id}/{stage}_snapshot.txt`，并把文件名放进失败 step 的 `data["snapshot_file"]`
 
 - [ ] **Step 1: 写失败的测试**
 
