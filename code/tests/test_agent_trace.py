@@ -41,7 +41,7 @@ class TestDescribeMessage:
                           tool_call_id="call_1", name="take_snapshot")
         assert describe_message(msg, 14) == {
             "kind": "observe", "seq": 14, "call_id": "call_1",
-            "tool": "take_snapshot", "chars": 41,
+            "tool": "take_snapshot", "chars": 37,
             "head": 'uid=2_0 RootWebArea "招聘"',
         }
 

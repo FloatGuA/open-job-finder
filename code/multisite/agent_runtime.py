@@ -149,7 +149,7 @@ def describe_message(msg: BaseMessage, seq: int) -> Optional[dict]:
         return {"kind": "observe", "seq": seq,
                 "call_id": msg.tool_call_id or "",
                 "tool": msg.name or "",
-                "chars": len(body.encode("utf-8")),
+                "chars": len(body),
                 "head": stripped.splitlines()[0][:_HEAD_MAX] if stripped else ""}
     return None
 
