@@ -1321,15 +1321,13 @@ def build_graph(
     # 名字漂移在运行时表现为"骨架上有一站永远不亮"，跟"卡住了"一模一样、测不出来，
     # 所以在这里当场炸掉。这个分支在正确的构建里永远不可能进。
     #
-    # **临时桥**：stage_names 已经改成按 workflow 字符串查表（m1/m2 两张图各自完整
-    # 的形状），但这个函数本身还没拆——select_only=False 时仍然按老写法把 m1 的
-    # 3 站接上 m2 的 3 站，建出跟新 M2_STAGES（4 站，无幽灵节点）对不上的图。
-    # 下一个任务把 build_graph 拆成两个 builder 后，这句桥接和下面的 mismatch
-    # 一起消失。
+    # **临时桥**（Task 2 拆图时整段消失）：m1 这条路建的形状已经跟 M1_STAGES 一致，
+    # 可以对账。而 select_only=False 建的仍是**拆分前的 6 站**，跟新定义的 M2_STAGES
+    # （4 站）本来就不同——那不是漂移，是**代码还没拆**。拿新定义去对老形状只会
+    # 把每一次真实 m2 打死，所以这里只守 m1。
     built = tuple(name for name, _, _ in stages)
-    workflow = "m1" if select_only else "m2"
-    if built != stage_names(workflow):
-        raise RuntimeError(f"阶段表与 stage_names() 不一致：{built} vs {stage_names(workflow)}")
+    if select_only and built != stage_names("m1"):
+        raise RuntimeError(f"阶段表与 stage_names('m1') 不一致：{built} vs {stage_names('m1')}")
 
     graph = StateGraph(Layer1State)
     for name, fn, summarize in stages:
