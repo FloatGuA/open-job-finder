@@ -187,9 +187,9 @@ def parse_run_events(path: Path) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
 
     def emit(**fields: Any) -> None:
-        # seq 只在 agent_step 上有值；这里给统一默认，免得每加一个分支就要记得补一次
-        # （补五处等于给将来第六个分支留同样的坑）。
-        out.append({"seq": None, **fields})
+        # seq / duration_ms 只在部分分支上有值；这里给统一默认，免得每加一个分支
+        # 就要记得补一次（补五处等于给将来第六个分支留同样的坑）。
+        out.append({"seq": None, "duration_ms": None, **fields})
 
     for raw in lines:
         try:
@@ -207,15 +207,18 @@ def parse_run_events(path: Path) -> list[dict[str, Any]]:
                  detail=e.get("meta") or {}, ts=ts)
         elif event == "run_end":
             emit(workflow=pipeline, step="done", tool=None, status=_ui_status(status),
-                 message=str(e.get("summary") or {}), scope={}, detail=e.get("summary") or {}, ts=ts)
+                 message=str(e.get("summary") or {}), scope={}, detail=e.get("summary") or {}, ts=ts,
+                 duration_ms=e.get("duration_ms"))
         elif event == "step":
             step = e.get("step", "")
             emit(workflow=pipeline, step=step, tool=None, status=_ui_status(status),
-                 message=f"Step {step}: {status}", scope=scope, detail=data, ts=ts)
+                 message=f"Step {step}: {status}", scope=scope, detail=data, ts=ts,
+                 duration_ms=e.get("duration_ms"))
         elif event == "tool":
             tool = e.get("tool", "")
             emit(workflow=pipeline, step=e.get("step", ""), tool=tool, status=_ui_status(status),
-                 message=f"[tool] {tool}: {status}", scope=scope, detail=data, ts=ts)
+                 message=f"[tool] {tool}: {status}", scope=scope, detail=data, ts=ts,
+                 duration_ms=e.get("duration_ms"))
         elif event == "agent_step":
             # agent 内层循环。格式化跟实时 SSE 共用 agent_event()——两边各写一套的
             # 表现是"实时看着好好的、翻历史就少一半"，而那不会报错。agent_event() 自带

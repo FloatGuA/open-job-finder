@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { API } from '@/api'
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
-import { agentRows, forWorkflow, stageStatuses, type StageStatus } from './multisiteRun'
+import {
+  agentRows,
+  forWorkflow,
+  runSummary,
+  stageStatuses,
+  stageSummary,
+  type StageStatus,
+} from './multisiteRun'
 
 // \u7b2c 1 \u5c42\uff1a\u9759\u6001\u5168\u94fe\uff0c\u53ea\u9ad8\u4eae\u5f53\u524d\u6bb5\u3002**\u4e0d\u67e5\u8de8 run \u771f\u5b9e\u72b6\u6001**\u2014\u2014\u90a3\u8981\u5148\u628a layer \u4e4b\u95f4\u7684
 // \u72b6\u6001\u6d41\u8f6c\u5b9a\u6b7b\uff0c\u800c\u90a3\u662f\u7528\u6237\u660e\u786e\u8bf4"\u8fd8\u6ca1\u60f3\u6e05\u695a\u3001\u8981\u5355\u72ec\u7406"\u7684\u90e8\u5206\uff08spec \u00a73\uff09\u3002
@@ -54,8 +61,13 @@ export default function MultisiteRunView({
     () => [...stages].reverse().find((s) => statuses[s] !== 'pending') ?? stages[0] ?? null,
     [stages, statuses],
   )
-  const active = picked && stages.includes(picked) ? picked : latest
+  const following = !(picked && stages.includes(picked))
+  const active = following ? latest : picked
   const rows = useMemo(() => (active ? agentRows(evs, active) : []), [evs, active])
+  // 阶段自己的产出。ensure_ready / write_pending_jobs 没有 agent 循环，
+  // 第 3 层是空的——它们的信息全在这里。
+  const summary = useMemo(() => (active ? stageSummary(evs, active) : null), [evs, active])
+  const finished = useMemo(() => runSummary(evs), [evs])
 
   // \u5931\u8d25\u90a3\u4e00\u7ad9\u7684\u5b8c\u6574\u5feb\u7167\uff1a\u6587\u4ef6\u540d\u6765\u81ea\u5931\u8d25\u4e8b\u4ef6\u7684 detail\uff0c\u8ddf applyFailScreenshot
   // \u4ece\u4e8b\u4ef6 detail \u6260\u6587\u4ef6\u540d\u662f\u540c\u4e00\u4e2a\u8def\u5b50\u3002
@@ -96,6 +108,7 @@ export default function MultisiteRunView({
 
       {/* \u7b2c 2 \u5c42\uff1a\u5730\u94c1\u7ad9\u3002\u70b9\u4e00\u7ad9\u770b\u90a3\u4e00\u7ad9\u7684\u65f6\u95f4\u7ebf\u3002 */}
       <div className="flex flex-wrap items-center gap-1">
+        {/* \u8ddf\u968f\u6700\u65b0\uff1a\u70b9\u8fc7\u4efb\u4f55\u4e00\u7ad9\u5c31\u56fa\u5b9a\u5728\u90a3\u91cc\uff0c\u6ca1\u8fd9\u4e2a\u6309\u94ae\u5c31\u51fa\u4e0d\u53bb\u4e86\u3002 */}
         {stages.map((s, i) => (
           <div key={s} className="flex items-center gap-1">
             {i > 0 && <span className="text-text-3">{'\u2500\u2500'}</span>}
@@ -108,10 +121,62 @@ export default function MultisiteRunView({
             >
               <span className={`h-2 w-2 rounded-full ${STAGE_DOT[statuses[s] ?? 'pending']}`} />
               <span className="font-mono">{s}</span>
+              {(() => {
+                const d = stageSummary(evs, s)?.durationMs
+                return d != null ? (
+                  <span className="font-mono text-[10.5px] text-text-3">{fmtMs(d)}</span>
+                ) : null
+              })()}
             </button>
           </div>
         ))}
+        {!following && (
+          <button
+            type="button"
+            onClick={() => setPicked(null)}
+            className="ml-1 rounded px-2 py-0.5 text-[10.5px] text-text-3 transition hover:bg-white/[0.06] hover:text-text-1"
+          >
+            {'\u56de\u5230\u8ddf\u968f\u6700\u65b0'}
+          </button>
+        )}
+        {following && (
+          <span className="ml-1 flex items-center gap-1 text-[10.5px] text-text-3">
+            <span className="h-1.5 w-1.5 rounded-full bg-signal-green" />
+            {'\u8ddf\u968f\u6700\u65b0'}
+          </span>
+        )}
       </div>
+
+      {/* \u672c\u9636\u6bb5\u4ea7\u51fa\u3002\u7b2c 3 \u5c42\u53ea\u6709 agent \u6d3b\u52a8\uff0c\u800c\u786e\u5b9a\u6027\u9636\u6bb5\u6839\u672c\u6ca1\u6709 agent \u5faa\u73af\uff0c
+          \u4e0d\u628a step \u81ea\u5df1\u7684\u4ea7\u51fa\u6446\u51fa\u6765\u7684\u8bdd\uff0c\u5b83\u4eec\u770b\u8d77\u6765\u5c31\u662f\u4e00\u7247\u7a7a\u767d\u3002 */}
+      {summary && (
+        <div
+          className="rounded-xl px-3 py-2"
+          style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}
+        >
+          <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-text-3">
+            {'\u672c\u9636\u6bb5\u4ea7\u51fa'}
+            {summary.durationMs != null && (
+              <span className="ml-2 font-mono normal-case text-text-3">{fmtMs(summary.durationMs)}</span>
+            )}
+          </p>
+          {Object.keys(summary.data).length === 0 ? (
+            <p className="font-mono text-[11.5px] text-text-3">{'\u8fd9\u4e00\u9636\u6bb5\u6ca1\u6709\u7ed3\u6784\u5316\u4ea7\u51fa'}</p>
+          ) : (
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {Object.entries(summary.data).map(([k, v]) => (
+                <span key={k} className="font-mono text-[11.5px] text-text-2">
+                  {k}
+                  {': '}
+                  <span className="text-text-1">
+                    {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* \u7b2c 3 \u5c42\uff1aagent \u6bcf\u4e00\u8f6e\u3002append-only\uff0c\u4e0d\u53bb\u91cd\u3002 */}
       <div
@@ -130,6 +195,28 @@ export default function MultisiteRunView({
         )}
       </div>
 
+      {finished && (
+        <div
+          className="rounded-xl px-3 py-2"
+          style={{ background: 'rgba(48,209,88,0.08)', border: '1px solid rgba(48,209,88,0.2)' }}
+        >
+          <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-signal-green">
+            {'\u672c\u6b21\u8fd0\u884c\u603b\u7ed3'}
+          </p>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {Object.entries(finished).map(([k, v]) => (
+              <span key={k} className="font-mono text-[11.5px] text-text-2">
+                {k}
+                {': '}
+                <span className="text-text-1">
+                  {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {snapshotFile && runId && (
         <a
           className="text-[11.5px] text-signal-bright underline"
@@ -142,6 +229,14 @@ export default function MultisiteRunView({
       )}
     </div>
   )
+}
+
+// \u8017\u65f6\uff1a\u6beb\u79d2\u5bf9\u4eba\u6ca1\u6709\u610f\u4e49\uff0c137077ms \u8981\u4e00\u773c\u770b\u51fa\u662f\u4e24\u5206\u591a\u949f\u3002
+function fmtMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  const m = Math.floor(ms / 60000)
+  return `${m}m${Math.round((ms % 60000) / 1000)}s`
 }
 
 function AgentRow({ ev }: { ev: ProgressEvent }) {

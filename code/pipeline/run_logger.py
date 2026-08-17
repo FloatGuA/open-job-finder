@@ -130,6 +130,7 @@ class RunLogger:
                     message=message or f"Step {step}: {status}",
                     scope=scope or {},
                     detail=data or {},
+                    duration_ms=duration_ms,
                 ))
             except Exception:
                 pass

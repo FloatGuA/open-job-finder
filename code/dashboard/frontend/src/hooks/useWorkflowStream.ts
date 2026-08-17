@@ -13,6 +13,9 @@ export interface ProgressEvent {
   ts?: number
   // seq: agent 内层循环的轮次序号。非 null = 这是一条 agent 步事件（m1/m2 专有）。
   seq?: number | null
+  // duration_ms: 这一步花了多久。只有终态的 step/tool 事件有；agent 步没有
+  // 「耗时」这个概念，是 null 而不是 0（0 会被渲染成"花了 0 毫秒"）。
+  duration_ms?: number | null
 }
 
 export function useWorkflowStream(onEvent: (event: ProgressEvent) => void) {

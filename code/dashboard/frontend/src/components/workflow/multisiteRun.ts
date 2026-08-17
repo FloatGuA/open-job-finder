@@ -36,6 +36,39 @@ export function stageStatuses(
   return out
 }
 
+export interface StageSummary {
+  status: StageStatus
+  durationMs: number | null
+  data: Record<string, unknown>
+}
+
+// 一个阶段自己的产出：跑了多久 + 它往 run 日志里记了什么。
+//
+// **为什么需要它**：第 3 层原来只渲染 `seq != null` 的事件，于是 `ensure_ready`
+// （确定性代码，没有 agent 循环）看起来完全是空的，`write_pending_jobs` 跑完也没有
+// 任何总结——而这些数据一直都在 step 事件里，只是没有落点。
+//
+// 只认**终态**的 step 事件（`seq == null` 且状态是终态）。agent 步的 seq 非 null，
+// 拿它当总结会把 detail 里的 record 当成阶段产出渲染出去。
+export function stageSummary(events: ProgressEvent[], step: string): StageSummary | null {
+  const ev = events.find((e) => e.step === step && e.seq == null && TERMINAL[e.status])
+  if (!ev) return null
+  return {
+    status: TERMINAL[ev.status],
+    durationMs: ev.duration_ms ?? null,
+    data: (ev.detail ?? {}) as Record<string, unknown>,
+  }
+}
+
+// 整轮 run 的总结（run_end 的 summary）。空对象当没有——渲染一个空块比不渲染更糟。
+// 注意实时 SSE 的 done 事件只有 message（字符串化的 dict）、没有 detail；结构化的那份
+// 要等 run 停下、WorkflowCard 切到回放事件之后才拿得到。
+export function runSummary(events: ProgressEvent[]): Record<string, unknown> | null {
+  const ev = events.find((e) => e.step === 'done' && e.seq == null)
+  const data = (ev?.detail ?? {}) as Record<string, unknown>
+  return Object.keys(data).length > 0 ? data : null
+}
+
 // 第 3 层：某个阶段里 agent 的每一轮，按 seq 升序，**不去重**。
 // 现有 buildTree 按 tool 名存 Map、后来者覆盖，而 take_snapshot 一次 run 调几十次。
 export function agentRows(events: ProgressEvent[], step: string): ProgressEvent[] {

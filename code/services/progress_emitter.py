@@ -22,6 +22,10 @@ class ProgressEvent:
     # seq: agent 内层循环的轮次序号。非 None = 这是一条 agent 步事件（m1/m2 专有）。
     # 普通 step/tool 事件没有序号概念，留 None。
     seq: Optional[int] = None
+    # duration_ms: 这一步花了多久。只有终态的 step/tool 事件有；agent 步、run_start
+    # 这些没有"耗时"概念，留 None 而不是 0——0 会被渲染成"花了 0 毫秒"，
+    # 那是**错的信息**，而 None 是**缺失的信息**，两者对读日志的人意义完全不同。
+    duration_ms: Optional[int] = None
 
 
 def event_to_dict(event: "ProgressEvent") -> dict:
@@ -40,6 +44,7 @@ def event_to_dict(event: "ProgressEvent") -> dict:
         "scope": event.scope,
         "detail": event.detail,
         "seq": event.seq,
+        "duration_ms": event.duration_ms,
         "ts": event.ts,
     }
 

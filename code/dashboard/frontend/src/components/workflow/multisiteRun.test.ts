@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
-import { agentRows, forWorkflow, stageStatuses } from './multisiteRun'
+import { agentRows, forWorkflow, runSummary, stageStatuses, stageSummary } from './multisiteRun'
 
 const STAGES = ['ensure_ready', 'find_jobs', 'write_pending_jobs']
 
-function step(name: string, status: string, ts: number): ProgressEvent {
-  return { workflow: 'm1', step: name, status, message: '', ts }
+function step(
+  name: string,
+  status: string,
+  ts: number,
+  detail?: Record<string, unknown>,
+  duration_ms?: number,
+): ProgressEvent {
+  return { workflow: 'm1', step: name, status, message: '', ts, detail, duration_ms }
 }
 
 describe('forWorkflow', () => {
@@ -78,5 +84,54 @@ describe('agentRows', () => {
 
   it('ignores non-agent events', () => {
     expect(agentRows([step('find_jobs', 'done', 1)], 'find_jobs')).toHaveLength(0)
+  })
+})
+
+describe('stageSummary', () => {
+  // ①②③ 的共同根因：第 3 层只渲染 seq != null 的事件，把 step 自己的产出
+  // 全滤掉了。ensure_ready 是确定性代码、没有 agent 循环，于是看起来是空的；
+  // write_pending_jobs 同理，跑完也没任何总结。而这些数据一直在事件里。
+  it('returns the terminal step event data and duration', () => {
+    const evs = [step('ensure_ready', 'done', 2, { snapshot_chars: 11944 }, 3963)]
+    expect(stageSummary(evs, 'ensure_ready')).toEqual({
+      status: 'done',
+      durationMs: 3963,
+      data: { snapshot_chars: 11944 },
+    })
+  })
+
+  it('returns null for a stage that has not finished', () => {
+    const evs = [agent('find_jobs', 0, 'take_snapshot', 1)]
+    expect(stageSummary(evs, 'find_jobs')).toBeNull()
+  })
+
+  it('ignores agent steps when looking for the terminal event', () => {
+    // agent 步的 seq 非 null，不是阶段终态——拿它当总结会把
+    // detail 里的 record 当成阶段产出渲染出去。
+    const evs = [
+      agent('find_jobs', 5, 'record_job', 1),
+      step('find_jobs', 'done', 2, { found: 15 }, 137077),
+    ]
+    expect(stageSummary(evs, 'find_jobs')?.data).toEqual({ found: 15 })
+  })
+
+  it('surfaces a failed stage', () => {
+    const evs = [step('find_jobs', 'error', 2, { snapshot_file: 'find_jobs_snapshot.txt' }, 900)]
+    expect(stageSummary(evs, 'find_jobs')?.status).toBe('error')
+  })
+})
+
+describe('runSummary', () => {
+  it('returns the run-level summary once the run ends', () => {
+    const evs = [step('done', 'done', 9, { found: 15, new_pending_jobs: 15 })]
+    expect(runSummary(evs)).toEqual({ found: 15, new_pending_jobs: 15 })
+  })
+
+  it('returns null while the run is still going', () => {
+    expect(runSummary([step('find_jobs', 'done', 2, { found: 15 })])).toBeNull()
+  })
+
+  it('ignores an empty summary so the panel does not render a blank block', () => {
+    expect(runSummary([step('done', 'done', 9, {})])).toBeNull()
   })
 })
