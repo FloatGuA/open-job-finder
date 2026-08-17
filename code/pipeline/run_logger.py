@@ -131,6 +131,7 @@ class RunLogger:
                     scope=scope or {},
                     detail=data or {},
                     duration_ms=duration_ms,
+                    error=error,
                 ))
             except Exception:
                 pass

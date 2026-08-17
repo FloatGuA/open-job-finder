@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
-import { agentRows, forWorkflow, runSummary, stageStatuses, stageSummary } from './multisiteRun'
+import {
+  agentRows,
+  agentTurns,
+  forWorkflow,
+  runSummary,
+  stageStatuses,
+  stageSummary,
+} from './multisiteRun'
 
 const STAGES = ['ensure_ready', 'find_jobs', 'write_pending_jobs']
 
@@ -10,8 +17,16 @@ function step(
   ts: number,
   detail?: Record<string, unknown>,
   duration_ms?: number,
+  error?: string,
 ): ProgressEvent {
-  return { workflow: 'm1', step: name, status, message: '', ts, detail, duration_ms }
+  return { workflow: 'm1', step: name, status, message: '', ts, detail, duration_ms, error }
+}
+
+function think(name: string, seq: number, ts: number): ProgressEvent {
+  return {
+    workflow: 'm1', step: name, status: 'info', message: '', ts, seq,
+    detail: { kind: 'think', seq, text: 'x', calls: [] },
+  }
 }
 
 describe('forWorkflow', () => {
@@ -97,6 +112,7 @@ describe('stageSummary', () => {
       status: 'done',
       durationMs: 3963,
       data: { snapshot_chars: 11944 },
+      error: null,
     })
   })
 
@@ -133,5 +149,59 @@ describe('runSummary', () => {
 
   it('ignores an empty summary so the panel does not render a blank block', () => {
     expect(runSummary([step('done', 'done', 9, {})])).toBeNull()
+  })
+})
+
+describe('partial \u9636\u6bb5', () => {
+  // agent 步数耗尽 = 活儿没干完。它绝不能跟 done 一样是绿的——那会让人把
+  // 「某类 0/N」读成"站上没有这类岗"，而真相是压根没扫到。
+  it('maps the partial status to its own colour bucket', () => {
+    const evs = [step('find_jobs', 'partial', 2, { found: 15, truncated: true }, 900)]
+    expect(stageStatuses(evs, STAGES).find_jobs).toBe('partial')
+  })
+
+  it('partial is not folded into done', () => {
+    const evs = [step('find_jobs', 'partial', 2, {}, 900)]
+    expect(stageStatuses(evs, STAGES).find_jobs).not.toBe('done')
+  })
+
+  it('stageSummary reports the partial status too', () => {
+    const evs = [step('find_jobs', 'partial', 2, { truncated: true }, 900)]
+    expect(stageSummary(evs, 'find_jobs')?.status).toBe('partial')
+  })
+})
+
+describe('stageSummary \u5e26\u51fa\u5931\u8d25\u539f\u56e0', () => {
+  it('surfaces the error string', () => {
+    // 以前 error 只写进 JSONL：站点在前端变红，但看不到为什么。
+    const evs = [step('ensure_ready', 'error', 2, {}, 900, '\u9875\u9762\u52a0\u8f7d\u540e\u4ecd\u662f\u7a7a\u767d')]
+    expect(stageSummary(evs, 'ensure_ready')?.error).toBe('\u9875\u9762\u52a0\u8f7d\u540e\u4ecd\u662f\u7a7a\u767d')
+  })
+
+  it('is null when the stage succeeded', () => {
+    expect(stageSummary([step('ensure_ready', 'done', 2, {}, 900)], 'ensure_ready')?.error)
+      .toBeNull()
+  })
+})
+
+describe('agentTurns', () => {
+  // 内层 ReAct 的预算是**模型轮次**，不是消息条数：一轮 think 后面常常跟着
+  // 一条 observe，78 条消息其实只是 34 轮。拿 seq 当轮次会把余量算少一半。
+  it('counts model turns, not messages', () => {
+    const evs = [
+      think('find_jobs', 1, 1),
+      { ...think('find_jobs', 2, 2), detail: { kind: 'observe', seq: 2, tool: 't', chars: 9, head: '' } },
+      think('find_jobs', 3, 3),
+    ]
+    expect(agentTurns(evs, 'find_jobs')).toBe(2)
+  })
+
+  it('is zero for a stage with no agent loop', () => {
+    expect(agentTurns([step('ensure_ready', 'done', 2)], 'ensure_ready')).toBe(0)
+  })
+
+  it('only counts the asked stage', () => {
+    const evs = [think('ensure_ready', 1, 1), think('find_jobs', 2, 2)]
+    expect(agentTurns(evs, 'find_jobs')).toBe(1)
   })
 })

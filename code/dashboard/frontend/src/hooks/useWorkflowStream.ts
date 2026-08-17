@@ -16,6 +16,8 @@ export interface ProgressEvent {
   // duration_ms: 这一步花了多久。只有终态的 step/tool 事件有；agent 步没有
   // 「耗时」这个概念，是 null 而不是 0（0 会被渲染成"花了 0 毫秒"）。
   duration_ms?: number | null
+  // error: 失败原因。终态事件才有；成功时是 null。
+  error?: string | null
 }
 
 export function useWorkflowStream(onEvent: (event: ProgressEvent) => void) {

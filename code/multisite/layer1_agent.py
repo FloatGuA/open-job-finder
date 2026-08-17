@@ -134,6 +134,9 @@ class Layer1State(TypedDict, total=False):
     # 导航 agent 的产出
     open_result: OpenApplicationOutput
     snapshot_text: str
+    # truncated: 这一段的 agent 循环是不是**步数耗尽**才停的（不是干完了）。
+    # traced_stage 读它决定阶段状态是 partial 还是 successful。
+    truncated: bool
     empty_elements: list[ScannedElement]
     classified_fields: list[FieldClassification]
     form_screenshot: str          # 表单整页截图文件名（给审批人看，不给 agent）
@@ -522,6 +525,27 @@ async def capture_form_screenshot(tools, dest_dir: Path = _SCREENSHOT_DIR) -> st
         # 都是固定文案 + 整数，不会有写不出去的字符）。
         safe_print(f"[layer1] 表单截图失败（不影响落库）：{exc}", flush=True)
         return ""
+
+
+_ROOT_AREA_RE = re.compile(r'RootWebArea\s+"(?P<title>[^"]*)"(?:\s+url="(?P<url>[^"]*)")?')
+
+
+def _describe_page(snapshot_text: str) -> dict:
+    """`ensure_ready` 的产出：它把浏览器带到了哪个页面。
+
+    以前这一步只报 `snapshot_chars`（快照字符数）。那个数字只能回答"页面渲染了吗"，
+    答不了任何你实际会问的问题——停在哪个 URL、标题是什么。而这两样就在快照第一行
+    （`RootWebArea "标题" url="..."`），一直白放着。
+
+    字符数保留为**次要信号**：判断"是不是空壳"仍然只有它能便宜地回答。
+    解析不到根节点不抛异常——这一步的职责是导航，不是解析快照。
+    """
+    m = _ROOT_AREA_RE.search(snapshot_text or "")
+    return {
+        "url": (m.group("url") or "") if m else "",
+        "title": (m.group("title") or "") if m else "",
+        "snapshot_chars": len(snapshot_text or ""),
+    }
 
 
 def _looks_blank(snapshot_text: str) -> bool:
@@ -1113,19 +1137,25 @@ def build_graph(
             result = await agent_runtime.run_agent(
                 agent, f"入口页面：{state['search_url']}\n请开始。",
                 on_step=agent_step_sink(logger, "find_jobs"))
-            if agent_runtime.hit_step_limit(result):
+            truncated = agent_runtime.hit_step_limit(result)
+            if truncated:
                 # `create_react_agent` 步数耗尽时不抛异常、只塞一句固定文案就返回，
                 # 所以下面那个 except 分支其实从没走到过（见 agent_runtime 的说明）。
-                # 这里必须显式提示：否则"扫完了"和"扫到一半断了"在日志里一样。
-                print(f"[layer1] ⚠ 选岗未跑完就耗尽步数，只采用已记录的 {len(sink)} 个岗位。"
-                      f"名额没满的类别可能只是没扫到，不代表站上没有。", flush=True)
+                # **写进 state**，不只是 print：traced_stage 会把它翻译成 partial
+                # 状态，否则"扫完了"和"扫到一半断了"在日志和前端里完全一样。
+                safe_print(f"[layer1] ⚠ 选岗未跑完就耗尽步数，只采用已记录的 {len(sink)} 个岗位。"
+                           f"名额没满的类别可能只是没扫到，不代表站上没有。", flush=True)
         except GraphRecursionError:
             # 理论上到不了这儿（LangGraph 走的是 remaining_steps 软着陆），保留是因为
             # 万一它换了实现，超限**不该是全损**：已经 record 下来的岗位照样要带出去。
-            print(f"[layer1] 选岗 agent 达到步数上限，采用已记录的 {len(sink)} 个岗位。", flush=True)
+            truncated = True
+            safe_print(f"[layer1] 选岗 agent 达到步数上限，采用已记录的 {len(sink)} 个岗位。", flush=True)
         # 不再按总数截断：配额已经在 record_job 里按类别拦过了，这里再截一刀只会
         # 悄悄砍掉某一类刚记满的名额（截断按记录顺序，跟类别无关）。
-        return {"found_jobs": list(sink)}
+        # `truncated` 让 traced_stage 把这一段记成 partial 而不是 successful——
+        # "扫完了"和"扫到一半没步数了"必须能区分，否则「某类 0/N」会被读成
+        # "站上没有这类岗"，而真相是压根没扫到。
+        return {"found_jobs": list(sink), "truncated": truncated}
 
     async def write_pending_jobs(state: Layer1State) -> dict:
         """Checkpoint 1：把候选岗位落库，然后**结束这次 run**。
@@ -1171,8 +1201,9 @@ def build_graph(
         result = await agent_runtime.run_agent(
             agent, f"岗位详情页：{job.url}\n请开始。",
             on_step=agent_step_sink(logger, "open_application"))
-        if agent_runtime.hit_step_limit(result):
-            print("[layer1] ⚠ 导航 agent 步数耗尽，结果可能不完整。", flush=True)
+        truncated = agent_runtime.hit_step_limit(result)
+        if truncated:
+            safe_print("[layer1] ⚠ 导航 agent 步数耗尽，结果可能不完整。", flush=True)
         outcome = OpenApplicationOutput(
             form_opened=bool(result_sink.get("form_opened")),
             resume_uploaded=bool(result_sink.get("resume_uploaded")),
@@ -1188,6 +1219,7 @@ def build_graph(
         snapshot = await _snapshot_and_cache()
         return {
             "open_result": outcome,
+            "truncated": truncated,
             "snapshot_text": snapshot,
             "job_title": state.get("job_title") or job.title,
             "company": state.get("company") or job.company,
@@ -1249,7 +1281,7 @@ def build_graph(
     # 所以只能从结构上让它不可能发生。
     stages = [
         ("ensure_ready", ensure_ready,
-         lambda out: {"snapshot_chars": len(out.get("snapshot_text") or "")}),
+         lambda out: _describe_page(out.get("snapshot_text") or "")),
         ("find_jobs", find_jobs,
          lambda out: {"found": len(out.get("found_jobs") or []),
                       "by_category": dict(Counter(j.category for j in

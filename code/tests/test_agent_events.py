@@ -26,11 +26,11 @@ class TestEventToDict:
         改那里，忘了的表现是前端永远收不到它、而且不报错。收敛成一个函数。"""
         ev = ProgressEvent(workflow="m1", step="find_jobs", status="info",
                            message="x", tool=None, scope={}, detail={"a": 1},
-                           seq=13, duration_ms=137077, ts=1.0)
+                           seq=13, duration_ms=137077, error="boom", ts=1.0)
         assert event_to_dict(ev) == {
             "workflow": "m1", "step": "find_jobs", "tool": None, "status": "info",
             "message": "x", "scope": {}, "detail": {"a": 1}, "seq": 13,
-            "duration_ms": 137077, "ts": 1.0,
+            "duration_ms": 137077, "error": "boom", "ts": 1.0,
         }
 
     def test_seq_is_none_for_ordinary_events(self):

@@ -26,6 +26,9 @@ class ProgressEvent:
     # 这些没有"耗时"概念，留 None 而不是 0——0 会被渲染成"花了 0 毫秒"，
     # 那是**错的信息**，而 None 是**缺失的信息**，两者对读日志的人意义完全不同。
     duration_ms: Optional[int] = None
+    # error: 失败原因。以前它只写进 JSONL，SSE 和回放都不带——于是前端能看到
+    # 站点变红、看不到为什么，得自己去翻日志文件。
+    error: Optional[str] = None
 
 
 def event_to_dict(event: "ProgressEvent") -> dict:
@@ -45,6 +48,7 @@ def event_to_dict(event: "ProgressEvent") -> dict:
         "detail": event.detail,
         "seq": event.seq,
         "duration_ms": event.duration_ms,
+        "error": event.error,
         "ts": event.ts,
     }
 

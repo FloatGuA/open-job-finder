@@ -588,8 +588,17 @@ async def get_multisite_stages() -> JSONResponse:
     **从图定义导出，不手维护**：W1/W2 的 SKELETON 是手抄的静态模板，已经漂移过
     （见 PITFALLS.md）。m1 = 队列里的 select_only 路径（只跑到 Checkpoint 1）。
     """
+    from multisite.agent_runtime import MAX_STEPS
     from multisite.layer1_agent import stage_names
-    return JSONResponse({"m1": list(stage_names(True)), "m2": list(stage_names(False))})
+
+    # max_steps 是内层 ReAct 循环的**模型轮次**上限，跟阶段名一样是图的静态属性，
+    # 所以走同一个端点。前端第 3 层用它显示「第 N / 上限 轮」——没有分母的话，
+    # "跑了 34 轮"这个数字读者无从判断是宽裕还是快撞墙了。
+    return JSONResponse({
+        "m1": list(stage_names(True)),
+        "m2": list(stage_names(False)),
+        "max_steps": MAX_STEPS,
+    })
 
 
 @app.get("/api/apply-failure/{name}")

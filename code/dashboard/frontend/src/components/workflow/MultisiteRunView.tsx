@@ -3,6 +3,7 @@ import { API } from '@/api'
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
 import {
   agentRows,
+  agentTurns,
   forWorkflow,
   runSummary,
   stageStatuses,
@@ -25,6 +26,8 @@ const STAGE_DOT: Record<StageStatus, string> = {
   pending: 'bg-text-3/30',
   running: 'bg-signal-blue animate-pulse',
   done: 'bg-signal-green',
+  // partial = 跑完了但没干完（步数耗尽）。黄色，绝不能跟 done 一样绿。
+  partial: 'bg-signal-amber',
   error: 'bg-signal-red',
 }
 
@@ -38,6 +41,7 @@ export default function MultisiteRunView({
   isRunning?: boolean
 }) {
   const [stages, setStages] = useState<string[]>([])
+  const [maxSteps, setMaxSteps] = useState<number | null>(null)
   const [picked, setPicked] = useState<string | null>(null)
 
   // 先滤掉别的 workflow 的事件，下面所有派生量都用 evs 而不是 events。
@@ -47,7 +51,9 @@ export default function MultisiteRunView({
   useEffect(() => {
     let alive = true
     API.multisiteStages().then((r) => {
-      if (alive) setStages(workflowId === 'm1' ? r.m1 : r.m2)
+      if (!alive) return
+      setStages(workflowId === 'm1' ? r.m1 : r.m2)
+      setMaxSteps(r.max_steps ?? null)
     })
     return () => {
       alive = false
@@ -68,6 +74,9 @@ export default function MultisiteRunView({
   // 第 3 层是空的——它们的信息全在这里。
   const summary = useMemo(() => (active ? stageSummary(evs, active) : null), [evs, active])
   const finished = useMemo(() => runSummary(evs), [evs])
+  // 内层 ReAct 的位置：用掉几轮模型调用 / 上限多少。没有分母的话，
+  // 「跑了 34 轮」读者无从判断是宽裕还是快撞墙。
+  const turns = useMemo(() => (active ? agentTurns(evs, active) : 0), [evs, active])
 
   // \u5931\u8d25\u90a3\u4e00\u7ad9\u7684\u5b8c\u6574\u5feb\u7167\uff1a\u6587\u4ef6\u540d\u6765\u81ea\u5931\u8d25\u4e8b\u4ef6\u7684 detail\uff0c\u8ddf applyFailScreenshot
   // \u4ece\u4e8b\u4ef6 detail \u6260\u6587\u4ef6\u540d\u662f\u540c\u4e00\u4e2a\u8def\u5b50\u3002
@@ -160,6 +169,12 @@ export default function MultisiteRunView({
               <span className="ml-2 font-mono normal-case text-text-3">{fmtMs(summary.durationMs)}</span>
             )}
           </p>
+          {summary.error && (
+            <p className="mb-1 font-mono text-[11.5px] text-signal-red">{summary.error}</p>
+          )}
+          {summary.status === 'partial' && (
+            <p className="mb-1 text-[11.5px] text-signal-amber">{'\u6b65\u6570\u8017\u5c3d\uff0c\u7ed3\u679c\u662f\u90e8\u5206\u7684\u2014\u2014\u540d\u989d\u6ca1\u6ee1\u7684\u7c7b\u522b\u53ef\u80fd\u53ea\u662f\u6ca1\u626b\u5230\uff0c\u4e0d\u4ee3\u8868\u7ad9\u4e0a\u6ca1\u6709'}</p>
+          )}
           {Object.keys(summary.data).length === 0 ? (
             <p className="font-mono text-[11.5px] text-text-3">{'\u8fd9\u4e00\u9636\u6bb5\u6ca1\u6709\u7ed3\u6784\u5316\u4ea7\u51fa'}</p>
           ) : (
@@ -179,6 +194,22 @@ export default function MultisiteRunView({
       )}
 
       {/* \u7b2c 3 \u5c42\uff1aagent \u6bcf\u4e00\u8f6e\u3002append-only\uff0c\u4e0d\u53bb\u91cd\u3002 */}
+      <div className="flex items-baseline justify-between">
+        <span className="text-[10.5px] font-semibold uppercase tracking-wider text-text-3">
+          {'\u5185\u5c42 ReAct \u5faa\u73af'}
+        </span>
+        {maxSteps != null && (
+          <span className="font-mono text-[11px] text-text-3">
+            {'\u6a21\u578b\u8f6e\u6b21'}
+            {` ${turns} / ${maxSteps} `}
+            <span
+              className={turns >= maxSteps * 0.8 ? 'text-signal-amber' : 'text-text-3'}
+            >
+              {`(${Math.round((turns / maxSteps) * 100)}%)`}
+            </span>
+          </span>
+        )}
+      </div>
       <div
         ref={boxRef}
         onScroll={(e) => {

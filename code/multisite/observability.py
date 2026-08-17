@@ -72,8 +72,18 @@ def traced_stage(name, fn, logger, summarize=None, snapshot_provider=None):
                             int((time.monotonic() - started) * 1000),
                             data=data, error=str(exc))
             raise   # 记日志不是处理异常
-        logger.log_step(name, {}, "successful", int((time.monotonic() - started) * 1000),
-                        data=summarize(out) if summarize else {})
+        # **没跑完就不许报成功。** agent 步数耗尽时 `create_react_agent` 不抛异常、
+        # 只塞一句固定文案就正常返回，两种结局的返回值一模一样（见 agent_runtime
+        # 的 `hit_step_limit`）。节点把这件事写进 state 的 `truncated`，这里翻译成
+        # 一个**不是绿色**的状态：`partial` 经 `_ui_status` 原样透出，前端画成黄色。
+        # 报 successful 的代价不是"少一个提示"，是让人得出错误结论——看到「游戏 0/2」
+        # 会以为站上没有这类岗，而真相可能是压根没扫到。
+        truncated = bool(isinstance(out, dict) and out.get("truncated"))
+        data = summarize(out) if summarize else {}
+        if truncated:
+            data = {**data, "truncated": True}
+        logger.log_step(name, {}, "partial" if truncated else "successful",
+                        int((time.monotonic() - started) * 1000), data=data)
         return out
 
     return wrapped

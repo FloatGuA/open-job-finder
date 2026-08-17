@@ -1,11 +1,15 @@
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
 
-export type StageStatus = 'pending' | 'running' | 'done' | 'error'
+// partial: 跑完了但结果不完整（agent 步数耗尽）。**不能并进 done** ——
+// 它长得跟成功一样的话，某类 0/N 会被读成「站上没有这类岗」，
+// 而真相可能是压根没扫到。一个错误的结论比一个明显的失败危险得多。
+export type StageStatus = 'pending' | 'running' | 'done' | 'partial' | 'error'
 
 const TERMINAL: Record<string, StageStatus> = {
   done: 'done',
   error: 'error',
   skipped: 'done',
+  partial: 'partial',
 }
 
 // RunView 拿到的 events 是**共享的 SSE 缓冲**，里面混着别的 workflow 的事件——
@@ -40,6 +44,8 @@ export interface StageSummary {
   status: StageStatus
   durationMs: number | null
   data: Record<string, unknown>
+  // 失败原因。以前它只写进 JSONL，前端只能看到站点变红、看不到为什么。
+  error: string | null
 }
 
 // 一个阶段自己的产出：跑了多久 + 它往 run 日志里记了什么。
@@ -57,6 +63,7 @@ export function stageSummary(events: ProgressEvent[], step: string): StageSummar
     status: TERMINAL[ev.status],
     durationMs: ev.duration_ms ?? null,
     data: (ev.detail ?? {}) as Record<string, unknown>,
+    error: ev.error ?? null,
   }
 }
 
@@ -67,6 +74,20 @@ export function runSummary(events: ProgressEvent[]): Record<string, unknown> | n
   const ev = events.find((e) => e.step === 'done' && e.seq == null)
   const data = (ev?.detail ?? {}) as Record<string, unknown>
   return Object.keys(data).length > 0 ? data : null
+}
+
+// 内层 ReAct 用掉了几轮**模型调用**。
+//
+// 不能拿 seq 当轮次：一次模型轮次产生一条 think，它调的工具再产生一条 observe，
+// 所以 78 条消息其实只有 34 轮。拿 seq 报进度会把余量算少一半，而这个数字的
+// 用处正是判断还宽裕、还是快撞上限了。
+export function agentTurns(events: ProgressEvent[], step: string): number {
+  return events.filter(
+    (e) =>
+      e.seq != null &&
+      e.step === step &&
+      (e.detail as { kind?: string } | undefined)?.kind === 'think',
+  ).length
 }
 
 // 第 3 层：某个阶段里 agent 的每一轮，按 seq 升序，**不去重**。
