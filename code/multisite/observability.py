@@ -42,11 +42,15 @@ def run_scope(workflow: str, emitter=None, meta: dict = None):
         emitter.finish_workflow(workflow, str(run.summary), status="done")
 
 
-def traced_stage(name, fn, logger, summarize=None):
+def traced_stage(name, fn, logger, summarize=None, snapshot_provider=None):
     """包一层，让这个阶段跑完在 run 日志里留下一条记录。
 
     `summarize(out) -> dict` **跟着阶段走**，不由这里认识每个阶段的输出形状：
     否则加一个阶段要改两个地方，而漏改只表现为日志里少几个数字，不会有东西变红。
+
+    `snapshot_provider() -> str` 失败时用来取"当时最近一张"完整 a11y 快照。
+    **不能改用 `state["snapshot_text"]`**：它只在阶段成功返回时才写回，阶段失败时
+    装的是上一个阶段的快照——正好在最需要它的时候是错的。
     """
 
     async def wrapped(state):
@@ -54,8 +58,19 @@ def traced_stage(name, fn, logger, summarize=None):
         try:
             out = await fn(state)
         except Exception as exc:
+            data = {}
+            if snapshot_provider is not None:
+                from services.run_logger import run_artifacts_dir
+                # `layer1_agent` 已经在顶部 import 了 observability，顶层反向
+                # import 会成环，所以这里放函数体内。
+                from multisite.layer1_agent import _dump_debug_snapshot
+                tag = f"{name}_snapshot"
+                _dump_debug_snapshot(tag, snapshot_provider() or "",
+                                     target_dir=run_artifacts_dir(logger.run_id))
+                data["snapshot_file"] = f"{tag}.txt"
             logger.log_step(name, {}, "failed",
-                            int((time.monotonic() - started) * 1000), error=str(exc))
+                            int((time.monotonic() - started) * 1000),
+                            data=data, error=str(exc))
             raise   # 记日志不是处理异常
         logger.log_step(name, {}, "successful", int((time.monotonic() - started) * 1000),
                         data=summarize(out) if summarize else {})

@@ -422,11 +422,17 @@ def _extract_text(tool_result) -> str:
 _DEBUG_DIR = Path(__file__).resolve().parent.parent / "data" / "multisite_debug"
 
 
-def _dump_debug_snapshot(tag: str, snapshot_text: str) -> None:
+def _dump_debug_snapshot(tag: str, snapshot_text: str, target_dir: Optional[Path] = None) -> None:
     """调试用：某个定位失败时把当时的原始 a11y 快照存下来，省得只能靠报错
-    字符串猜页面长什么样——上一次真机排查就是因为没有这个才多跑了一轮。"""
-    _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-    (_DEBUG_DIR / f"{tag}.txt").write_text(snapshot_text, encoding="utf-8")
+    字符串猜页面长什么样——上一次真机排查就是因为没有这个才多跑了一轮。
+
+    `target_dir` 不给就落回老位置 `data/multisite_debug/`（图之外的调用点还在用它）。
+    run 里的失败走 `logs/runs/{run_id}/`：那是 run 证据，跟 run 同生死、整目录删得干净
+    （见 spec §7.5）。
+    """
+    dest = Path(target_dir) if target_dir is not None else _DEBUG_DIR
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / f"{tag}.txt").write_text(snapshot_text, encoding="utf-8")
 
 
 _SCREENSHOT_DIR = Path(__file__).resolve().parent.parent / "data" / "multisite_screenshots"
@@ -1274,7 +1280,9 @@ def build_graph(
 
     graph = StateGraph(Layer1State)
     for name, fn, summarize in stages:
-        graph.add_node(name, traced_stage(name, fn, logger, summarize) if logger else fn)
+        graph.add_node(name, traced_stage(name, fn, logger, summarize,
+                                          snapshot_provider=lambda: _latest_snapshot["text"])
+                       if logger else fn)
     graph.add_edge(START, "ensure_ready")
     graph.add_edge("ensure_ready", "find_jobs")
     # 候选岗位**总是**落库，不管后面还跑不跑——Checkpoint 1 的记录是这次选岗的

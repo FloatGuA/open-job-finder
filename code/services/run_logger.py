@@ -143,6 +143,18 @@ class RunLogger:
             self._f = None
 
 
+def run_artifacts_dir(run_id: str, runs_dir: Optional[Path] = None) -> Path:
+    """一次 run 的产物目录，与 `{run_id}.jsonl` 平级。
+
+    `run_log_reader.iter_run_files` glob 的是 `*.jsonl`，不会把这个目录当成 run，
+    所以放在这里不破坏任何现有代码。写入、读取端点、清理三处**都用这一个函数**。
+
+    `runs_dir` 不给就落回模块级 `RUNS_DIR`——**必须在函数体内读**，不能写成默认参数：
+    默认值在 def 时求值一次，测试里 monkeypatch 模块级 `RUNS_DIR` 就会失效。
+    """
+    return (runs_dir if runs_dir is not None else RUNS_DIR) / run_id
+
+
 def reconcile_orphaned_runs() -> list[str]:
     """Close out run files left dangling by a hard kill (process killed / crashed
     mid-run never reaches the except/finally in w1_runner.py's `run_logger.close()`,

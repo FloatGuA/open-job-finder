@@ -9,6 +9,7 @@ import json
 
 import pytest
 
+from multisite.observability import traced_stage
 from services import run_logger as run_logger_module
 
 
@@ -216,3 +217,52 @@ class TestAgentStepSink:
     def test_no_logger_means_no_sink(self):
         """命令行 --direct 那条路径没有 logger；返回 None 让 run_agent 走原样。"""
         assert agent_step_sink(None, "find_jobs") is None
+
+
+class DumpLogger:
+    """够 traced_stage 用的最小 logger：记 step、给 run_id。"""
+
+    def __init__(self, run_id="m1_dump"):
+        self.run_id = run_id
+        self.steps = []
+
+    def log_step(self, name, scope, status, duration_ms, data=None, error=None):
+        self.steps.append({"name": name, "status": status, "data": data or {},
+                           "error": error})
+
+
+class TestFailureSnapshot:
+    def _run(self, logger, provider, runs_dir, monkeypatch):
+        import services.run_logger as srl
+        monkeypatch.setattr(srl, "RUNS_DIR", runs_dir)
+
+        async def boom(state):
+            raise RuntimeError("找不到筛选器")
+
+        wrapped = traced_stage("find_jobs", boom, logger, snapshot_provider=provider)
+        with pytest.raises(RuntimeError):
+            asyncio.run(wrapped({"snapshot_text": "这是上一个阶段的旧快照"}))
+
+    def test_dumps_the_providers_snapshot_not_the_state_one(self, tmp_path, monkeypatch):
+        """state["snapshot_text"] 只在阶段**成功返回**时才写回，阶段失败时它装的是
+        **上一个**阶段的快照——正好在最需要它的时候是错的。"""
+        logger = DumpLogger()
+        self._run(logger, lambda: "这是 agent 循环里最近的一张", tmp_path, monkeypatch)
+
+        dumped = (tmp_path / "m1_dump" / "find_jobs_snapshot.txt").read_text(encoding="utf-8")
+        assert dumped == "这是 agent 循环里最近的一张"
+
+    def test_failed_step_carries_the_file_name(self, tmp_path, monkeypatch):
+        """前端靠事件 detail 里的文件名拼下载链接——跟 applyFailScreenshot 一个路子。"""
+        logger = DumpLogger()
+        self._run(logger, lambda: "快照", tmp_path, monkeypatch)
+
+        failed = logger.steps[-1]
+        assert failed["status"] == "failed"
+        assert failed["data"]["snapshot_file"] == "find_jobs_snapshot.txt"
+
+    def test_no_provider_means_no_dump(self, tmp_path, monkeypatch):
+        """命令行 --direct 没有 provider，不该因此报错。"""
+        logger = DumpLogger()
+        self._run(logger, None, tmp_path, monkeypatch)
+        assert not (tmp_path / "m1_dump").exists()
