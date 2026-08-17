@@ -121,25 +121,59 @@ def build_agent(tools: Sequence[BaseTool], prompt: str, response_format=None):
     )
 
 
-def _trace(msg: BaseMessage, step: int) -> None:
-    """把 agent 的每一步打到 stdout。
+_ARG_MAX = 120       # 单个工具参数打印/记录的字符上限
+_HEAD_MAX = 160      # 工具返回首行的字符上限
+_TEXT_MAX = 300      # stdout 上 agent 说的话的字符上限
 
-    **不是可选的调试便利，是这条路线的必需品**：agent 自主导航失败时的现象是
-    "跑了很久然后报 GraphRecursionError"，异常本身完全不说明它在哪兜圈子。第一次
-    真机跑就撞上了——226 行日志里除了 MCP 噪音和 traceback 什么都没有，无从判断
-    是没找到筛选器、还是快照读不懂、还是在两个页面之间来回跳。
+
+def describe_message(msg: BaseMessage, seq: int) -> Optional[dict]:
+    """一条 agent 消息 → 结构化记录；不值得记的返回 None。
+
+    **AIMessage 的「说」和它要调的工具绑成一条**——它们本来就来自同一条消息，
+    拆成两种事件反而要在下游再配对一次。
     """
     if isinstance(msg, AIMessage):
-        for call in (msg.tool_calls or []):
-            args = {k: str(v)[:120] for k, v in (call.get("args") or {}).items()}
-            safe_print(f"  [{step:02d}] -> {call.get('name')}({args})", flush=True)
-        text = msg.content if isinstance(msg.content, str) else ""
-        if text.strip():
-            safe_print(f"  [{step:02d}] 说: {text.strip()[:300]}", flush=True)
-    elif isinstance(msg, ToolMessage):
+        calls = [
+            {"id": c.get("id") or "",
+             "name": c.get("name") or "",
+             "args": {k: str(v)[:_ARG_MAX] for k, v in (c.get("args") or {}).items()}}
+            for c in (msg.tool_calls or [])
+        ]
+        text = msg.content.strip() if isinstance(msg.content, str) else ""
+        if not text and not calls:
+            return None
+        return {"kind": "think", "seq": seq, "text": text, "calls": calls}
+    if isinstance(msg, ToolMessage):
         body = msg.content if isinstance(msg.content, str) else str(msg.content)
-        first = body.strip().splitlines()[0] if body.strip() else "(空)"
-        safe_print(f"  [{step:02d}] <- {msg.name}: {len(body)} 字符 | {first[:160]}", flush=True)
+        stripped = body.strip()
+        return {"kind": "observe", "seq": seq,
+                "call_id": msg.tool_call_id or "",
+                "tool": msg.name or "",
+                "chars": len(body.encode("utf-8")),
+                "head": stripped.splitlines()[0][:_HEAD_MAX] if stripped else ""}
+    return None
+
+
+def format_record(record: dict) -> list[str]:
+    """结构化记录 → stdout 行。刻意与旧 `_trace` 的输出逐字一致。"""
+    seq = record["seq"]
+    if record["kind"] == "think":
+        lines = [f"  [{seq:02d}] -> {c['name']}({c['args']})" for c in record["calls"]]
+        if record["text"]:
+            lines.append(f"  [{seq:02d}] 说: {record['text'][:_TEXT_MAX]}")
+        return lines
+    return [f"  [{seq:02d}] <- {record['tool']}: {record['chars']} 字符 "
+            f"| {record['head'] or '(空)'}"]
+
+
+def _trace(msg: BaseMessage, step: int) -> None:
+    """把 agent 的每一步打到 stdout。**不是可选的调试便利，是这条路线的必需品**：
+    agent 自主导航失败时的现象是"跑了很久然后报错"，异常本身完全不说明它在哪兜圈子。"""
+    record = describe_message(msg, step)
+    if record is None:
+        return
+    for line in format_record(record):
+        safe_print(line, flush=True)
 
 
 async def run_agent(agent, user_message: str, max_steps: int = MAX_STEPS, trace: bool = True) -> dict:
