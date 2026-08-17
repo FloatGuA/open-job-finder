@@ -185,6 +185,12 @@ def parse_run_events(path: Path) -> list[dict[str, Any]]:
     pipeline = first.get("pipeline", "") or path.stem.split("_")[0]
 
     out: list[dict[str, Any]] = []
+
+    def emit(**fields: Any) -> None:
+        # seq 只在 agent_step 上有值；这里给统一默认，免得每加一个分支就要记得补一次
+        # （补五处等于给将来第六个分支留同样的坑）。
+        out.append({"seq": None, **fields})
+
     for raw in lines:
         try:
             e = json.loads(raw)
@@ -196,24 +202,25 @@ def parse_run_events(path: Path) -> list[dict[str, Any]]:
         status = e.get("status", "")
         ts = iso_to_epoch(e.get("ts", ""))
         if event == "run_start":
-            out.append({"workflow": pipeline, "step": "start", "tool": None, "status": "running",
-                        "message": f"开始 {pipeline} workflow", "scope": {},
-                        "detail": e.get("meta") or {}, "ts": ts})
+            emit(workflow=pipeline, step="start", tool=None, status="running",
+                 message=f"开始 {pipeline} workflow", scope={},
+                 detail=e.get("meta") or {}, ts=ts)
         elif event == "run_end":
-            out.append({"workflow": pipeline, "step": "done", "tool": None, "status": _ui_status(status),
-                        "message": str(e.get("summary") or {}), "scope": {}, "detail": e.get("summary") or {}, "ts": ts})
+            emit(workflow=pipeline, step="done", tool=None, status=_ui_status(status),
+                 message=str(e.get("summary") or {}), scope={}, detail=e.get("summary") or {}, ts=ts)
         elif event == "step":
             step = e.get("step", "")
-            out.append({"workflow": pipeline, "step": step, "tool": None, "status": _ui_status(status),
-                        "message": f"Step {step}: {status}", "scope": scope, "detail": data, "ts": ts})
+            emit(workflow=pipeline, step=step, tool=None, status=_ui_status(status),
+                 message=f"Step {step}: {status}", scope=scope, detail=data, ts=ts)
         elif event == "tool":
             tool = e.get("tool", "")
-            out.append({"workflow": pipeline, "step": e.get("step", ""), "tool": tool, "status": _ui_status(status),
-                        "message": f"[tool] {tool}: {status}", "scope": scope, "detail": data, "ts": ts})
+            emit(workflow=pipeline, step=e.get("step", ""), tool=tool, status=_ui_status(status),
+                 message=f"[tool] {tool}: {status}", scope=scope, detail=data, ts=ts)
         elif event == "agent_step":
             # agent 内层循环。格式化跟实时 SSE 共用 agent_event()——两边各写一套的
-            # 表现是"实时看着好好的、翻历史就少一半"，而那不会报错。
-            out.append(agent_event(pipeline, e.get("step", ""), e.get("record") or {}, ts))
+            # 表现是"实时看着好好的、翻历史就少一半"，而那不会报错。agent_event() 自带
+            # seq，经 emit() 时会覆盖 "seq": None 的默认值。
+            emit(**agent_event(pipeline, e.get("step", ""), e.get("record") or {}, ts))
         else:
             # business event. Skip file-only per-conversation traces the live SSE never
             # showed (visible=False), so replay mirrors the live view. Older logs
@@ -222,7 +229,7 @@ def parse_run_events(path: Path) -> list[dict[str, Any]]:
                 continue
             # job_scored / job_skipped / intent_analyzed / ...: no status in file; SSE
             # emits these as "info"; detail carries the human-readable payload.
-            out.append({"workflow": pipeline, "step": event, "tool": None, "status": "info",
-                        "message": f"[event] {event}", "scope": scope, "detail": {**scope, **data}, "ts": ts})
+            emit(workflow=pipeline, step=event, tool=None, status="info",
+                 message=f"[event] {event}", scope=scope, detail={**scope, **data}, ts=ts)
     out.sort(key=lambda x: x["ts"])
     return out
