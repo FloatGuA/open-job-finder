@@ -216,6 +216,39 @@ glob 的是 `*.jsonl`，不会匹配目录，因此不破坏任何现有代码�
 **本次范围**：只让 m1/m2 的失败快照落进新位置。W1 的 `data/apply_failures/` 按同一把尺子也该搬
 （它是 run 证据，从 run 事件里被引用），但那是 W1 的改动，本次不动，记进 `PROGRESS.md`。
 
+### 怎么读出来：照抄现有的文件端点，但补一个它们不需要的校验
+
+仓库里已有两套约定，各管一类：
+
+| 类别 | 约定 | 实例 |
+|------|------|------|
+| 结构化日志 | **从不裸传**，server 解析成 JSON 再给 | `/api/runs`、`/api/runs/{id}`、`/api/runs/{id}/events`、`/api/runs/{id}/diagnose` |
+| 文件附件 | 专用端点，bare filename + 固定 base dir + 拒绝路径穿越，`FileResponse` | `/api/apply-failure/{name}`、`/api/pending-applications/screenshot/{name}` |
+
+a11y 快照全文是**给人读的原文**，解析没意义——属于第二类。所以：
+
+```
+GET /api/runs/{run_id}/artifacts/{name}
+```
+
+- `{name}` 走跟那两个端点**逐字相同**的校验：含 `/`、`\`、`..` 一律 400。
+- media_type 按后缀：`.txt` → `text/plain; charset=utf-8`，`.png` → `image/png`，其余 400。
+- **文件名从 stage 失败事件的 `data` 里带给前端**，跟 `applyFailScreenshot` 从事件 detail 抠文件名
+  是同一个路子。**不做列目录端点**——现有两个都没有。
+
+**照抄时最容易漏的一处**：那两个端点的 base dir 是固定常量，**只有 `{name}` 来自用户**；
+这个端点多了一段 `{run_id}`，它同样会参与定位目录。补一道 run_id 校验是能防住，但更稳的是**不拼**：
+
+```python
+path = run_log_reader.find_run_file(RUNS_DIR, run_id)  # glob *.jsonl + 比对 run_start 的 run_id 字段
+if path is None:
+    raise HTTPException(404, ...)
+artifacts_dir = path.with_suffix("")                    # 同名目录，来自磁盘扫描结果而非用户输入
+```
+
+`find_run_file` 从不把用户输入拼进路径，所以穿越在结构上不可能，不依赖校验。
+`/api/runs/{run_id}/events` 已经是这么做的（而不是 `RUNS_DIR / f"{run_id}.jsonl"`），沿用它。
+
 ## 8. a11y 快照：只记摘要，失败时另存全文
 
 一次 run 几十张、每张 10KB+，全存是几百 KB/run。
@@ -247,6 +280,7 @@ glob 的是 `*.jsonl`，不会匹配目录，因此不破坏任何现有代码�
 | 失败时 dump 的是最近一张 | `traced_stage` 的 fn 抛异常 → 断言 dump 出来的是 `snapshot_provider()` 的返回值，不是 `state["snapshot_text"]` |
 | 产物落在 run 目录 | 失败 dump 写进 `logs/runs/{run_id}/`，且 `iter_run_files` 仍只返回 `.jsonl`（目录不被当成 run） |
 | 删 run 连目录一起删 | `delete_run_log` 删掉 jsonl 后，同名目录也不复存在 |
+| artifacts 端点拒绝穿越 | `{name}` 含 `..` / `/` / `\` → 400；不存在的 run_id → 404；正常 `.txt` → 200 且 `text/plain` |
 | 时间线不塌缩 | vitest：同名工具连调 3 次 → 渲染出 3 行 |
 | 站点状态推导 | vitest：pending / running / done / error 四种输入 |
 
