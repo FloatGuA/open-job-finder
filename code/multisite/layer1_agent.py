@@ -632,6 +632,17 @@ def make_record_job_tool(sink: list, quotas: dict, known_urls: Optional[set] = N
 _PASSTHROUGH_FIND_JOBS = ("navigate_page", "wait_for")
 _PASSTHROUGH_OPEN_APPLICATION = ("navigate_page", "wait_for", "upload_file")
 
+# 图节点的名字与顺序。**第二个消费方是前端第 2 层骨架**（经 /api/multisite/stages），
+# 所以它不能只活在 build_graph 的局部变量里。真正的函数与 summarizer 仍在
+# build_graph 的 stages 表里，两者由建图时的对账保证不漂移。
+STAGE_ORDER = ("ensure_ready", "find_jobs", "write_pending_jobs",
+               "open_application", "scan_and_classify_fields", "write_pending_application")
+
+
+def stage_names(select_only: bool) -> tuple[str, ...]:
+    """这次 run 会经过哪些图节点。select_only=True 只跑到 Checkpoint 1。"""
+    return STAGE_ORDER[:3] if select_only else STAGE_ORDER
+
 
 @contextmanager
 def staged_resume(resume_pdf_path: str):
@@ -1251,6 +1262,12 @@ def build_graph(
             ("write_pending_application", write_pending_application,
              lambda out: {"pending_application_id": out.get("pending_application_id")}),
         ]
+
+    # 名字漂移在运行时表现为"骨架上有一站永远不亮"，跟"卡住了"一模一样、测不出来，
+    # 所以在这里当场炸掉。这个分支在正确的构建里永远不可能进。
+    built = tuple(name for name, _, _ in stages)
+    if built != stage_names(select_only):
+        raise RuntimeError(f"阶段表与 stage_names() 不一致：{built} vs {stage_names(select_only)}")
 
     graph = StateGraph(Layer1State)
     for name, fn, summarize in stages:

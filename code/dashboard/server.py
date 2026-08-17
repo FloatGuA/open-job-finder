@@ -553,6 +553,17 @@ async def get_run_events(run_id: str) -> JSONResponse:
     return JSONResponse({"events": run_log_reader.parse_run_events(path)})
 
 
+@app.get("/api/multisite/stages")
+async def get_multisite_stages() -> JSONResponse:
+    """m1/m2 的 LangGraph 节点顺序——前端第 2 层「地铁站」的骨架。
+
+    **从图定义导出，不手维护**：W1/W2 的 SKELETON 是手抄的静态模板，已经漂移过
+    （见 PITFALLS.md）。m1 = 队列里的 select_only 路径（只跑到 Checkpoint 1）。
+    """
+    from multisite.layer1_agent import stage_names
+    return JSONResponse({"m1": list(stage_names(True)), "m2": list(stage_names(False))})
+
+
 @app.get("/api/apply-failure/{name}")
 async def get_apply_failure_screenshot(name: str) -> FileResponse:
     """Serve a saved apply-failure screenshot (capture_screenshot writes these to
