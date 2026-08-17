@@ -191,3 +191,28 @@ class TestStageLogging:
 
         with pytest.raises(ValueError, match="原样抛出去"):
             asyncio.run(traced_stage("x", boom, RunLogger(pipeline="m1"))({}))
+
+
+from multisite.observability import agent_step_sink
+
+
+class RecordingLogger:
+    def __init__(self):
+        self.calls = []
+
+    def log_agent_step(self, step, record):
+        self.calls.append((step, record))
+
+
+class TestAgentStepSink:
+    def test_forwards_the_record_under_its_stage(self):
+        logger = RecordingLogger()
+        sink = agent_step_sink(logger, "find_jobs")
+        sink({"kind": "think", "seq": 1, "text": "x", "calls": []})
+
+        assert logger.calls == [("find_jobs", {"kind": "think", "seq": 1,
+                                               "text": "x", "calls": []})]
+
+    def test_no_logger_means_no_sink(self):
+        """命令行 --direct 那条路径没有 logger；返回 None 让 run_agent 走原样。"""
+        assert agent_step_sink(None, "find_jobs") is None

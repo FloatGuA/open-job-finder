@@ -51,7 +51,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from multisite import agent_runtime, chrome_mcp_client, preferences, safe_tools
-from multisite.observability import run_scope, traced_stage
+from multisite.observability import agent_step_sink, run_scope, traced_stage
 from multisite.personal_info_loader import load_candidates, load_personal_info, match_value
 from services.console_utf8 import safe_print
 from services.prompt_manager import PromptManager
@@ -1105,7 +1105,8 @@ def build_graph(
         agent = agent_runtime.build_agent(tools_for_agent, prompt)
         try:
             result = await agent_runtime.run_agent(
-                agent, f"入口页面：{state['search_url']}\n请开始。")
+                agent, f"入口页面：{state['search_url']}\n请开始。",
+                on_step=agent_step_sink(logger, "find_jobs"))
             if agent_runtime.hit_step_limit(result):
                 # `create_react_agent` 步数耗尽时不抛异常、只塞一句固定文案就返回，
                 # 所以下面那个 except 分支其实从没走到过（见 agent_runtime 的说明）。
@@ -1161,7 +1162,9 @@ def build_graph(
         # 不用 response_format：那条路在 DeepSeek 上直接 400，见
         # make_record_open_result_tool 的说明。
         agent = agent_runtime.build_agent(tools_for_agent, prompt)
-        result = await agent_runtime.run_agent(agent, f"岗位详情页：{job.url}\n请开始。")
+        result = await agent_runtime.run_agent(
+            agent, f"岗位详情页：{job.url}\n请开始。",
+            on_step=agent_step_sink(logger, "open_application"))
         if agent_runtime.hit_step_limit(result):
             print("[layer1] ⚠ 导航 agent 步数耗尽，结果可能不完整。", flush=True)
         outcome = OpenApplicationOutput(

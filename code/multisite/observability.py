@@ -62,3 +62,14 @@ def traced_stage(name, fn, logger, summarize=None):
         return out
 
     return wrapped
+
+
+def agent_step_sink(logger, step: str):
+    """给 `run_agent(on_step=...)` 用的回调：把 agent 每一轮记到这个阶段名下。
+
+    `logger` 为 None（命令行 `--direct` 路径）时返回 None——让 run_agent 保持
+    原来的行为，而不是塞一个什么都不做的函数进去。
+    """
+    if logger is None:
+        return None
+    return lambda record: logger.log_agent_step(step, record)
