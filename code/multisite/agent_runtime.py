@@ -176,8 +176,13 @@ def _trace(msg: BaseMessage, step: int) -> None:
         safe_print(line, flush=True)
 
 
-async def run_agent(agent, user_message: str, max_steps: int = MAX_STEPS, trace: bool = True) -> dict:
+async def run_agent(agent, user_message: str, max_steps: int = MAX_STEPS,
+                    trace: bool = True, on_step=None) -> dict:
     """跑一次 agent 循环并返回最终 state。
+
+    `on_step(record)` 对每条**新出现**且值得记的消息调用一次（record 形状见
+    `describe_message`）。它和 `trace` 互不影响：命令行直跑只要 stdout，
+    Dashboard 触发的那次两个都要。
 
     `recursion_limit` 是 LangGraph 对图 superstep 数的硬上限，而**一次模型轮次是
     三跳不是两跳**：`pre_model_hook → agent → tools`。`pre_model_hook` 是
@@ -194,7 +199,7 @@ async def run_agent(agent, user_message: str, max_steps: int = MAX_STEPS, trace:
     """
     config = {"recursion_limit": max_steps * 3 + 4}
     payload = {"messages": [{"role": "user", "content": user_message}]}
-    if not trace:
+    if not trace and on_step is None:
         return await agent.ainvoke(payload, config=config)
 
     final: dict = {}
@@ -202,9 +207,15 @@ async def run_agent(agent, user_message: str, max_steps: int = MAX_STEPS, trace:
     async for chunk in agent.astream(payload, config=config, stream_mode="values"):
         final = chunk
         msgs = chunk.get("messages") or []
-        # 只打新出现的那些，避免每轮把整段历史重打一遍。
+        # 只处理新出现的那些，避免每轮把整段历史重放一遍。
         while step < len(msgs):
-            _trace(msgs[step], step)
+            record = describe_message(msgs[step], step)
+            if record is not None:
+                if trace:
+                    for line in format_record(record):
+                        safe_print(line, flush=True)
+                if on_step is not None:
+                    on_step(record)
             step += 1
     if hit_step_limit(final):
         # 大声说出来。这条路径是"没干完"，不是"干完了"，而两者的返回值一模一样。
