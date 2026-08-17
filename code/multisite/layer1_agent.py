@@ -1013,24 +1013,29 @@ def record_application(tracker, state: dict, personal_info: dict) -> dict:
     return {"pending_application_id": app_id}
 
 
-def build_graph(
+def _make_nodes(
     tools: list,
     personal_info: Optional[dict] = None,
     tracker: Optional[ApplicationTracker] = None,
     quotas: Optional[dict] = None,
     max_pages: int = 8,
     max_filter_clicks: int = 4,
-    select_only: bool = False,
     logger=None,
-):
-    """组装 Layer 1 的 LangGraph。tools 来自 chrome_mcp_client.get_tools()，通过
-    闭包绑定进各节点——不放进 state（不是可序列化/可 checkpoint 的东西）。
+) -> tuple:
+    """节点工厂：Layer 1 的六个阶段函数只在这里定义一份。`build_select_graph` /
+    `build_survey_graph` 从返回的字典里各取自己需要的子集组装图——**拆的是接线，
+    不是实现**：一张图要连哪些节点变了，不代表节点本身的行为该抄两份。
 
-    外层是确定性编排，`find_jobs` / `open_application` 两个节点内部才是 agent
-    循环（见模块 docstring 的分工表）。
+    tools 来自 chrome_mcp_client.get_tools()，通过闭包绑定进各节点——不放进
+    state（不是可序列化/可 checkpoint 的东西）。外层是确定性编排，`find_jobs` /
+    `open_application` 两个节点内部才是 agent 循环（见模块 docstring 的分工表）。
 
     `quotas` = {类别: 最多几个}，默认读 profile.yaml 的 job_seeking.categories。
     它同时是 `record_job` 的枚举约束和选岗的终止条件。
+
+    返回 `(nodes, snapshot_provider)`：
+      `nodes`：`{阶段名: (节点函数, run 日志摘要函数)}`。
+      `snapshot_provider`：`traced_stage` 兜底读最新快照用的回调。
     """
     take_snapshot = chrome_mcp_client.get_tool(tools, "take_snapshot")
 
@@ -1038,8 +1043,8 @@ def build_graph(
     tracker = tracker or ApplicationTracker()
     # 名额按站点解析：profile 里 site_overrides.<site>.skip 列出的类别直接不参与。
     # 本站不存在的类别会让"所有名额已满"这个主终止条件永远不成立，见 JobSeeking。
-    # 但 build_graph 拿不到 site_name（它在 state 里），所以这里只能给全局默认，
-    # 按站点的解析在 run_layer1 里做完再传进来。
+    # 但这里拿不到 site_name（它在 state 里），所以只能给全局默认，按站点的解析
+    # 在 run_layer1 里做完再传进来。
     quotas = quotas if quotas is not None else preferences.load_profile().job_seeking.quotas
     pm = PromptManager()
 
@@ -1289,71 +1294,129 @@ def build_graph(
     async def write_pending_application(state: Layer1State) -> dict:
         return record_application(tracker, state, personal_info)
 
-    # 阶段表：名字 → 函数 → 这一步该往 run 日志里记什么。**加节点只能改这里**，
-    # 下面的 add_node 是一个循环——包装因此不是每加一个节点都要记得做的手工动作。
-    # 漏包的表现是 Dashboard 上那一段莫名不显示，跟"卡住了"一模一样，测不出来，
-    # 所以只能从结构上让它不可能发生。
-    stages = [
-        ("ensure_ready", ensure_ready,
-         lambda out: _describe_page(out.get("snapshot_text") or "")),
-        ("find_jobs", find_jobs,
-         lambda out: {"found": len(out.get("found_jobs") or []),
-                      "by_category": dict(Counter(j.category for j in
-                                                  (out.get("found_jobs") or [])))}),
-        ("write_pending_jobs", write_pending_jobs,
-         lambda out: {"new": len(out.get("pending_job_ids") or [])}),
-    ]
-    if not select_only:
-        stages += [
-            ("open_application", open_application,
-             lambda out: {"form_opened": bool(getattr(out.get("open_result"), "form_opened", False)),
-                          "resume_uploaded": bool(getattr(out.get("open_result"),
-                                                          "resume_uploaded", False))}),
-            ("scan_and_classify_fields", scan_and_classify_fields,
-             lambda out: {"empty": len(out.get("empty_elements") or []),
-                          "required": sum(1 for e in (out.get("empty_elements") or [])
-                                          if e.get("required")),
-                          "classified": len(out.get("classified_fields") or [])}),
-            ("write_pending_application", write_pending_application,
-             lambda out: {"pending_application_id": out.get("pending_application_id")}),
-        ]
+    # 节点名 → (函数, run 日志摘要函数)。**加节点只能改这里**——两个 builder 都从
+    # 这个字典里取，漏加的表现是某张图的 stage 表拼不出对应节点，_stages_for 的
+    # `.get` 兜底会让它落到 _compile 的对账炸掉，而不是悄悄跑一个 None 节点。
+    return {
+        "ensure_ready": (ensure_ready,
+                         lambda out: _describe_page(out.get("snapshot_text") or "")),
+        "find_jobs": (find_jobs,
+                     lambda out: {"found": len(out.get("found_jobs") or []),
+                                  "by_category": dict(Counter(j.category for j in
+                                                              (out.get("found_jobs") or [])))}),
+        "write_pending_jobs": (write_pending_jobs,
+                               lambda out: {"new": len(out.get("pending_job_ids") or [])}),
+        "open_application": (open_application,
+                             lambda out: {"form_opened": bool(getattr(out.get("open_result"),
+                                                                      "form_opened", False)),
+                                          "resume_uploaded": bool(getattr(out.get("open_result"),
+                                                                          "resume_uploaded", False))}),
+        "scan_and_classify_fields": (scan_and_classify_fields,
+                                     lambda out: {"empty": len(out.get("empty_elements") or []),
+                                                  "required": sum(1 for e in (out.get("empty_elements") or [])
+                                                                  if e.get("required")),
+                                                  "classified": len(out.get("classified_fields") or [])}),
+        "write_pending_application": (write_pending_application,
+                                      lambda out: {"pending_application_id": out.get("pending_application_id")}),
+    }, (lambda: _latest_snapshot["text"])
 
-    # 名字漂移在运行时表现为"骨架上有一站永远不亮"，跟"卡住了"一模一样、测不出来，
-    # 所以在这里当场炸掉。这个分支在正确的构建里永远不可能进。
-    #
-    # **临时桥**（Task 2 拆图时整段消失）：m1 这条路建的形状已经跟 M1_STAGES 一致，
-    # 可以对账。而 select_only=False 建的仍是**拆分前的 6 站**，跟新定义的 M2_STAGES
-    # （4 站）本来就不同——那不是漂移，是**代码还没拆**。拿新定义去对老形状只会
-    # 把每一次真实 m2 打死，所以这里只守 m1。
+
+def _compile(stages, workflow, edges, logger, snapshot_provider):
+    """把阶段表接成一张图。两个 builder 共用，避免接线逻辑写两遍。"""
     built = tuple(name for name, _, _ in stages)
-    if select_only and built != stage_names("m1"):
-        raise RuntimeError(f"阶段表与 stage_names('m1') 不一致：{built} vs {stage_names('m1')}")
-
+    if built != stage_names(workflow):
+        raise RuntimeError(f"阶段表与 stage_names({workflow!r}) 不一致：{built} vs {stage_names(workflow)}")
     graph = StateGraph(Layer1State)
     for name, fn, summarize in stages:
         graph.add_node(name, traced_stage(name, fn, logger, summarize,
-                                          snapshot_provider=lambda: _latest_snapshot["text"])
-                       if logger else fn)
-    graph.add_edge(START, "ensure_ready")
-    graph.add_edge("ensure_ready", "find_jobs")
-    # 候选岗位**总是**落库，不管后面还跑不跑——Checkpoint 1 的记录是这次选岗的
-    # 唯一留存物，agent 跨 run 没有记忆，不落库就只剩 stdout 里那几行。
-    graph.add_edge("find_jobs", "write_pending_jobs")
-
-    if select_only:
-        # 只跑到选岗为止。**整个 Layer 1 里只有选岗是零副作用的**（纯浏览 + 写自己
-        # 的库），后面上传简历是对真实企业系统的真实动作。把这条短路做成"图里根本
-        # 没有后续节点"而不是"节点里判断一下要不要跳过"——少一条能走到上传的路径，
-        # 就少一个"某个条件写反了就真传上去了"的可能。
-        graph.add_edge("write_pending_jobs", END)
-        return graph.compile()
-
-    graph.add_edge("write_pending_jobs", "open_application")
-    graph.add_edge("open_application", "scan_and_classify_fields")
-    graph.add_edge("scan_and_classify_fields", "write_pending_application")
-    graph.add_edge("write_pending_application", END)
-
+                                          snapshot_provider=snapshot_provider) if logger else fn)
+    for a, b in edges:
+        graph.add_edge(a, b)
     return graph.compile()
+
+
+def _stages_for(nodes: dict, stage_order: tuple) -> list:
+    """按阶段名顺序从节点工厂产出里取出 (name, fn, summarize)。
+
+    **用 `.get` 兜底、不用 `nodes[name]` 严格取**：阶段名一旦漂移（比如 stage_order
+    被 monkeypatch 成一个不存在的节点名），要让它落到 `_compile` 里那句对着
+    `stage_names()` 的对账上、报一个看得懂的"阶段表不一致"，而不是在这里先炸一个
+    "KeyError: 'oops'"——两种失败都对，但后者看不出问题出在"阶段表跟前端契约对
+    不上"，得靠人再往回查一层。
+    """
+    return [(name, *nodes.get(name, (None, None))) for name in stage_order]
+
+
+def build_select_graph(
+    tools: list,
+    personal_info: Optional[dict] = None,
+    tracker: Optional[ApplicationTracker] = None,
+    quotas: Optional[dict] = None,
+    max_pages: int = 8,
+    max_filter_clicks: int = 4,
+    logger=None,
+):
+    """m1：入口页 → 选岗 → 落库 → 结束。**没有 open_application**，对外零副作用。
+
+    参数与旧版 `build_graph` 一致，去掉了 `select_only`——这张图本身就是那条
+    select_only=True 的路径，不用再传布尔量去挑分支。
+    """
+    nodes, snapshot_provider = _make_nodes(
+        tools, personal_info=personal_info, tracker=tracker, quotas=quotas,
+        max_pages=max_pages, max_filter_clicks=max_filter_clicks, logger=logger,
+    )
+    # 阶段名读**活的**模块全局 M1_STAGES（不是拷贝一份字面量）：_compile 里对着的
+    # stage_names() 读的是导入时就定住的 _STAGES_BY_WORKFLOW 字典，只有这里也读
+    # "活的" M1_STAGES，两者才可能真的对不上——drift 测试 monkeypatch M1_STAGES
+    # 才有意义，不然 patch 了也没人读它。
+    stages = _stages_for(nodes, M1_STAGES)
+    edges = [(START, "ensure_ready"), ("ensure_ready", "find_jobs"),
+             ("find_jobs", "write_pending_jobs"), ("write_pending_jobs", END)]
+    return _compile(stages, "m1", edges, logger, snapshot_provider)
+
+
+def build_survey_graph(
+    tools: list,
+    personal_info: Optional[dict] = None,
+    tracker: Optional[ApplicationTracker] = None,
+    quotas: Optional[dict] = None,
+    max_pages: int = 8,
+    max_filter_clicks: int = 4,
+    logger=None,
+):
+    """m2：直接从调用方给定的岗位 URL 开表单。**没有 find_jobs / write_pending_jobs**
+    ——m2 拿到的是已经批准过的那一个岗位，不需要再选一遍。
+    """
+    nodes, snapshot_provider = _make_nodes(
+        tools, personal_info=personal_info, tracker=tracker, quotas=quotas,
+        max_pages=max_pages, max_filter_clicks=max_filter_clicks, logger=logger,
+    )
+    stages = _stages_for(nodes, M2_STAGES)
+    edges = [(START, "ensure_ready"), ("ensure_ready", "open_application"),
+             ("open_application", "scan_and_classify_fields"),
+             ("scan_and_classify_fields", "write_pending_application"),
+             ("write_pending_application", END)]
+    return _compile(stages, "m2", edges, logger, snapshot_provider)
+
+
+def build_graph(
+    tools: list,
+    personal_info: Optional[dict] = None,
+    tracker: Optional[ApplicationTracker] = None,
+    quotas: Optional[dict] = None,
+    max_pages: int = 8,
+    max_filter_clicks: int = 4,
+    select_only: bool = False,
+    logger=None,
+):
+    """兼容壳：**Task 3 删掉**（把 `run_layer1` 改成按 `workflow` 直接挑
+    `build_select_graph` / `build_survey_graph` 之后就不需要它了）。留着只是让
+    `run_layer1` 这次拆图不用跟着改——它现在只是把 `select_only` 翻译成"调
+    哪个新 builder"，自己不再维护任何一份阶段表。
+    """
+    builder = build_select_graph if select_only else build_survey_graph
+    return builder(tools, personal_info=personal_info, tracker=tracker, quotas=quotas,
+                   max_pages=max_pages, max_filter_clicks=max_filter_clicks, logger=logger)
 
 
 async def run_layer1(
