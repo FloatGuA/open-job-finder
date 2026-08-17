@@ -29,11 +29,21 @@ m1/m2 的 LangGraph **节点级**进度已经进了 `logs/runs/*.jsonl` + SSE，
 
 | 层 | 内容 | 确定性 | 渲染 | 数据来源 |
 |----|------|--------|------|---------|
-| 1 总体 workflow | m1 选岗 → 审批① → m2 填表 → 审批② → Layer 3 | 固定 | **静态全链，高亮当前段** | 前端常量 |
+| 1 总体 workflow | m1 选岗 → 审批① → m2 填表 → 审批② → Layer 3 提交 | 固定 | **静态全链，高亮当前段** | 前端常量 |
 | 2 LangGraph 节点 | `ensure_ready` → `find_jobs` → … | 固定，图定义即权威源 | 地铁站（走到第几站、每站耗时/结果） | `stage_names()` + `step` 事件 |
 | 3 ReAct 内层循环 | agent 每一轮：说了什么 + 调了什么 + 看到什么 | 不确定 | 时间线，流式追加 | 新增 `agent_step` 事件 |
 
 第 1 层**只画静态链并高亮当前段**，不查跨 run 真实状态。理由：跨 run 全链要以「岗位」为主体、用 `pending_job_id` 把 m1 run / 人工审批 / m2 run 串起来，那等于先把 layer 之间的状态流转定死——而那正是用户明确说「还没想清楚、要单独理」的部分。方位感现在就能给，状态机等理清了再说。
+
+**Layer 3 的语义（用户 2026-08-17 确认，本次不实现，记在这里当口径）**：
+Layer 3 = 提交 + **回到站点抓「已投递」截图存证**。并且——
+
+> 整个 workflow 在需要审批的操作**做完之后**都需要截图，除了选岗。
+
+即：选岗（审批①）不需要截图；填表做完、提交做完各需要一张**事后存证截图**。
+注意这跟现在已有的那张不是一回事：`_capture_form_screenshot` 拍的是**审批前给人看的依据**，
+而这里要的是**动作执行后的结果留证**。两张图目的不同、时机不同，都要有。
+两者都是**业务数据**（§7.5），跟着记录走，不进 run 目录。
 
 **第 3 层按第 2 层的站点分组**：点第 2 层某一站，第 3 层只显示那一站的时间线；默认跟随正在跑的（或最后一个）站点。不做成一条跨站大流水。
 
@@ -173,14 +183,49 @@ GET /api/multisite/stages
 - m1/m2 **不渲染通用 `LiveLog`**——第 3 层严格更全，两个都放是重复信息。
 - 长时间线：容器内滚动，跟随最新；用户手动上滚后停止跟随（与现有 `LiveLog` 行为一致）。
 
+## 7.5 产物放哪：按寿命分，不按「是不是图片」分
+
+用户（2026-08-17）提出 debug 产物应该按 run 归拢。**同意，但要划一条线。**
+
+先说事实：现状**没有任何 workflow 按 run 分目录**。W1 失败截图在 `data/apply_failures/`、
+m1 失败快照在 `data/multisite_debug/`、m2 表单截图在 `data/multisite_screenshots/`，全是扁平目录；
+`logs/runs/` 里只有 `{run_id}.jsonl` 一个文件。要查「这张图属于哪次 run」只能拿文件名时间戳去对数据库。
+
+改的理由有两条，第二条更硬：
+
+1. **可查**：一次 run 的证据散在三个目录、靠时间戳猜关联。
+2. **可清**：`/api/ops/artifacts` 的注释自己写着这些文件「accumulate real HR/company PII on disk with
+   no automatic cleanup」。现在清一次 run 的痕迹要在两个列表里分别删，漏一个就留孤儿。
+   **一个目录一次删干净**比两处分别删可靠。
+
+但**审批用的截图不能进 run 目录**：
+
+| 类别 | 放哪 | 寿命由谁决定 | 例子 |
+|------|------|-------------|------|
+| **run 证据** | `logs/runs/{run_id}/` | 跟 run 走，可整目录删 | 失败时的 a11y 快照全文、失败截图、DOM dump |
+| **业务数据** | `data/<kind>/` | 跟数据库记录走 | Checkpoint 2 表单截图、Layer 3 已投递存证截图 |
+
+`pending_applications.screenshot` 存的是文件名，审批页靠 `/api/pending-applications/screenshot/{name}` 取。
+那条记录可能躺一周等人审批，而 run 日志清理按「失败的 run / 太老」来——放进 run 目录，
+清理一次就让审批页图裂，而看不到截图就没法审批。Layer 3 的已投递截图更是存证，寿命以月计。
+
+**兼容性**：`logs/runs/{run_id}/` 是目录，与 `{run_id}.jsonl` 平级。`run_log_reader.iter_run_files`
+glob 的是 `*.jsonl`，不会匹配目录，因此不破坏任何现有代码。删除时 jsonl + 同名目录一起删
+（`artifact_cleanup.delete_run_log` 要跟着改）。
+
+**本次范围**：只让 m1/m2 的失败快照落进新位置。W1 的 `data/apply_failures/` 按同一把尺子也该搬
+（它是 run 证据，从 run 事件里被引用），但那是 W1 的改动，本次不动，记进 `PROGRESS.md`。
+
 ## 8. a11y 快照：只记摘要，失败时另存全文
 
 一次 run 几十张、每张 10KB+，全存是几百 KB/run。
 
 - **常规**：`kind="observe"` 只记 `chars` + `head`（首行）。够回答「它调了什么、看到的页面标题是什么」。
-- **失败时**：某个 stage 抛异常时，把**当时最近一张**完整快照写进 `data/multisite_debug/{stage}_failed_{ts}.txt`，
-  并在该 stage 的 `step` 失败事件 `data` 里带上文件名，前端给一个可下载链接。
-- 复用现有 `_dump_debug_snapshot(tag, text)`，调用点扩到 `traced_stage` 的 except 分支。
+- **失败时**：某个 stage 抛异常时，把**当时最近一张**完整快照写进 `logs/runs/{run_id}/{stage}_snapshot.txt`
+  （位置理由见 §7.5：这是 run 证据，不是业务数据），并在该 stage 的 `step` 失败事件 `data` 里带上
+  相对路径，前端给一个可下载链接。
+- 现有 `_dump_debug_snapshot(tag, text)` 写死了 `data/multisite_debug/`，改成接收目标目录；
+  调用点扩到 `traced_stage` 的 except 分支。
 
   **快照从哪取**：不能用 `state["snapshot_text"]`——它只在 stage **成功返回时**才被写回，
   stage 失败时那里装的是**上一个** stage 的快照，正好在最需要它的时候是错的。
@@ -200,6 +245,8 @@ GET /api/multisite/stages
 | **回放 == 实时**（关键） | 同一条 record 走 `pipeline/run_logger` 的 SSE 路径与 `parse_run_events` 的回放路径，断言两个 dict 相等 |
 | 阶段表不漂移 | 假 tools 建图，`list(graph.nodes) == stage_names(select_only)`，两种 `select_only` 各一次 |
 | 失败时 dump 的是最近一张 | `traced_stage` 的 fn 抛异常 → 断言 dump 出来的是 `snapshot_provider()` 的返回值，不是 `state["snapshot_text"]` |
+| 产物落在 run 目录 | 失败 dump 写进 `logs/runs/{run_id}/`，且 `iter_run_files` 仍只返回 `.jsonl`（目录不被当成 run） |
+| 删 run 连目录一起删 | `delete_run_log` 删掉 jsonl 后，同名目录也不复存在 |
 | 时间线不塌缩 | vitest：同名工具连调 3 次 → 渲染出 3 行 |
 | 站点状态推导 | vitest：pending / running / done / error 四种输入 |
 
@@ -220,3 +267,6 @@ GET /api/multisite/stages
 - W1/W2/W3 的渲染改动——一行不碰。
 - `pending_jobs` 的「已填表」终态——用户已明确本轮不做。
 - agent 步骤的实时性优化（虚拟滚动等）——先按几百条的量做，真卡了再说。
+- **事后存证截图**（填表做完 / 提交做完各一张，见 §3）——那是 Layer 3 的活，Layer 3 本身还没建。
+- **把 W1 的 `data/apply_failures/` 搬进 `logs/runs/{run_id}/`**——按 §7.5 的尺子它该搬，
+  但那是 W1 的改动，本次不动。
