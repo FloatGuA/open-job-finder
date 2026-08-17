@@ -42,7 +42,7 @@ from services.prompt_manager import EDITABLE_PROMPTS, PromptManager
 from services.tracker import ApplicationTracker
 from tools.biz_logic.wechat_id import wechat_id_from
 from services import artifact_cleanup, run_log_reader
-from services.run_logger import reconcile_orphaned_runs
+from services.run_logger import reconcile_orphaned_runs, run_artifacts_dir
 from services.scheduler_service import SchedulerService
 from services.workflow_orchestration import OrchestrationService
 
@@ -551,6 +551,34 @@ async def get_run_events(run_id: str) -> JSONResponse:
     if path is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
     return JSONResponse({"events": run_log_reader.parse_run_events(path)})
+
+
+_ARTIFACT_MEDIA = {".txt": "text/plain; charset=utf-8", ".png": "image/png"}
+
+
+@app.get("/api/runs/{run_id}/artifacts/{name}")
+async def get_run_artifact(run_id: str, name: str):
+    """一次 run 的产物（失败时的 a11y 快照全文等）。
+
+    照现有文件端点的约定：bare filename + 拒绝路径穿越 + FileResponse。
+    **但那两个端点的 base dir 是常量、只有 name 来自用户**，这里多一段 run_id：
+    所以不拼路径——用 find_run_file（glob + 比对 run_start 的 run_id 字段）拿到
+    jsonl，再取同名目录，穿越在结构上不可能。
+    """
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    media = _ARTIFACT_MEDIA.get(Path(name).suffix)
+    if media is None:
+        raise HTTPException(status_code=400, detail="不支持的文件类型")
+    run_path = run_log_reader.find_run_file(RUNS_DIR, run_id)
+    if run_path is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    # 用**扫出来的那个文件的 stem**，不是用户传进来的 run_id；目录的拼法只有
+    # run_artifacts_dir 一份实现（写入、读取、清理三处共用）。
+    path = run_artifacts_dir(run_path.stem, RUNS_DIR) / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="产物不存在")
+    return FileResponse(str(path), media_type=media)
 
 
 @app.get("/api/multisite/stages")

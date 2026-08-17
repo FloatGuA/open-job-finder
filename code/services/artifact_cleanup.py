@@ -80,7 +80,21 @@ def _safe_delete(directory: Path, filename: str, suffix: str) -> bool:
 
 
 def delete_run_log(runs_dir: Path, filename: str) -> bool:
-    return _safe_delete(runs_dir, filename, ".jsonl")
+    """删 run 日志时**连它的产物目录一起删**。
+
+    分两处删就会留孤儿，而这些文件装的是真实公司/HR 的 PII——本模块存在的
+    理由就是"手动 review 然后删干净"，留一半等于没删。
+    """
+    import shutil
+
+    from services.run_logger import run_artifacts_dir
+
+    ok = _safe_delete(runs_dir, filename, ".jsonl")
+    if ok:
+        artifacts = run_artifacts_dir(Path(filename).stem, runs_dir)
+        if artifacts.is_dir():
+            shutil.rmtree(artifacts, ignore_errors=True)
+    return ok
 
 
 def delete_screenshot(apply_failures_dir: Path, filename: str) -> bool:
