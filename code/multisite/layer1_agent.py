@@ -889,7 +889,13 @@ def build_agent_toolset(
         snapshot_provider,
     )
     allowed = [chrome_mcp_client.get_tool(tools, name) for name in passthrough]
-    return [snap_tool, guarded_click, *allowed]
+    # 每个工具都包一层防循环。**逐个包而不是只包 click**：真机（join.qq.com）循环
+    # 的是 click，但同一个死法换成 navigate_page 或 wait_for 一模一样会发生——
+    # 循环是 agent 的行为模式，不是某个工具的属性。
+    # 包在**最外层**，所以它看到的是 guarded_click 的最终返回值；`REFUSED:` 不以
+    # Error 开头、不计入失败，那条路本来就已经明确叫它别再试了。
+    return [safe_tools.make_repeat_failure_guard(t)
+            for t in (snap_tool, guarded_click, *allowed)]
 
 
 # 注：`_find_uid_by_label` / `_find_uid_near_text` 于 v2.22.0 删除。它们是旧版

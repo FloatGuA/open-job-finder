@@ -71,11 +71,22 @@ class RunLogger:
         self._debug = debug
         rid = run_id or _make_run_id(pipeline)
         self._inner = _RunLogger(run_id=rid, pipeline=pipeline)
+        self._had_partial_step = False
         self._inner.log_run_start(meta)
 
     @property
     def run_id(self) -> str:
         return self._inner._run_id
+
+    @property
+    def had_partial_step(self) -> bool:
+        """这一轮里有没有哪个步骤只跑了一半（`partial`）。
+
+        收尾时用它决定 run_end 的状态。**整轮不能比它最差的那一步更乐观**——
+        运行列表、诊断器、第 1 层全链视图读的都是 run_end，一个绿色的 done 会让人
+        根本不去展开看里面那个黄色的阶段。
+        """
+        return self._had_partial_step
 
     def should_stop(self) -> bool:
         """True when the user requested a stop (中止 button → emitter.request_stop()).
@@ -109,6 +120,8 @@ class RunLogger:
         error: Optional[str] = None,
         message: Optional[str] = None,
     ) -> None:
+        if status == "partial":
+            self._had_partial_step = True
         self._inner.log_step(
             step=step,
             scope=scope,

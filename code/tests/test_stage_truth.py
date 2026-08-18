@@ -162,3 +162,55 @@ class TestDescribePageIsNotPositionCoupled:
                 'uid=1_0 RootWebArea "页面" url="https://example.com/page"\n'
                 '  uid=1_1 link "别处" url="https://elsewhere.com/"\n')
         assert _describe_page(snap)["url"] == "https://example.com/page"
+
+
+# ── 洞 2 的上一层：整轮 run 也不能替阶段圆谎 ────────────────────────────────
+
+class TestRunEndReflectsPartialStages:
+    """阶段报了 partial，整轮 run 却收尾成 `done`。
+
+    2026-08-18 真机（m1 首次跑 join.qq.com）日志原样：
+
+        step  find_jobs   partial   {"found": 0, "truncated": true}
+        run_end           done
+
+    洞 2 修好的是阶段这一层，run 这一层还在说谎——而人先看到的恰恰是 run 那一行：
+    运行列表、诊断器、第 1 层全链视图读的都是它。一个"绿色的 done"会让人根本不去
+    展开看里面那个黄色的阶段，跟当初 `successful` 掩盖 `truncated` 是同一个错误，
+    只是高了一层。
+
+    `run_diagnostics._OK_END_STATUSES` 只认 done/successful/completed，所以 partial
+    会被它如实标成异常——那正是我们要的。
+    """
+
+    def _run_with(self, tmp_path, monkeypatch, stage_output):
+        import services.run_logger as srl
+        monkeypatch.setattr(srl, "RUNS_DIR", tmp_path)
+        from multisite.observability import run_scope, traced_stage
+
+        async def fn(state):
+            return stage_output
+
+        with run_scope("m1") as run:
+            run_id = run.logger.run_id
+            asyncio.run(traced_stage("find_jobs", fn, run.logger)({}))
+
+        # 直接读 JSONL 而不是走 parse_run_events：run_end 是**运行级**记录，
+        # parse_run_events 产出的是步骤/工具/agent 级事件，本来就不含它。
+        import json
+        lines = (tmp_path / f"{run_id}.jsonl").read_text(encoding="utf-8").splitlines()
+        return [json.loads(x) for x in lines if x.strip()]
+
+    def _end_status(self, records):
+        end = records[-1]
+        assert end["event"] == "run_end", f"最后一条不是 run_end：{end['event']}"
+        return end
+
+    def test_a_partial_stage_makes_the_run_partial(self, tmp_path, monkeypatch):
+        events = self._run_with(tmp_path, monkeypatch, {"truncated": True})
+        assert self._end_status(events)["status"] == "partial"
+
+    def test_an_all_successful_run_still_ends_done(self, tmp_path, monkeypatch):
+        """别为了修这个洞把所有 run 都染成 partial——那等于把信号变成噪音。"""
+        events = self._run_with(tmp_path, monkeypatch, {"found_jobs": []})
+        assert self._end_status(events)["status"] == "done"

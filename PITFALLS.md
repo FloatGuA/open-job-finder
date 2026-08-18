@@ -493,3 +493,74 @@ chr(8) in text or chr(12) in text # 退格 / 换页
 （`r'''...'''` / `\b`）。同一族的老坑：`'\u%04x'` 写在 heredoc / `python -c` 里会被当转义
 （已踩三次），所以含 `\n` / `\u` / 中文的补丁脚本一律写成独立 `.py` 文件再执行——
 但**写成文件还不够，文件里那个字符串也得是 raw**。
+
+---
+
+## 2026-08-19 新增（m1 首次跑新站点 join.qq.com）
+
+## `--reload` 进程确实带了 `--reload`，改的模块照样不生效，而且**没有任何 404 之类的迹象**
+
+**现象**：改完 `multisite/safe_tools.py` + `multisite/observability.py`，直接跑 m1，
+跑出来的行为跟改之前一模一样。
+
+**与上一条 `--reload` 坑的区别（别混为一谈）**：
+- 上一条改的是 `server.py` **新增端点**，症状是 404——**有信号**，一 curl 就知道。
+- 这一条改的是被 server 间接 import 的**普通模块**，函数签名没变、端点照常 200。
+  症状是「跑出来的行为还是旧的」，而旧行为本身也是合法输出，**没有任何东西会报错**。
+  比 404 危险得多：会让人以为「修了但没用」，转而去改一个根本没上场的实现。
+
+**判据（唯一可靠的一条）**：比对 **worker 进程的启动时间** 和 **你改的文件的 mtime**。
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Select-Object ProcessId, ParentProcessId, CreationDate,
+    @{n='Cmd';e={$_.CommandLine.Substring(0,[Math]::Min(70,$_.CommandLine.Length))}} |
+  Format-Table -AutoSize
+Get-Item <改过的文件> | Select-Object LastWriteTime
+```
+
+worker 的 `CreationDate` 早于文件 `LastWriteTime` = **没重载**，无论命令行里有没有 `--reload`。
+
+注意**按 `CommandLine -like '*uvicorn*'` 过滤只会捞到 reloader 父进程**，真正跑代码的 worker
+是它的子进程，命令行长这样：`python -c "from multiprocessing.spawn import spawn_main..."`。
+只看父进程会得出「进程是新的」的错误结论——父进程本来就不重启。
+
+**正确做法**：真机跑之前先做这一次比对（一次 m1 要四分钟，不值得赌）。没重载就
+kill 掉**父子两个** PID 重起；kill 前必须先查 `/api/workflow/status`。
+
+## agent 会把同一个失败动作原样重复到步数耗尽，而它的「思考」全程看起来很正常
+
+**真机（2026-08-18，m1 首次跑 join.qq.com）**：要勾「2027校园招聘」筛选项，
+`click({"uid":"8_30"})` 返回
+`Error: Failed to interact with the element ... did not become interactive within the configured timeout`。
+它于是重新截图、再点**同一个** uid、再失败……**连续 29 次完全一样**，四分钟烧光 60 步预算，
+`find_jobs` 报 partial、found=0，一个岗位都没找到。61 次工具调用里 **59 次是废动作**
+（29 次失败 click + 30 次 take_snapshot 严格交替）。
+
+**为什么读日志时容易被骗过去**：它的 think 每一轮都写得很像样，甚至有自省——
+"Let me take a fresh snapshot to get current uids"——然后照样点回旧 uid。
+**逐条读单轮记录完全看不出问题，只有把整段并排看才看得出是同一个循环。**
+
+**判据**：run 日志里对 `(工具名, 参数)` 做频次统计，出现两位数的就是循环：
+
+```python
+calls = Counter((c["name"], json.dumps(c["args"], sort_keys=True))
+                for r in agent_records for c in r.get("calls") or [])
+```
+
+**修法（v2.27.0）**：`safe_tools.make_repeat_failure_guard` —— 同一工具 + 同一组参数
+**连续**失败 2 次后，第 3 次不执行，返回一段告诉它「换个办法」的文本。
+在 `build_agent_toolset` 里逐个工具包上（循环是 agent 的行为模式，不是 click 的属性）。
+两条不能省的边界：**成功即清零**（否则误伤正常重试），**只认开头的 `Error`**
+（页面正文里出现 "Error" 是常事，全文匹配会把 `take_snapshot` 锁死 = 挖掉 agent 的眼睛）。
+
+## 阶段修好了如实报告，**整轮 run 还在替它圆谎**
+
+同一轮日志里：`step find_jobs partial {"truncated": true}` 紧跟着 `run_end done`。
+
+阶段级 `partial` 是上一版刚修的（步数耗尽不许报 successful），但 `run_scope` 收尾
+写死了 `done`。而**人先看到的恰恰是 run 那一行**——运行列表、诊断器、第 1 层全链视图
+读的都是它。一个绿色的 `done` 会让人根本不去展开看里面那个黄色的阶段。
+
+**普遍判据**：修「子层级不许谎报」时，**顺着往上问一层：父层级的状态是从哪来的？**
+如果父层级是写死的常量，那这个修就只做了一半。整轮的状态不能比它最差的那一步更乐观。

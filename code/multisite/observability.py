@@ -37,9 +37,12 @@ def run_scope(workflow: str, emitter=None, meta: dict = None):
     except Exception:
         logger.close("failed", summary=run.summary)
         raise
-    logger.close("done", summary=run.summary)
+    # 有阶段只跑了一半，整轮就不是 done。SSE 收尾事件用同一个状态——两边不一致的
+    # 表现是"实时看着绿的，翻历史是黄的"，而那种不一致没有任何东西会报错。
+    status = "partial" if logger.had_partial_step else "done"
+    logger.close(status, summary=run.summary)
     if emitter is not None:
-        emitter.finish_workflow(workflow, str(run.summary), status="done")
+        emitter.finish_workflow(workflow, str(run.summary), status=status)
 
 
 def traced_stage(name, fn, logger, summarize=None, snapshot_provider=None):

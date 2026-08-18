@@ -59,6 +59,9 @@ function StatusBadge({ status }: { status: string }) {
     running: 'bg-signal-amber/16 text-signal-amber',
     successful: 'bg-signal-green/16 text-signal-green',
     degraded: 'bg-signal-amber/16 text-signal-amber',
+    // Same amber as the stage-level partial: one word must not mean two
+    // colours across views.
+    partial: 'bg-signal-amber/16 text-signal-amber',
     skipped: 'bg-white/[0.06] text-text-3',
     error: 'bg-signal-red/16 text-signal-red',
   }

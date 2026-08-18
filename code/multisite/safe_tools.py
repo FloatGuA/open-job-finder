@@ -94,3 +94,82 @@ def make_guarded_click(
             "提交/下一步类按钮会被拒绝——本阶段只做信息识别，不提交任何表单。"
         ),
     )
+
+
+def _result_text(result) -> str:
+    """把工具返回值摊平成文本。
+
+    MCP 工具返回的是 content block 列表；字符串只是"单块文本"的简写。
+    chrome-devtools-mcp 把执行错误**当正常内容返回**（isError=False），所以错误就
+    躺在这些 block 里，只 try/except 是抓不到的——真机日志里 29 次点击失败没有一次
+    是异常。
+    """
+    if isinstance(result, str):
+        return result
+    if isinstance(result, list):
+        return "\n".join(b.get("text", "") for b in result if isinstance(b, dict))
+    return str(result)
+
+
+def looks_like_tool_error(result) -> bool:
+    """这次调用是不是失败了。
+
+    **只认开头的 `Error`，不做全文包含匹配。** 快照和页面正文里出现 "Error" 是常事
+    （404 页面、报错文案），全文匹配会在一个完全正常的页面上把 `take_snapshot` 判成
+    连续失败并锁死——那等于把 agent 的眼睛挖掉，比它原本的循环严重得多。
+    """
+    return _result_text(result).lstrip().startswith("Error")
+
+
+def make_repeat_failure_guard(tool: BaseTool, limit: int = 2) -> BaseTool:
+    """连续用**同一组参数**调同一个工具失败 `limit` 次后，后续同样的调用不再执行。
+
+    **为什么必须是代码而不是 prompt**：2026-08-18 真机（m1 首次跑 join.qq.com），
+    agent 对同一个点不动的 uid 连点 29 次，中间夹着 30 次重新截图，四分钟烧光步数、
+    一个岗位都没找到。它的 think 里写着"让我重新截图拿最新的 uid"然后照样点回旧 uid
+    ——不是提示不到位，是它看不见自己的循环。而"这次调用跟上次是不是同一个"是纯比对，
+    不需要判断力（models judge / code decides）。
+
+    **成功即清零**：连续失败才叫循环。失败一次、成功一次、再失败不是循环，拦它是误伤。
+    这条同时保证了参数天然相同的高频工具（`take_snapshot({})`，真机那轮调了 30 次）
+    只要在正常工作就永远不会被拦。
+
+    异常**照抛不误**，只是顺带记一笔——包装层不处理异常（fail fast），吞掉它会把
+    "浏览器崩了"变成"工具安静地返回了一句话"。
+    """
+    import json
+
+    failures: dict = {}
+    last_error: dict = {}
+
+    def _key(kwargs: dict) -> str:
+        return json.dumps(kwargs, sort_keys=True, ensure_ascii=False, default=str)
+
+    async def _guarded(**kwargs):
+        key = _key(kwargs)
+        if failures.get(key, 0) >= limit:
+            return (
+                f"BLOCKED: 你已经用完全相同的参数调用 {tool.name} 失败 {failures[key]} 次，"
+                f"这次没有执行。\n参数：{key}\n最后一次的错误：{last_error.get(key, '')}\n"
+                "不要再用这组参数重试——重复同一个动作不会有不同结果。换个办法："
+                "换一个 uid、先滚动或等待让它变成可交互、改用别的工具，或者干脆换一条路走。"
+            )
+        try:
+            result = await tool.ainvoke(kwargs)
+        except Exception as exc:
+            failures[key] = failures.get(key, 0) + 1
+            last_error[key] = str(exc)
+            raise
+        if looks_like_tool_error(result):
+            failures[key] = failures.get(key, 0) + 1
+            last_error[key] = _result_text(result)
+        else:
+            failures[key] = 0
+        return result
+
+    return StructuredTool.from_function(
+        coroutine=_guarded,
+        name=tool.name,
+        description=tool.description,
+        args_schema=tool.args_schema,
+    )

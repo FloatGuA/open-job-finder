@@ -353,7 +353,7 @@ export interface RunSummaryItem {
   pipeline: string
   filename: string
   started_at: string
-  status: 'done' | 'failed' | 'running'
+  status: 'done' | 'partial' | 'failed' | 'running'
   duration_ms: number | null
   summary: Record<string, number> | null
 }
