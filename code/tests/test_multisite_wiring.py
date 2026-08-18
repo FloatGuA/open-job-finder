@@ -142,10 +142,16 @@ class TestSelectPassthrough:
         assert kw["quotas"] is None
         assert kw["max_pages"] == 8
 
-    def test_select_only_is_always_on(self, service, captured_run):
-        # m1 永远只跑到 Checkpoint 1，填表是 m2 的事。
+    def test_it_always_runs_the_select_workflow(self, service, captured_run):
+        """m1 永远只跑到 Checkpoint 1，填表是 m2 的事。
+
+        拆图之前这靠一个 `select_only=True` 布尔量表达；现在 m1 的图里**根本没有**
+        开表单/上传简历的节点，所以只要 workflow 是 m1，就不可能填表——
+        由**结构**保证，不再由一个可以传错的开关保证。
+        """
         service._run_multisite_select({"site": "s", "search_url": "https://x/jobs"})
-        assert captured_run[0]["select_only"] is True
+        assert captured_run[0]["workflow"] == "m1"
+        assert "select_only" not in captured_run[0]
 
     def test_bad_categories_type_raises(self, service, captured_run):
         # 悄悄忽略一个写错的 categories，表现跟"配置漏写"完全一样，极难查。
@@ -291,3 +297,64 @@ class TestCliEnqueuesFullParams:
         monkeypatch.setattr(urllib.request, "urlopen", boom)
         with pytest.raises(SystemExit):
             cli._enqueue_via_dashboard(_Args(search_url="https://x/jobs"), None)
+
+
+# ── 拆图收尾：workflow 成为唯一权威输入 ──────────────────────────────────────
+
+class TestWorkflowIsTheOnlyInput:
+    """拆图之前 `run_layer1` 用**两套并存的说法**表达同一件事：靠 `search_url` /
+    `job_url` 谁非空推断身份，外加一个独立的 `select_only` 布尔量。同一件事两个
+    输入，必然存在"两者矛盾"的组合（给了 search_url 又传 select_only=False），
+    而那种组合的行为只有读代码才知道。
+    """
+
+    def test_no_select_only_flag(self):
+        import inspect
+
+        from multisite.layer1_agent import run_layer1
+        assert "select_only" not in inspect.signature(run_layer1).parameters
+
+    def test_workflow_is_required(self):
+        import inspect
+
+        from multisite.layer1_agent import run_layer1
+        assert (inspect.signature(run_layer1).parameters["workflow"].default
+                is inspect.Parameter.empty)
+
+    def test_compat_shell_is_gone(self):
+        """兼容壳是 Task 2 的临时物，留着就是第二条建图路径。"""
+        import multisite.layer1_agent as mod
+        assert not hasattr(mod, "build_graph")
+
+
+class TestRunLayer1RejectsBadInput:
+    """入参校验按 workflow 分别做，**不再靠"谁非空"推断身份**。
+    缺东西要当场炸——真实 run 跑到一半才发现缺简历，浏览器已经开出去了。
+    """
+
+    def _run(self, **kw):
+        import asyncio
+
+        from multisite.layer1_agent import run_layer1
+        return asyncio.run(run_layer1(**kw))
+
+    def test_m1_requires_search_url(self):
+        import pytest
+        with pytest.raises(ValueError, match="search_url"):
+            self._run(workflow="m1", site_name="s")
+
+    def test_m2_requires_job_url(self):
+        import pytest
+        with pytest.raises(ValueError, match="job_url"):
+            self._run(workflow="m2", site_name="s", resume_pdf_path="x.pdf")
+
+    def test_m2_requires_a_resume(self):
+        """m2 要往企业系统传简历，没有简历这一步毫无意义。"""
+        import pytest
+        with pytest.raises(ValueError, match="简历|resume"):
+            self._run(workflow="m2", site_name="s", job_url="https://example.com/x")
+
+    def test_unknown_workflow_raises(self):
+        import pytest
+        with pytest.raises(ValueError, match="workflow"):
+            self._run(workflow="m9", site_name="s", search_url="https://example.com/")

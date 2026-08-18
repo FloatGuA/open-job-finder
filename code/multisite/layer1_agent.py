@@ -1128,22 +1128,13 @@ def _make_nodes(
     async def find_jobs(state: Layer1State) -> dict:
         """选岗 agent：从入口页自己浏览、筛选、判断岗位符不符合求职偏好。
 
-        给了 job_url 就整个跳过——那是"我已经知道要投哪个"的调试/复现路径。
+        **这个节点只在 m1 的图里。** 拆图之前它还有一条 `if state.get("job_url")`
+        的短路分支，专为让 m2 复用本节点而存在：m2 拿到的是调用方指定的那一个岗位，
+        那条分支把它包成 `FoundJob` 返回，顺带按 URL 反查 `pending_jobs` 补 title/company。
+        拆图之后 m2 有自己的图（没有这个节点），岗位与身份信息由调用方直接传进 state
+        （见 `job_from_state` 与 `run_layer1` 的 `job_title`/`company`/`source_job_id`），
+        那条分支就是一条"选岗节点其实不选岗"的暗路，删掉。
         """
-        if state.get("job_url"):
-            # 标题/公司优先从 pending_jobs 里查——`--job-url` 那条路径的调用方通常
-            # 只给得出 URL，而 pending_applications.job_title 是 Checkpoint 2 页面上
-            # 每条记录的主标题，空着就是一行没有岗位名的记录（真机跑出来过 4 条）。
-            known = next((j for j in tracker.get_pending_jobs() if j.url == state["job_url"]), None)
-            return {"found_jobs": [FoundJob(
-                url=state["job_url"],
-                title=state.get("job_title") or (known.title if known else ""),
-                company=state.get("company") or (known.company if known else ""),
-                category=known.category if known else "",
-                bucket=known.bucket if known else "",
-                why="由调用方直接指定",
-            )]}
-
         prompt = pm.render(
             "layer1_find_jobs",
             {
@@ -1416,29 +1407,10 @@ def build_survey_graph(
     return _compile(stages, "m2", edges, logger, snapshot_provider)
 
 
-def build_graph(
-    tools: list,
-    personal_info: Optional[dict] = None,
-    tracker: Optional[ApplicationTracker] = None,
-    quotas: Optional[dict] = None,
-    max_pages: int = 8,
-    max_filter_clicks: int = 4,
-    select_only: bool = False,
-    logger=None,
-):
-    """兼容壳：**Task 3 删掉**（把 `run_layer1` 改成按 `workflow` 直接挑
-    `build_select_graph` / `build_survey_graph` 之后就不需要它了）。留着只是让
-    `run_layer1` 这次拆图不用跟着改——它现在只是把 `select_only` 翻译成"调
-    哪个新 builder"，自己不再维护任何一份阶段表。
-    """
-    builder = build_select_graph if select_only else build_survey_graph
-    return builder(tools, personal_info=personal_info, tracker=tracker, quotas=quotas,
-                   max_pages=max_pages, max_filter_clicks=max_filter_clicks, logger=logger)
-
-
 async def run_layer1(
-    resume_pdf_path: str,
+    workflow: str,
     site_name: str,
+    resume_pdf_path: str = "",
     job_url: str = "",
     search_url: str = "",
     headless: bool = False,
@@ -1446,9 +1418,7 @@ async def run_layer1(
     quotas: Optional[dict] = None,
     max_pages: int = 8,
     max_filter_clicks: int = 4,
-    select_only: bool = False,
     emitter=None,
-    workflow: str = "",
     job_title: str = "",
     company: str = "",
     source_job_id: Optional[int] = None,
@@ -1473,8 +1443,19 @@ async def run_layer1(
     结果**（没找到符合条件的岗位、或表单里没有空字段）。只返回一个 id 会把这三
     种情况压成同一个 None，调用方无从区分是哪一种，也就无从判断该不该重试。
     """
-    if bool(job_url) == bool(search_url):
-        raise ValueError("job_url 与 search_url 必须且只能给一个")
+    # 入参按 workflow 分别校验。**不再靠"谁非空"推断身份**——那让同一件事有两个
+    # 输入来源，必然存在两者矛盾的组合，而那种组合的行为只有读代码才知道。
+    builders = {"m1": build_select_graph, "m2": build_survey_graph}
+    if workflow not in builders:
+        raise ValueError(f"未知 workflow: {workflow!r}，只有 {sorted(builders)}")
+    if workflow == "m1" and not search_url:
+        raise ValueError("m1（选岗）需要 search_url——站点招聘入口页")
+    if workflow == "m2":
+        if not job_url:
+            raise ValueError("m2（勘察表单）需要 job_url——由调用方指定要处理哪个岗位")
+        if not resume_pdf_path:
+            # 缺简历要当场炸：跑到一半才发现，浏览器已经开出去了。
+            raise ValueError("m2（勘察表单）需要 resume_pdf_path——它要往企业系统传简历")
 
     # 按站点解析名额（去掉 site_overrides 里标记本站没有的类别）。调用方显式传了
     # quotas 就以调用方为准——CLI 的 --category 是"我这次就要找这些"，不该被
@@ -1486,22 +1467,21 @@ async def run_layer1(
     client = chrome_mcp_client.build_client(profile_dir, headless=headless)
     # 必须是同一个 session 贯穿全程（一个 Chrome 实例），不能每次工具调用各开
     # 一个——见 chrome_mcp_client.open_session() 注释，真机验证撞过这个坑。
-    # select_only 用不到简历（图里根本没有上传节点），所以不做无谓的复制。
-    # 给入口页 = 选岗(m1)，给岗位 = 填表(m2)，跟 scripts/run_layer1.py 的队列映射同源。
+    # m1 用不到简历（它的图里根本没有上传节点），所以不做无谓的复制。
     run_meta = {"trigger": "manual",
                 "params": {"site": site_name, "quotas": quotas, "max_pages": max_pages,
-                           "select_only": select_only, "headless": headless}}
-    with run_scope(workflow or ("m1" if search_url else "m2"),
-                   emitter=emitter, meta=run_meta) as run, ExitStack() as stack:
+                           "headless": headless}}
+    with run_scope(workflow, emitter=emitter, meta=run_meta) as run, ExitStack() as stack:
         staged_path = ""
-        if resume_pdf_path and not select_only:
+        if resume_pdf_path and workflow == "m2":
             staged_path = stack.enter_context(staged_resume(resume_pdf_path))
 
         async with chrome_mcp_client.open_session(client) as session:
             tools = await chrome_mcp_client.get_tools(session)
-            app = build_graph(tools, tracker=tracker, quotas=quotas, max_pages=max_pages,
-                              max_filter_clicks=max_filter_clicks, select_only=select_only,
-                              logger=run.logger)
+            app = builders[workflow](tools, tracker=tracker, quotas=quotas,
+                                     max_pages=max_pages,
+                                     max_filter_clicks=max_filter_clicks,
+                                     logger=run.logger)
             state = await app.ainvoke({
                 "job_url": job_url,
                 "search_url": search_url,
@@ -1515,7 +1495,7 @@ async def run_layer1(
             })
         # 按 workflow 分开报：m2 拆图后 found_jobs 恒空（它的图里没有 find_jobs），
         # 混着报 "found: 0" 会被读成"这次什么都没找到"——那描述的是 m1 的活儿。
-        if select_only:
+        if workflow == "m1":
             run.summary.update({"found": len(state.get("found_jobs") or []),
                                 "new_pending_jobs": len(state.get("pending_job_ids") or [])})
         else:

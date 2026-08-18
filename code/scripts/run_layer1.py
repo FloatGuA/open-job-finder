@@ -93,7 +93,8 @@ def _enqueue_via_dashboard(args, quotas) -> int:
         if quotas:
             params["categories"] = quotas
         params["max_pages"] = args.max_pages
-        # 队列里的 m1 **永远**只跑到 Checkpoint 1（select_only=True）：填表是 m2，
+        # 队列里的 m1 **永远**只跑到 Checkpoint 1：拆图之后 m1 的图里根本没有开表单/
+        # 上传简历的节点，填表是 m2 的活儿，
         # 由审批动作触发。说清楚，免得以为不加 --select-only 就会一路投下去。
         if not args.select_only:
             print("[layer1] 注意：队列模式的 m1 只跑到选岗+落库，填表要等 Checkpoint 1 审批后由 m2 接手。")
@@ -192,8 +193,10 @@ def main() -> int:
             "--direct 跑填表时必须用 --resume 显式指定简历 PDF。"
             "队列模式会按岗位自动选、并校验 PDF 不旧于简历内容，--direct 没有这道闸门。")
 
+    # --job-url 是调试/复现路径，走 m2（勘察表单）；否则是 m1（选岗）。
     state = asyncio.run(
         run_layer1(
+            workflow="m2" if args.job_url else "m1",
             resume_pdf_path=args.resume or "",
             site_name=args.site,
             job_url=args.job_url or "",
@@ -201,7 +204,6 @@ def main() -> int:
             headless=args.headless,
             max_pages=args.max_pages,
             quotas=quotas,
-            select_only=args.select_only,
         )
     )
 

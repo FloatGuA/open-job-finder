@@ -5,7 +5,6 @@ import pytest
 from multisite.layer1_agent import (
     M1_STAGES,
     M2_STAGES,
-    build_graph,
     build_select_graph,
     build_survey_graph,
     stage_names,
@@ -23,12 +22,14 @@ class FakeTracker:
 
 
 def _build(select_only):
-    return build_graph(
+    """建一张图。`build_graph` 兼容壳已经删了（Task 3）——两张图各自有 builder，
+    这里保留一个布尔开关只是为了让现有用例少改几行。"""
+    builder = build_select_graph if select_only else build_survey_graph
+    return builder(
         tools=[FakeTool("take_snapshot")],
         personal_info={},
         tracker=FakeTracker(),
         quotas={"开发": 1},
-        select_only=select_only,
     )
 
 
@@ -59,9 +60,8 @@ class TestGraphMatchesStageNames:
         assert _build(True) is not None
 
     def test_full_graph_still_builds(self):
-        """`build_graph` 现在是薄壳，`select_only=False` 转调 `build_survey_graph`
-        （m2 的新 4 站图）。壳必须能正常建图——`run_layer1` 还在靠它跑真实的
-        `select_only=False` 调用，Task 3 删壳之前它不能崩。"""
+        """m2 的 4 站图必须能建起来。一个 task 不该留下真实功能会崩的状态，
+        更不该把崩溃写成绿色断言。"""
         assert _build(False) is not None
 
     def test_a_drifted_stage_table_is_rejected_at_build_time(self, monkeypatch):

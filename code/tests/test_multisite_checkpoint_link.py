@@ -107,7 +107,8 @@ class TestM2InitialStateCarriesJobIdentity:
         monkeypatch.setattr(ccm, "open_session", lambda client: _Session())
         monkeypatch.setattr(ccm, "get_tools", fake_get_tools)
 
-    def test_job_identity_reaches_record_application(self, tracker, fake_chrome, monkeypatch):
+    def test_job_identity_reaches_record_application(self, tracker, fake_chrome, monkeypatch,
+                                                     tmp_path):
         import asyncio
 
         import multisite.layer1_agent as la
@@ -133,12 +134,18 @@ class TestM2InitialStateCarriesJobIdentity:
                               classified_fields=[])
                 return la.record_application(tracker, filled, {})
 
-        monkeypatch.setattr(la, "build_graph", lambda *a, **kw: _FakeApp())
+        monkeypatch.setattr(la, "build_survey_graph", lambda *a, **kw: _FakeApp())
+
+        # m2 要求给简历（它的活儿就是往企业系统传简历，没简历这一步没有意义），
+        # 所以这里造一个真文件——`staged_resume` 会真的复制它。
+        resume = tmp_path / "resume.pdf"
+        resume.write_bytes(b"%PDF-1.4 fake")
 
         state = asyncio.run(la.run_layer1(
-            resume_pdf_path="", site_name="s", job_url="https://x/1",
+            workflow="m2", site_name="s", job_url="https://x/1",
+            resume_pdf_path=str(resume),
             tracker=tracker, job_title="真实标题", company="真实公司",
-            source_job_id=job_id, workflow="m2",
+            source_job_id=job_id,
         ))
 
         # run_layer1 真的把这三样放进了它喂给图的初始 state 里。

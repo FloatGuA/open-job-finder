@@ -185,7 +185,6 @@ class OrchestrationService:
             tracker=self._st.tracker,
             quotas=categories,
             max_pages=int(overrides.get("max_pages") or 8),
-            select_only=True,
             emitter=getattr(self._st, "emitter", None),
             workflow="m1",
         ))
