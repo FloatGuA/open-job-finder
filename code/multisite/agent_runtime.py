@@ -49,10 +49,11 @@ MAX_STEPS = 60
 _STEP_LIMIT_SENTINEL = "Sorry, need more steps to process this request."
 
 # 单条工具结果保留的字符上限（只作用于被判定为"陈旧"的那些）。
-_STALE_TOOL_PLACEHOLDER = "[已省略：这是较早的页面快照，页面此后已经变化，不要再用它里面的 uid]"
+_STALE_TOOL_PLACEHOLDER = "[已省略：较早的一大段工具输出，通常是页面快照。里面的 uid 可能已失效，需要就重新取一张]"
 
-# 快照类工具的名字——只有这些的历史结果值得砍，`fill` 之类的返回值本来就短。
-_BULKY_TOOLS = {"take_snapshot", "navigate_page", "wait_for", "click"}
+# 多大算「大」。真机实测：a11y 快照 6613 字符，而 `click` 的返回是 114（成功）/
+# 206（失败）字符，`BLOCKED` 提示约 250——两者差一个数量级，2000 是干净的分界。
+_BULKY_CHARS = 2000
 
 
 def build_model(temperature: float = 0.0) -> ChatOpenAI:
@@ -70,7 +71,18 @@ def build_model(temperature: float = 0.0) -> ChatOpenAI:
 
 
 def trim_stale_snapshots(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
-    """只保留最近一条大块工具结果的完整内容，更早的替换成占位说明。
+    """只保留最近一条**大块**工具结果的完整内容，更早的替换成占位说明。
+
+    **判据是输出的大小，不是它出自哪个工具。** 原来按工具名判（`_BULKY_TOOLS` 里
+    含 `click`），而 `kept_recent` 是一个全局开关——只留最近的那一条。agent 的实际
+    序列是「点击 → 截图 → 点击 → 截图」，做决定时最近的 bulky 消息永远是快照，于是
+    **每一条点击结果都被换成了占位符**：模型从来没看见过 `Error: ... did not become
+    interactive`，也没看见过防循环的 `BLOCKED` 提示。从它的视角它压根没试过，于是
+    重新推导、得出同一个结论、再点一次——2026-08-19 三轮 found=0 的根因就是这个，
+    而我一度把它误判成"模型能力不行"。
+
+    大的是过时的页面描述，砍掉有收益；小的是状态与错误，砍掉就是删证据。
+    按名字判还有个维护陷阱：工具面一变就得同步改这个集合，而漏改不会有任何报错。
 
     纯函数、无副作用，单独抽出来是为了能直接单测——agent 循环本身要真浏览器 +
     真 LLM 才跑得起来，如果上下文裁剪逻辑埋在里面就永远测不到。
@@ -79,7 +91,7 @@ def trim_stale_snapshots(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
     kept_recent = False
     # 从后往前走：第一次遇到的大块工具结果是"最近的"，保留；再往前的都砍掉。
     for msg in reversed(messages):
-        if isinstance(msg, ToolMessage) and msg.name in _BULKY_TOOLS:
+        if isinstance(msg, ToolMessage) and len(str(msg.content)) > _BULKY_CHARS:
             if not kept_recent:
                 kept_recent = True
                 out.append(msg)
