@@ -192,7 +192,8 @@ class TestGuardIsActuallyWiredIn:
             calls.append({"uid": uid})
             return self.ALWAYS_FAILS
 
-        names = ["navigate_page", "take_snapshot", "click", "upload_file", "wait_for"]
+        names = ["navigate_page", "take_snapshot", "click", "upload_file", "wait_for",
+                 "list_pages", "select_page", "close_page"]
         fakes = [StructuredTool.from_function(coroutine=_fail, name=n, description=n)
                  for n in names]
 

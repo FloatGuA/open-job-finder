@@ -668,8 +668,15 @@ def make_record_job_tool(sink: list, quotas: dict, known_urls: Optional[set] = N
 #   - `fill` / `fill_form` / `type_text`：选岗阶段根本不该填任何东西。
 # 黑名单挡不住"同一件事换个工具做"——每次 MCP 上游加一个新工具，黑名单就自动漏一个。
 # 详见 DECISION.md 对应条目。
-_PASSTHROUGH_FIND_JOBS = ("navigate_page", "wait_for")
-_PASSTHROUGH_OPEN_APPLICATION = ("navigate_page", "wait_for", "upload_file")
+# 标签页管理。**不是可有可无的补充**：join.qq.com 的岗位卡片点开是新标签页，
+# 而 `take_snapshot` 只返回当前选中的那一页——点完页面一字未变，agent 拿不到
+# 任何"发生过什么"的信号，真机上就是这么卡进死循环的（2026-08-19）。
+# 这三个都不可能提交表单，不动 `make_guarded_click` 守的那条线。
+_PASSTHROUGH_TABS = ("list_pages", "select_page", "close_page")
+
+_PASSTHROUGH_FIND_JOBS = ("navigate_page", "wait_for", *_PASSTHROUGH_TABS)
+_PASSTHROUGH_OPEN_APPLICATION = ("navigate_page", "wait_for", "upload_file",
+                                 *_PASSTHROUGH_TABS)
 
 # 图节点的名字与顺序。**第二个消费方是前端第 2 层骨架**（经 /api/multisite/stages），
 # 所以它不能只活在 build_select_graph / build_survey_graph 的局部变量里。真正的

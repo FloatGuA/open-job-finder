@@ -141,7 +141,8 @@ class TestAgentToolsetWiring:
         async def _noop(**kw):
             return "RAW-CLICK-RAN"
 
-        names = ["navigate_page", "take_snapshot", "click", "upload_file", "wait_for", *cls.DANGEROUS]
+        names = ["navigate_page", "take_snapshot", "click", "upload_file", "wait_for",
+                 "list_pages", "select_page", "close_page", *cls.DANGEROUS]
         return [StructuredTool.from_function(coroutine=_noop, name=n, description=n) for n in names]
 
     def _toolset(self, passthrough=None):
@@ -195,7 +196,8 @@ class TestAgentToolsetWiring:
 
         names = {t.name for t in self._toolset(_PASSTHROUGH_FIND_JOBS)}
         # record_job 由 find_jobs 节点单独追加，不在 build_agent_toolset 的职责里。
-        assert names == {"take_snapshot", "click", "navigate_page", "wait_for"}
+        assert names == {"take_snapshot", "click", "navigate_page", "wait_for",
+                         "list_pages", "select_page", "close_page"}
 
     def test_only_open_application_gets_upload_file(self):
         """上传简历是对真实企业系统的真实动作，选岗阶段（纯浏览）不该有这个能力。"""
@@ -209,3 +211,43 @@ class TestAgentToolsetWiring:
         后者的表现是"agent 莫名其妙不会翻页了"，极难定位。"""
         with pytest.raises(RuntimeError, match="does not expose"):
             self._toolset(("navigate_page", "no_such_tool"))
+
+
+class TestAgentCanSeeLinksThatOpenInANewTab:
+    """岗位卡片点开是**新标签页**时，agent 必须看得见、切得过去。
+
+    2026-08-19 真机（join.qq.com）：岗位卡片在 a11y 快照里是 `StaticText`、没有
+    link 节点，但点下去确实会打开 `post_detail.html?postid=...`——**在第二个标签页里**。
+    而 `take_snapshot` 只返回当前选中的那一页。于是从 agent 的视角：
+    点击返回「Successfully clicked」→ 重新截图 → 页面一字未变 → **没有任何信号说
+    发生过什么**。这是最容易触发死循环的处境，真机上它就是这么卡死的。
+
+    `list_pages` / `select_page` / `close_page` 都**不可能提交表单**，不碰
+    `make_guarded_click` 守的那条线；危险集（evaluate_script / fill / press_key /
+    take_screenshot / type_text）仍然一个都不给。
+    """
+
+    TAB_TOOLS = ("list_pages", "select_page", "close_page")
+
+    def _toolset(self, passthrough):
+        return TestAgentToolsetWiring()._toolset(passthrough)
+
+    def test_find_jobs_gets_the_tab_tools(self):
+        from multisite.layer1_agent import _PASSTHROUGH_FIND_JOBS
+
+        names = {t.name for t in self._toolset(_PASSTHROUGH_FIND_JOBS)}
+        assert set(self.TAB_TOOLS) <= names
+
+    def test_open_application_gets_them_too(self):
+        """m2 打开的申请表同样可能是新标签页——单给 m1 会让 m2 撞上同一堵墙。"""
+        from multisite.layer1_agent import _PASSTHROUGH_OPEN_APPLICATION
+
+        names = {t.name for t in self._toolset(_PASSTHROUGH_OPEN_APPLICATION)}
+        assert set(self.TAB_TOOLS) <= names
+
+    def test_tab_tools_do_not_smuggle_in_the_dangerous_set(self):
+        """加工具最容易顺手加多。危险集必须仍然一个都进不来。"""
+        from multisite.layer1_agent import _PASSTHROUGH_FIND_JOBS
+
+        names = {t.name for t in self._toolset(_PASSTHROUGH_FIND_JOBS)}
+        assert names & set(TestAgentToolsetWiring.DANGEROUS) == set()
