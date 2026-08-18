@@ -434,23 +434,28 @@ def split_rows(snapshot_text: str, manual: SiteManual) -> list:
     if not anchor_positions:
         return []
 
+    # 按锚点间距**等宽回切**，所有行一视同仁。
+    #
+    # **不能用「上一个锚点到本锚点」**：`_nodes()` 解析的是整张快照（含导航栏、筛选器、
+    # 推广文案），那样第一行会从快照开头一路吞到第一个锚点，把「不确定适合哪个岗位？」
+    # 那几条推广文案当成岗位的一部分。等宽回切对第一行和其余行用同一个规则，不开特例。
+    #
+    # `+2` 是因为地点那一串通常紧跟在锚点之后，属于本行。
+    spans = [b - a for a, b in zip(anchor_positions, anchor_positions[1:])]
+    span = min(spans) if spans else 15
     rows = []
-    prev_end = 0
     for pos in anchor_positions:
-        # 一行 = 上一个锚点之后到本锚点（含）之间的所有节点，再带上锚点后一个节点
-        # （地点那一串通常在锚点之后）。取宽一点没有坏处：这段文本只用来给 LLM 读。
-        chunk = nodes[prev_end:pos + 2]
+        chunk = nodes[max(0, pos - span + 2):pos + 2]
         rows.append(JobRow(anchor_uid=nodes[pos][0],
                            text=" ".join(n for _, n in chunk if n.strip())))
-        prev_end = pos + 2
     return rows
 ```
 
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cd code && python -m pytest tests/test_executors_rows.py -q`
-Expected: 6 passed。若 `test_promo_text_is_not_a_row` 红，说明第一行把列表区开头的推广文案
-带进来了——把第一行的起点改成"第一个锚点往前推一个周期"，并把断言留着。
+Expected: 6 passed。**任何一条红都去改实现，不许改测试**——这几条断言的值来自真机实测
+（锚点 uid `1_78/1_87/1_96/1_105`、10 个岗位），不是猜的。
 
 - [ ] **Step 5: 提交**
 
