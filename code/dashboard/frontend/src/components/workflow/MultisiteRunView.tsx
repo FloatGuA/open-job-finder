@@ -17,9 +17,9 @@ import {
 const PIPELINE: { id: string; label: string; unbuilt?: boolean }[] = [
   { id: 'm1', label: '\u9009\u5c97' },
   { id: 'cp1', label: '\u5ba1\u6279\u2460' },
-  { id: 'm2', label: '\u586b\u8868' },
+  { id: 'm2', label: '\u52d8\u5bdf\u8868\u5355' },
   { id: 'cp2', label: '\u5ba1\u6279\u2461' },
-  { id: 'l3', label: 'Layer 3', unbuilt: true },
+  { id: 'l3', label: '\u63d0\u4ea4\uff08\u672a\u5efa\uff09', unbuilt: true },
 ]
 
 const STAGE_DOT: Record<StageStatus, string> = {
@@ -100,7 +100,7 @@ export default function MultisiteRunView({
       <div className="flex items-center gap-1 overflow-x-auto">
         {PIPELINE.map((seg, i) => (
           <div key={seg.id} className="flex shrink-0 items-center gap-1">
-            {i > 0 && <span className={seg.unbuilt ? 'text-text-3/40' : 'text-text-3'}>{'\u2500\u2500'}</span>}
+            {i > 0 && <span className={seg.unbuilt ? 'text-text-3/40' : 'text-text-3'}>{seg.unbuilt ? '\u2504\u2504' : '\u2500\u2500'}</span>}
             <span
               className="rounded-lg px-2.5 py-1 text-[12px]"
               style={

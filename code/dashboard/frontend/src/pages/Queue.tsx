@@ -8,7 +8,7 @@ const WF_META: Record<WorkflowId, { label: string; short: string; color: string 
   w3: { label: 'W3 \u53d1\u56de\u590d', short: 'W3', color: '#bf5af2' },
   // \u591a\u7ad9\u70b9 Layer 1\uff1a\u8ddf w1/w2/w3 \u540c\u4e00\u4e2a\u961f\u5217\uff0c\u6f0f\u4e00\u4e2a\u5c31\u662f WF_META[...] \u4e3a undefined \u2192 \u6574\u4e2a SPA \u767d\u5c4f\u3002
   m1: { label: 'M1 \u9009\u5c97', short: 'M1', color: '#ff9f0a' },
-  m2: { label: 'M2 \u586b\u8868', short: 'M2', color: '#ff375f' },
+  m2: { label: 'M2 \u52d8\u5bdf\u8868\u5355', short: 'M2', color: '#ff375f' },
 }
 
 const SRC_LABEL: Record<string, string> = {
