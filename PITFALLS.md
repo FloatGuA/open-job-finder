@@ -564,3 +564,33 @@ calls = Counter((c["name"], json.dumps(c["args"], sort_keys=True))
 
 **普遍判据**：修「子层级不许谎报」时，**顺着往上问一层：父层级的状态是从哪来的？**
 如果父层级是写死的常量，那这个修就只做了一半。整轮的状态不能比它最差的那一步更乐观。
+
+## 「点击成功 + 页面一字未变」= 多半开在新标签页里，不是点击没生效
+
+**现象**：`click` 返回 `Successfully clicked on the element`，紧接着 `take_snapshot`
+拿到的快照与点击前**完全相同**（字符数都一样）。看起来像点空了。
+
+**真因**：站点用 `window.open` 打开详情页——**新页面在第二个标签页里**，
+而 `take_snapshot` 只返回**当前选中的那一页**。真机（join.qq.com，2026-08-19）：
+
+```
+点 uid=1_71 'AI全栈工程师'  →  Successfully clicked on the element
+## Pages
+1: 岗位投递 | 腾讯校招 (https://join.qq.com/post.html) [selected]
+2: 岗位详情 | 腾讯校招 (https://join.qq.com/post_detail.html?postid=1282707398326592512)
+```
+
+**为什么这个坑特别毒**：它同时骗过人和 agent。人看日志会得出「这个站的卡片点不动 /
+没有链接」的结论（我就下过这个结论并写进了文档，被用户手点一次直接推翻）；
+agent 则完全收不到任何反馈信号，于是原地重试 → 死循环。
+
+**判据**：`navigate_page` 的返回**带 `## Pages` 清单**，`take_snapshot` 不带。
+怀疑开了新标签页时，调一次 `navigate_page` 或 `list_pages` 就能看见。
+
+**连带**：`list_pages` / `select_page` / `close_page` 当时不在 Layer 1 白名单里
+（v2.27.0 已加）。**加工具前先确认它不可能提交表单**——这三个不碰
+`make_guarded_click` 守的那条线，`evaluate_script` / `fill` / `press_key` 仍然一个不给。
+
+**更一般的一条**：判断「某个站点结构上支持不支持某种操作」时，**只看 a11y 快照会漏**。
+快照是 agent 的视野，不是站点的全部——940 个岗位在快照里全是 `StaticText`、没有一个
+link 节点，但每张卡片点进去都有独立 URL。**「不在表示里」不等于「不存在」。**
