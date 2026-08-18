@@ -910,6 +910,26 @@ def _enforce_no_invented_values(fields: list[FieldClassification]) -> list[Field
     return fields
 
 
+def job_from_state(state: dict) -> tuple[str, str, str]:
+    """m2 要处理的那个岗位：`(url, title, company)`，**只从 state 直接读**。
+
+    **不读 `found_jobs`。** 拆图之后 m2 的图里没有 `find_jobs` 节点，那个字段永远是空的；
+    原来读它的后果是返回一句「没有找到符合条件的岗位」——不崩、不报错，一个看起来
+    完全合理、其实是接线错误的结论。真实 m2 会静默空跑：不打开表单、不上传简历，
+    却报告这个岗位不符合条件。**静默的错误结论比崩溃危险得多。**
+
+    缺 `job_url` 是调用方的错（m2 由 pending_job_id 解析而来，一定有 URL），
+    当场抛——伪装成业务结果正是上面那个事故的形状。
+
+    提到模块级是为了能测：关在 `build_survey_graph` 的闭包里就得开真浏览器才跑得动，
+    跟 `record_candidates` / `describe_message` 同一个理由。
+    """
+    url = (state.get("job_url") or "").strip()
+    if not url:
+        raise ValueError("open_application 需要 state['job_url']——m2 的岗位由调用方指定")
+    return url, state.get("job_title") or "", state.get("company") or ""
+
+
 def record_candidates(tracker, state: dict) -> dict:
     """Checkpoint 1 落库：把候选岗位写进 pending_jobs。
 
@@ -1190,18 +1210,15 @@ def _make_nodes(
         return record_candidates(tracker, state)
 
     async def open_application(state: Layer1State) -> dict:
-        """导航 agent：打开第一个候选岗位的申请表并上传简历。
+        """导航 agent：打开调用方指定的那个岗位的申请表并上传简历。
 
-        只处理第一个候选——一次 Layer 1 run 产出一条待审批记录。多岗位批量由
-        调用方循环 run 来做，不在图里展开：那会让"哪个岗位失败了"变得难以定位，
-        而且各岗位之间本来就没有共享状态。
+        一次 m2 run 处理一个岗位、产出一条待审批记录。多岗位批量由调用方循环 run 来做，
+        不在图里展开：那会让"哪个岗位失败了"变得难以定位，而且各岗位之间本来就没有共享状态。
+
+        岗位从 state 直接来（见 `job_from_state`）——**不经 `found_jobs`**：m2 的图里
+        没有 `find_jobs` 节点，读它会得到一个看起来合理、其实是接线错误的结论。
         """
-        jobs = state.get("found_jobs") or []
-        if not jobs:
-            return {"open_result": OpenApplicationOutput(
-                form_opened=False, resume_uploaded=False, note="没有找到符合条件的岗位")}
-
-        job = jobs[0]
+        job_url, job_title, company = job_from_state(state)
         prompt = pm.render("layer1_open_application", {"resume_path": state["resume_pdf_path"]})
         # 注意这里**不给** record_job：那是选岗阶段的工具，导航阶段拿到它只会
         # 诱导它去"记录"而不是去打开表单。
@@ -1218,7 +1235,7 @@ def _make_nodes(
         # make_record_open_result_tool 的说明。
         agent = agent_runtime.build_agent(tools_for_agent, prompt)
         result = await agent_runtime.run_agent(
-            agent, f"岗位详情页：{job.url}\n请开始。",
+            agent, f"岗位详情页：{job_url}\n请开始。",
             on_step=agent_step_sink(logger, "open_application"))
         truncated = agent_runtime.hit_step_limit(result)
         if truncated:
@@ -1240,9 +1257,9 @@ def _make_nodes(
             "open_result": outcome,
             "truncated": truncated,
             "snapshot_text": snapshot,
-            "job_title": state.get("job_title") or job.title,
-            "company": state.get("company") or job.company,
-            "job_url": job.url,
+            "job_title": job_title,
+            "company": company,
+            "job_url": job_url,
         }
 
     async def scan_and_classify_fields(state: Layer1State) -> dict:
