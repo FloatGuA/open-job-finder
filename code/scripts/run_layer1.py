@@ -94,10 +94,9 @@ def _enqueue_via_dashboard(args, quotas) -> int:
             params["categories"] = quotas
         params["max_pages"] = args.max_pages
         # 队列里的 m1 **永远**只跑到 Checkpoint 1：拆图之后 m1 的图里根本没有开表单/
-        # 上传简历的节点，填表是 m2 的活儿，
-        # 由审批动作触发。说清楚，免得以为不加 --select-only 就会一路投下去。
-        if not args.select_only:
-            print("[layer1] 注意：队列模式的 m1 只跑到选岗+落库，填表要等 Checkpoint 1 审批后由 m2 接手。")
+        # 上传简历的节点，填表是 m2 的活儿，由审批动作触发。这不再是一个可关的开关
+        # ——m1 的图结构本身就没有那些节点，打出来只是说清楚，免得以为会一路投下去。
+        print("[layer1] 注意：队列模式的 m1 只跑到选岗+落库，填表要等 Checkpoint 1 审批后由 m2 接手。")
     else:
         # m2 按 pending_job_id 取岗位（队列侧会校验它确实是 approved 状态）。
         from services.tracker import ApplicationTracker
@@ -151,8 +150,6 @@ def main() -> int:
         help="覆盖本次的类别名额，可重复：--category 产品:3 --category 开发:5。"
              "不给就用 profile.yaml 的 job_seeking.categories。",
     )
-    parser.add_argument("--select-only", action="store_true",
-                        help="只跑到 Checkpoint 1（选岗+落库），不上传简历。对外零副作用")
     parser.add_argument("--dashboard", default="http://127.0.0.1:8765",
                         help="Dashboard 地址（默认 http://127.0.0.1:8765）")
     parser.add_argument("--direct", action="store_true",
@@ -194,9 +191,10 @@ def main() -> int:
             "队列模式会按岗位自动选、并校验 PDF 不旧于简历内容，--direct 没有这道闸门。")
 
     # --job-url 是调试/复现路径，走 m2（勘察表单）；否则是 m1（选岗）。
+    workflow = "m2" if args.job_url else "m1"
     state = asyncio.run(
         run_layer1(
-            workflow="m2" if args.job_url else "m1",
+            workflow=workflow,
             resume_pdf_path=args.resume or "",
             site_name=args.site,
             job_url=args.job_url or "",
@@ -221,8 +219,8 @@ def main() -> int:
     print(f"[layer1] 写入 pending_jobs {len(new_ids)} 条待审批"
           f"（{len(jobs) - len(new_ids)} 条因 url 重复跳过）")
 
-    if args.select_only:
-        print("[layer1] --select-only：到此为止，未上传简历。去审批 Checkpoint 1 再走填表。")
+    if workflow == "m1":
+        print("[layer1] m1：到此为止，未上传简历。去审批 Checkpoint 1 再走填表。")
         return 0
 
     outcome = state.get("open_result")

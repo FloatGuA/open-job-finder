@@ -663,8 +663,9 @@ _PASSTHROUGH_FIND_JOBS = ("navigate_page", "wait_for")
 _PASSTHROUGH_OPEN_APPLICATION = ("navigate_page", "wait_for", "upload_file")
 
 # 图节点的名字与顺序。**第二个消费方是前端第 2 层骨架**（经 /api/multisite/stages），
-# 所以它不能只活在 build_graph 的局部变量里。真正的函数与 summarizer 仍在
-# build_graph 的 stages 表里，两者由建图时的对账保证不漂移。
+# 所以它不能只活在 build_select_graph / build_survey_graph 的局部变量里。真正的
+# 函数与 summarizer 仍在 `_make_nodes` 返回的节点工厂字典里，两者由 `_compile`
+# 建图时对着 `stage_names()` 的对账保证不漂移。
 #
 # 两张图各自完整的节点顺序。**刻意不写成「m2 = m1 + 后缀」**——那正是拆图前的形状
 # （`STAGE_ORDER[:3]`），它把一个错误的假设编码进了代码：m2 根本不选岗，它拿到的是
@@ -1425,9 +1426,12 @@ async def run_layer1(
 ) -> dict:
     """跑一次 Layer 1。
 
-    `job_url` 和 `search_url` 二选一：
-      - `search_url`：正常用法，选岗 agent 从这个入口自己按偏好找岗位。
-      - `job_url`：调试/复现用，跳过选岗直接处理指定岗位。
+    `workflow` 是权威输入（`"m1"` / `"m2"`），决定跑哪张图；`job_url` / `search_url`
+    不再是"谁非空就是谁"的推断依据，而是按 `workflow` 分别校验的入参：
+      - `"m1"`（选岗）：需要 `search_url`——站点招聘入口页，agent 从这里按偏好自己
+        找岗位。图里没有 `open_application`，对外零副作用。
+      - `"m2"`（勘察表单）：需要 `job_url`——调用方已经指定要处理的那个岗位（通常是
+        Checkpoint 1 审批过的），以及 `resume_pdf_path`——要往企业系统传简历。
 
     `job_title` / `company` / `source_job_id`：**m2 调用方（`_run_multisite_fill`）
     手里已经有的那个 pending_job 行的信息，原样传进来**，不要指望图里哪个节点替

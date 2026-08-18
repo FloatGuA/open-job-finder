@@ -215,7 +215,6 @@ class _Args:
         self.site = "s"
         self.headless = False
         self.max_pages = 8
-        self.select_only = False
         self.dashboard = "http://127.0.0.1:8765"
         self.resume = None
         self.__dict__.update(kw)

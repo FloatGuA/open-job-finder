@@ -586,7 +586,9 @@ async def get_multisite_stages() -> JSONResponse:
     """m1/m2 的 LangGraph 节点顺序——前端第 2 层「地铁站」的骨架。
 
     **从图定义导出，不手维护**：W1/W2 的 SKELETON 是手抄的静态模板，已经漂移过
-    （见 PITFALLS.md）。m1 = 队列里的 select_only 路径（只跑到 Checkpoint 1）。
+    （见 PITFALLS.md）。m1/m2 是拆开后各自独立的图（`build_select_graph` /
+    `build_survey_graph`）——m1 的图里根本没有开表单/上传简历的节点，只跑到
+    Checkpoint 1 是由图结构保证的，不是靠一个可传错的开关。
     """
     from multisite.agent_runtime import MAX_STEPS
     from multisite.layer1_agent import stage_names
