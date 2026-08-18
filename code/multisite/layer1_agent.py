@@ -527,7 +527,12 @@ async def capture_form_screenshot(tools, dest_dir: Path = _SCREENSHOT_DIR) -> st
         return ""
 
 
-_ROOT_AREA_RE = re.compile(r'RootWebArea\s+"(?P<title>[^"]*)"(?:\s+url="(?P<url>[^"]*)")?')
+# 根节点那一行。标题与 url 是同一行上**互相独立**的两样东西——中间可能夹着别的属性，
+# 也可能只有其中一个（页面没渲染时是 `RootWebArea url="about:blank"`，根本没有标题）。
+# 用位置把它们绑在一起，真机上就出现过 title 有值而 url 为空（2026-08-18）。
+_ROOT_LINE_RE = re.compile(r"^.*RootWebArea.*$", re.M)
+_ROOT_TITLE_RE = re.compile(r'RootWebArea\s+"([^"]*)"')
+_URL_ATTR_RE = re.compile(r'url="([^"]*)"')
 
 
 def _describe_page(snapshot_text: str) -> dict:
@@ -540,10 +545,14 @@ def _describe_page(snapshot_text: str) -> dict:
     字符数保留为**次要信号**：判断"是不是空壳"仍然只有它能便宜地回答。
     解析不到根节点不抛异常——这一步的职责是导航，不是解析快照。
     """
-    m = _ROOT_AREA_RE.search(snapshot_text or "")
+    line_m = _ROOT_LINE_RE.search(snapshot_text or "")
+    line = line_m.group(0) if line_m else ""
+    title_m = _ROOT_TITLE_RE.search(line)
+    # url 只在**根节点那一行**上找：子节点（链接）也带 url=，全文搜会抓到别处去。
+    url_m = _URL_ATTR_RE.search(line)
     return {
-        "url": (m.group("url") or "") if m else "",
-        "title": (m.group("title") or "") if m else "",
+        "url": url_m.group(1) if url_m else "",
+        "title": title_m.group(1) if title_m else "",
         "snapshot_chars": len(snapshot_text or ""),
     }
 

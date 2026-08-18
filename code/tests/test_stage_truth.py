@@ -128,3 +128,37 @@ class TestDescribePage:
     def test_snapshot_chars_is_kept_as_a_secondary_signal(self):
         """字符数本身不够用，但"页面是不是空壳"仍然只有它能便宜地回答。"""
         assert _describe_page(SNAPSHOT)["snapshot_chars"] > 0
+
+
+class TestDescribePageIsNotPositionCoupled:
+    """`RootWebArea` 那一行有多种形态，标题与 url 之间可能夹着别的属性。
+
+    2026-08-18 真机：m1 的 `ensure_ready` 报出 `title` 有值但 **`url` 是空的**——
+    原正则要求 `url=` 紧跟在标题引号之后，入口页那行中间还有属性，就匹配不上了。
+    标题和 url 是同一行上**互相独立**的两样东西，不该用位置把它们绑在一起。
+    """
+
+    def test_attributes_between_title_and_url(self):
+        snap = ('## Latest page snapshot\n'
+                'uid=1_0 RootWebArea "甲公司校园招聘" focusable url="https://example.com/campus/"\n')
+        got = _describe_page(snap)
+        assert got["title"] == "甲公司校园招聘"
+        assert got["url"] == "https://example.com/campus/"
+
+    def test_url_only_no_title(self):
+        """页面还没渲染时根本没有标题——不能把 url 误当成标题。"""
+        got = _describe_page('## Latest page snapshot\nuid=1_0 RootWebArea url="about:blank"\n')
+        assert got["title"] == ""
+        assert got["url"] == "about:blank"
+
+    def test_title_only_no_url(self):
+        got = _describe_page('## Latest page snapshot\nuid=1_0 RootWebArea "只有标题"\n')
+        assert got["title"] == "只有标题"
+        assert got["url"] == ""
+
+    def test_url_of_a_child_node_is_not_mistaken_for_the_page_url(self):
+        """子节点（链接）也带 url=，只能取根节点那一行的。"""
+        snap = ('## Latest page snapshot\n'
+                'uid=1_0 RootWebArea "页面" url="https://example.com/page"\n'
+                '  uid=1_1 link "别处" url="https://elsewhere.com/"\n')
+        assert _describe_page(snap)["url"] == "https://example.com/page"
