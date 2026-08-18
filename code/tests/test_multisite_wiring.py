@@ -172,6 +172,24 @@ class TestFillPassthrough:
                                          "resume_pdf_path": str(tmp_path / "r.pdf")})
         assert captured_run == []
 
+    def test_approved_job_passes_title_company_and_source_id(self, service, captured_run,
+                                                              tracker, tmp_path):
+        """`_run_multisite_fill` 手里就是完整的 job 行（`job.title`/`job.company`/
+        `job.id`）——这三样不该丢在这一层，指望 `run_layer1` 内部某个节点替它反查
+        出来。拆图后 m2 没有 `find_jobs`/`write_pending_jobs` 节点，没人会做这件事：
+        真实调用会把 `pending_applications.job_title`/`company` 写成空字符串、
+        `source_job_id` 写成 NULL——`source_job_id` 是「开始填表 N」差集的依据，
+        写不进去会导致同一个岗位被重复排队，等于再往企业系统传一次简历。"""
+        job_id = tracker.add_pending_job(site_name="s", url="https://x/1",
+                                         title="真实标题", company="真实公司")
+        tracker.decide_pending_job(job_id, "approved")
+        service._run_multisite_fill({"pending_job_id": job_id,
+                                     "resume_pdf_path": str(tmp_path / "r.pdf")})
+        kw = captured_run[0]
+        assert kw["job_title"] == "真实标题"
+        assert kw["company"] == "真实公司"
+        assert kw["source_job_id"] == job_id
+
 
 # ── CLI → 队列 的参数打包 ────────────────────────────────────────────────────
 

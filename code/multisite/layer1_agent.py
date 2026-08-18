@@ -1449,12 +1449,25 @@ async def run_layer1(
     select_only: bool = False,
     emitter=None,
     workflow: str = "",
+    job_title: str = "",
+    company: str = "",
+    source_job_id: Optional[int] = None,
 ) -> dict:
     """跑一次 Layer 1。
 
     `job_url` 和 `search_url` 二选一：
       - `search_url`：正常用法，选岗 agent 从这个入口自己按偏好找岗位。
       - `job_url`：调试/复现用，跳过选岗直接处理指定岗位。
+
+    `job_title` / `company` / `source_job_id`：**m2 调用方（`_run_multisite_fill`）
+    手里已经有的那个 pending_job 行的信息，原样传进来**，不要指望图里哪个节点替
+    你反查。拆图之前 m2 会经过一个 `find_jobs` 幽灵节点，靠它按 `job_url` 反查
+    `pending_jobs` 表拿到 title/company/id；拆图之后 m2 的图里根本没有那个节点
+    （也没有 `write_pending_jobs`，`source_job_id` 同理算不出来）——不传的后果是
+    `pending_applications.job_title`/`company` 写成空字符串、`source_job_id` 写成
+    NULL。`source_job_id` 尤其要命：它是"开始填表 N"差集（已批准 − 已填表 − 已在
+    队列）的依据，写不进去会导致同一个岗位被重复排队，等于再往企业系统传一次简历。
+    m1 不需要传这三个——它自己会在 `write_pending_jobs` 里把 `source_job_id` 解出来。
 
     返回整个 state（不只是 id）——**因为现在有"跑完了但一条记录都没写"的合法
     结果**（没找到符合条件的岗位、或表单里没有空字段）。只返回一个 id 会把这三
@@ -1494,8 +1507,18 @@ async def run_layer1(
                 "search_url": search_url,
                 "resume_pdf_path": staged_path,
                 "site_name": site_name,
+                # m2 专用：见函数 docstring——m2 的图里没有节点会反查这三样。
+                # m1 忽略它们（自己在 write_pending_jobs 里算 source_job_id）。
+                "job_title": job_title,
+                "company": company,
+                "source_job_id": source_job_id,
             })
-        run.summary.update({"found": len(state.get("found_jobs") or []),
-                            "new_pending_jobs": len(state.get("pending_job_ids") or []),
-                            "pending_application_id": state.get("pending_application_id")})
+        # 按 workflow 分开报：m2 拆图后 found_jobs 恒空（它的图里没有 find_jobs），
+        # 混着报 "found: 0" 会被读成"这次什么都没找到"——那描述的是 m1 的活儿。
+        if select_only:
+            run.summary.update({"found": len(state.get("found_jobs") or []),
+                                "new_pending_jobs": len(state.get("pending_job_ids") or [])})
+        else:
+            run.summary.update({"pending_application_id": state.get("pending_application_id"),
+                                "fields": len(state.get("classified_fields") or [])})
         return state

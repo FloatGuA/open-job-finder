@@ -266,6 +266,11 @@ class OrchestrationService:
             tracker=self._st.tracker,
             emitter=getattr(self._st, "emitter", None),
             workflow="m2",
+            # 这行 pending_job 就在手里——不要绕回数据库按 url 反查（拆图后 m2 的
+            # 图里没有节点会做这件事，见 run_layer1 的 docstring）。
+            job_title=job.title,
+            company=job.company,
+            source_job_id=job.id,
         ))
         outcome = state.get("open_result")
         app_id = state.get("pending_application_id")

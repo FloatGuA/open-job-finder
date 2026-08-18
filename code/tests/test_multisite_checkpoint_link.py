@@ -76,3 +76,78 @@ class TestCandidatesStillLandInTheirOwnTable:
         out = record_candidates(tracker, state)
         assert out["pending_job_ids"] == []          # 没有新行
         assert len(tracker.get_pending_jobs()) == 1  # 也没重复插
+
+
+class TestM2InitialStateCarriesJobIdentity:
+    """m2 的真实调用路径：`run_layer1` 必须把 `job_title`/`company`/`source_job_id`
+    塞进**它自己构造的初始 state**，不能指望图里某个节点替它查出来——拆图后 m2
+    没有 `find_jobs`/`write_pending_jobs`，没人会做这件事。
+
+    **不手工在测试里拼好这几个字段**（`_fill_state` 那种写法早就手工把它们塞进去
+    了，所以即使 `run_layer1` 从没传过这三样，那组测试也照样绿——这正是这个回归
+    第一次没被抓到的原因）。这里跑的是 `run_layer1` 真实的状态构建代码，只在
+    "开真 Chrome" 这一层拿假对象截断。
+    """
+
+    @pytest.fixture()
+    def fake_chrome(self, monkeypatch):
+        import multisite.chrome_mcp_client as ccm
+
+        class _Session:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        async def fake_get_tools(session):
+            return []
+
+        monkeypatch.setattr(ccm, "build_client", lambda *a, **kw: object())
+        monkeypatch.setattr(ccm, "open_session", lambda client: _Session())
+        monkeypatch.setattr(ccm, "get_tools", fake_get_tools)
+
+    def test_job_identity_reaches_record_application(self, tracker, fake_chrome, monkeypatch):
+        import asyncio
+
+        import multisite.layer1_agent as la
+
+        job_id = tracker.add_pending_job(site_name="s", url="https://x/1",
+                                         title="真实标题", company="真实公司")
+        tracker.decide_pending_job(job_id, "approved")
+
+        captured_state = {}
+
+        class _FakeApp:
+            async def ainvoke(self, state):
+                # 记下 run_layer1 真正构造并喂进图的初始 state——这是本测试要盯的
+                # 那一份。后面手动补上"扫到一个必填空字段"，模拟 open_application /
+                # scan_and_classify_fields 跑完之后的形状，让流程走到 record_application
+                # 的落库分支（`record_application` 本身另有单测，这里不重复验证它的
+                # 落库细节，只验证它拿到的 state 里 job_title/company/source_job_id
+                # 是不是空的）。
+                captured_state.update(state)
+                filled = dict(state,
+                              empty_elements=[{"uid": "1", "role": "textbox",
+                                               "label": "学校", "required": True}],
+                              classified_fields=[])
+                return la.record_application(tracker, filled, {})
+
+        monkeypatch.setattr(la, "build_graph", lambda *a, **kw: _FakeApp())
+
+        state = asyncio.run(la.run_layer1(
+            resume_pdf_path="", site_name="s", job_url="https://x/1",
+            tracker=tracker, job_title="真实标题", company="真实公司",
+            source_job_id=job_id, workflow="m2",
+        ))
+
+        # run_layer1 真的把这三样放进了它喂给图的初始 state 里。
+        assert captured_state["job_title"] == "真实标题"
+        assert captured_state["company"] == "真实公司"
+        assert captured_state["source_job_id"] == job_id
+
+        # 落库结果不是空值——这才是最终会被写进 pending_applications 表的东西。
+        app = tracker.get_pending_application(state["pending_application_id"])
+        assert app.job_title == "真实标题"
+        assert app.company == "真实公司"
+        assert app.source_job_id == job_id
