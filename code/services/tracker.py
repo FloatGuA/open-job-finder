@@ -368,6 +368,19 @@ class ApplicationTracker:
                 """
             )
 
+            # site_manuals: survey_structure 产出的站点操作手册，本轮可执行的结构化事实，
+            # 代码消费（match manual.job_url_source）。与 site_briefs 并存、职责分开，
+            # 不是同一转换的第二份 SQL。
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS site_manuals (
+                    site_name  TEXT PRIMARY KEY,
+                    manual     TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_hr_conversations_stage ON hr_conversations(stage)"
             )
@@ -1531,6 +1544,33 @@ class ApplicationTracker:
             return None
         return SiteBrief(site_name=row["site_name"], brief=row["brief"] or "",
                          updated_at=row["updated_at"])
+
+    # -- site manuals ------------------------------------------------------------
+
+    def upsert_site_manual(self, site_name: str, manual: "SiteManual") -> None:
+        """站点操作手册。与 `site_briefs` **并存、职责分开**——手册是本轮可执行的
+        结构化事实（代码消费），brief 是跨轮经验笔记（喂 prompt 给模型看）。
+        列集不同、消费方不同，不是分叉。"""
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO site_manuals (site_name, manual, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(site_name) DO UPDATE SET
+                    manual = excluded.manual, updated_at = excluded.updated_at
+                """,
+                (site_name, json.dumps(manual.to_dict(), ensure_ascii=False), self._utcnow_iso()),
+            )
+
+    def get_site_manual(self, site_name: str) -> Optional[tuple]:
+        """返回 `(SiteManual, updated_at)`；没有则 None。"""
+        from multisite.site_manual import SiteManual
+
+        row = self.conn.execute(
+            "SELECT manual, updated_at FROM site_manuals WHERE site_name = ?", (site_name,)
+        ).fetchone()
+        if row is None:
+            return None
+        return SiteManual.from_dict(json.loads(row["manual"])), row["updated_at"]
 
     def get_golden_category_examples(self, limit: int = 20) -> List[PendingJob]:
         """人工确认过的归类纠正，喂回选岗 agent 的 prompt。
