@@ -11,7 +11,7 @@
 from pathlib import Path
 
 from multisite.executors import split_rows
-from multisite.site_manual import SiteManual
+from multisite.site_manual import SiteManual, IMPLEMENTED_ROW_SPLITS
 
 SNAPSHOT = (Path(__file__).parent / "fixtures" / "joinqq_post_list.txt").read_text(encoding="utf-8")
 
@@ -54,8 +54,19 @@ class TestSplitRowsByAnchor:
 
 class TestContainerPerRowIsNotImplementedYet:
     def test_it_raises_instead_of_silently_returning_nothing(self):
-        """还没有哪个真实站点需要它。**抛，不要返回空列表**——返回空等于
-        谎报"这一页没有岗位"，是本项目反复吃亏的那类假信号。"""
+        """还没有哪个真实站点需要它。`from_dict` 现在已经把 `container_per_row` 挡在
+        构造边界之外（见 test_site_manual.py
+        `TestAnchorTextRequiresAnAnchor::test_container_per_row_is_rejected_as_unimplemented`），
+        所以这里绕过 `from_dict`、直接用 dataclass 构造函数，只测 `split_rows` 自己那道
+        兜底还在——万一将来别的路径绕开 `from_dict` 送进来这个值，也不能悄悄返回空列表。
+        **抛，不要返回空列表**——返回空等于谎报"这一页没有岗位"，是本项目反复吃亏的
+        那类假信号。"""
         import pytest
+        assert "container_per_row" not in IMPLEMENTED_ROW_SPLITS, \
+            "这条测试的前提是 container_per_row 还没有执行器；一旦实现了，这条测试连同" \
+            "本类都该删掉，改为像 anchor_text 一样走 from_dict 的正常路径测试"
+        manual = SiteManual(job_url_source="new_tab_on_click", pagination="next_button",
+                            filter_interaction="expand_group_then_click",
+                            row_split="container_per_row", row_anchor="")
         with pytest.raises(NotImplementedError, match="container_per_row"):
-            split_rows(SNAPSHOT, _manual(row_split="container_per_row", row_anchor=""))
+            split_rows(SNAPSHOT, manual)

@@ -51,11 +51,17 @@ class TestAnchorTextRequiresAnAnchor:
         with pytest.raises(ManualError, match="row_anchor"):
             SiteManual.from_dict(d)
 
-    def test_container_per_row_does_not_need_an_anchor(self):
+    def test_container_per_row_is_rejected_as_unimplemented(self):
+        """`container_per_row` 在闭集里（ROW_SPLITS），但没有对应的执行器
+        （`executors.split_rows` 一碰它就 `NotImplementedError`）。闭集的全部意义是
+        "过了 from_dict 就代表代码能执行它"——所以 from_dict 必须挡在这里，而不是让
+        计划 B 的 LLM 选中它之后运行中途才崩溃。这是设计变更：`container_per_row` 从
+        "接受"改成"拒绝并说明原因"。"""
         d = _valid()
         d["row_split"] = "container_per_row"
         d["row_anchor"] = ""
-        assert SiteManual.from_dict(d).row_anchor == ""
+        with pytest.raises(ManualError, match="执行器"):
+            SiteManual.from_dict(d)
 
 
 class TestIdTemplateRequiresATemplate:
@@ -63,4 +69,59 @@ class TestIdTemplateRequiresATemplate:
         d = _valid()
         d["job_url_source"] = "id_template"
         with pytest.raises(ManualError, match="url_template"):
+            SiteManual.from_dict(d)
+
+    def test_id_template_without_placeholder_raises(self):
+        """`url_template` 非空但没有 `{id}` 占位符——`job_url_offline` 是
+        `url_template.replace("{id}", ...)`，没有占位符时 `.replace` 静默无操作，
+        所有岗位会拿到完全相同的 URL。这一格必须在 from_dict 就拦住。"""
+        d = _valid()
+        d["job_url_source"] = "id_template"
+        d["url_template"] = "https://example.com/detail?id=fixed"
+        with pytest.raises(ManualError, match=r"\{id\}"):
+            SiteManual.from_dict(d)
+
+
+class TestTotalCountLocatorMustBeValidRegex:
+    """`total_count_locator` 是可选字段（空＝这个站没有计数），但**非空时**必须能
+    `re.compile` 且带捕获组——否则 `read_total_count` 永远返回 None，而 `validate_manual`
+    的判据①会把这个原因误诊成"站点可能已改版"，每轮白付一次全量重探。"""
+
+    def test_empty_locator_is_allowed(self):
+        d = _valid()
+        d["total_count_locator"] = ""
+        assert SiteManual.from_dict(d).total_count_locator == ""
+
+    def test_invalid_regex_raises(self):
+        d = _valid()
+        d["total_count_locator"] = r"共(\d+个岗位"  # 少了右括号
+        with pytest.raises(ManualError, match="正则"):
+            SiteManual.from_dict(d)
+
+    def test_regex_without_capture_group_raises(self):
+        d = _valid()
+        d["total_count_locator"] = r"共\d+个岗位"
+        with pytest.raises(ManualError, match="捕获组"):
+            SiteManual.from_dict(d)
+
+
+class TestDimensionsMustHaveOptions:
+    """判据②是 `manual.dimensions[0].get("options") or []`。少写一个 `options` 键，
+    判据就静默变成永远通过——`from_dict` 必须在手册进入系统前挡住这种形状。"""
+
+    def test_empty_dimensions_is_allowed(self):
+        d = _valid()
+        d["dimensions"] = []
+        assert SiteManual.from_dict(d).dimensions == []
+
+    def test_dimension_missing_options_key_raises(self):
+        d = _valid()
+        d["dimensions"] = [{"name": "应聘项目", "multi_select": True}]
+        with pytest.raises(ManualError, match="options"):
+            SiteManual.from_dict(d)
+
+    def test_dimension_options_not_a_list_raises(self):
+        d = _valid()
+        d["dimensions"] = [{"name": "应聘项目", "options": "2027校园招聘"}]
+        with pytest.raises(ManualError, match="options"):
             SiteManual.from_dict(d)

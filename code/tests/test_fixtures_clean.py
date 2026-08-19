@@ -18,6 +18,14 @@ class TestFixturesCarryNoRealIdentity:
     def test_joinqq_fixture_exists(self):
         assert (FIXTURES / "joinqq_post_list.txt").is_file()
 
+    def test_joinqq_fixture_is_a_real_sized_snapshot(self):
+        """fixture 被误换成一份小快照时，失败信息应该是「fixture 被换小了」这句直白的话，
+        而不是下游一堆"切不出行"/"取不到 URL"的间接症状——2026-08-19 的教训就是旧裁剪
+        测试拿 10 字符的 `"SNAPSHOT-1"` 当快照，真实快照 6613 字符，量级差本身就是判据。"""
+        text = (FIXTURES / "joinqq_post_list.txt").read_text(encoding="utf-8")
+        assert len(text) >= 5000, \
+            f"fixture 只有 {len(text)} 字符，看起来被换成了不真实的小快照"
+
     def test_no_real_nickname_in_any_fixture(self):
         for path in FIXTURES.glob("*.txt"):
             text = path.read_text(encoding="utf-8")

@@ -81,3 +81,46 @@ class TestJobUrlOnline:
         url = _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
         assert url is None
         assert not any(c[0] == "close_page" for c in calls)
+
+
+class TestJobUrlOnlineFailsFastWhenListPagesErrors:
+    """chrome-devtools-mcp 把执行错误当正常内容返回（`isError=False`，见
+    `safe_tools.py` `_result_text` 的注释）——真机日志里 29 次点击失败没有一次是异常，
+    这是预期内路径。点击前的那次 `list_pages` 如果解析不出任何页面（页面数不可能是 0），
+    几乎总是工具出错，而不是真的没有页面。旧实现用 URL 集合做基准，这种情况下
+    `before` 是空集，`after` 里的每一页（包括索引 0 的**列表页本身**）都会被判成
+    "新开的"，函数会把**列表页 URL** 当成岗位 URL 返回，并把**列表页本身**关掉。"""
+
+    def _tools_with_broken_list_pages(self):
+        calls = []
+
+        async def click(uid: str):
+            calls.append(("click", uid))
+            return "Successfully clicked on the element"
+
+        async def list_pages():
+            calls.append(("list_pages", None))
+            return "Error: Protocol error (Page.captureSnapshot): Target closed"
+
+        async def close_page(pageIdx: int):
+            calls.append(("close_page", pageIdx))
+            return "closed"
+
+        tools = [StructuredTool.from_function(coroutine=f, name=n, description=n)
+                 for f, n in ((click, "click"), (list_pages, "list_pages"),
+                              (close_page, "close_page"))]
+        return tools, calls
+
+    def test_raises_instead_of_returning_the_list_page_url(self):
+        tools, calls = self._tools_with_broken_list_pages()
+        with pytest.raises(RuntimeError, match="list_pages"):
+            _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
+        assert not any(c[0] == "click" for c in calls), \
+            "点击前的 list_pages 就该 fail fast，不该往下点"
+
+    def test_never_closes_the_list_page(self):
+        tools, calls = self._tools_with_broken_list_pages()
+        with pytest.raises(RuntimeError):
+            _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
+        assert not any(c[0] == "close_page" for c in calls), \
+            "绝不能把列表页（索引 0）当成新开的页面关掉"

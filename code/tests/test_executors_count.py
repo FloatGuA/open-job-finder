@@ -34,6 +34,13 @@ class TestReadTotalCount:
         assert read_total_count(SNAPSHOT, _manual(r"共(\d+)个职位")) is None
 
     def test_locator_without_a_capture_group_returns_none(self):
-        """手册写错正则（忘了捕获组）要表现为 None，不要抛——这一格是 agent 填的，
-        它写错的概率不低，而整条 run 不该因此崩掉。"""
-        assert read_total_count(SNAPSHOT, _manual(r"共\d+个岗位")) is None
+        """手册写错正则（忘了捕获组）现在会在 `SiteManual.from_dict` 的边界被 fail fast
+        拦下（见 test_site_manual.py `TestTotalCountLocatorMustBeValidRegex`），所以这里
+        绕过 `from_dict`、直接用 dataclass 构造函数，只测 `read_total_count` 自己那道
+        兜底还在——**表现为 None，不要抛**，防的是万一将来有路径绕开 `from_dict`
+        送进来一个没有捕获组的正则，整条 run 不该因此崩掉。"""
+        manual = SiteManual(job_url_source="new_tab_on_click", pagination="next_button",
+                            filter_interaction="expand_group_then_click",
+                            row_split="anchor_text", row_anchor="工作地点：",
+                            total_count_locator=r"共\d+个岗位")
+        assert read_total_count(SNAPSHOT, manual) is None

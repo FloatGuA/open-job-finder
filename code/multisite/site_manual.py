@@ -7,6 +7,7 @@ agent 写一句"点标题会在新窗口打开"的散文，代码没法据此分
 
 设计与取舍见 `docs/superpowers/specs/2026-08-19-m1-survey-plan-scan-design.md` §3。
 """
+import re
 from dataclasses import dataclass, field
 
 
@@ -19,6 +20,13 @@ JOB_URL_SOURCES = ("link_in_row", "new_tab_on_click", "id_template")
 PAGINATIONS = ("next_button", "url_param", "infinite_scroll", "none")
 FILTER_INTERACTIONS = ("direct_click", "expand_group_then_click")
 ROW_SPLITS = ("container_per_row", "anchor_text")
+
+# ROW_SPLITS 记录的是设计空间（手册字段"应该"能取的值），IMPLEMENTED_ROW_SPLITS 记录
+# 代码实际能执行的子集——两者一旦不一致，`from_dict` 必须挡在 ROW_SPLITS 允许、
+# IMPLEMENTED_ROW_SPLITS 不允许的那部分值上面。**新实现一个 row_split 执行器时，
+# 记得同步把它加进这里**（另见 `executors.split_rows` 里 `container_per_row` 分支的
+# 注释，两处互相指向）。
+IMPLEMENTED_ROW_SPLITS = ("anchor_text",)
 
 _ENUMS = {
     "job_url_source": JOB_URL_SOURCES,
@@ -47,10 +55,47 @@ class SiteManual:
             value = d.get(name)
             if value not in allowed:
                 raise ManualError(f"{name} 只能是 {allowed} 之一，收到 {value!r}")
+        if d["row_split"] not in IMPLEMENTED_ROW_SPLITS:
+            raise ManualError(
+                f"row_split={d['row_split']!r} 还没有对应的执行器（已实现："
+                f"{IMPLEMENTED_ROW_SPLITS}）；遇到这种站请报搞不定，或先在 "
+                "executors.split_rows 里加一个执行器再放开这个取值")
         if d["row_split"] == "anchor_text" and not (d.get("row_anchor") or "").strip():
             raise ManualError("row_split=anchor_text 时 row_anchor 不能为空")
-        if d["job_url_source"] == "id_template" and not (d.get("url_template") or "").strip():
-            raise ManualError("job_url_source=id_template 时 url_template 不能为空")
+        if d["job_url_source"] == "id_template":
+            template = (d.get("url_template") or "").strip()
+            if not template:
+                raise ManualError("job_url_source=id_template 时 url_template 不能为空")
+            if "{id}" not in template:
+                raise ManualError(
+                    f"job_url_source=id_template 时 url_template 必须包含 {{id}} 占位符"
+                    f"（job_url_offline 用 .replace('{{id}}', ...) 填值，没有占位符会"
+                    f"静默无操作，所有岗位拿到同一个 URL），收到 {template!r}")
+
+        locator = (d.get("total_count_locator") or "").strip()
+        if locator:
+            try:
+                compiled = re.compile(locator)
+            except re.error as exc:
+                raise ManualError(
+                    f"total_count_locator 不是合法正则，收到 {locator!r}：{exc}") from exc
+            if compiled.groups < 1:
+                raise ManualError(
+                    f"total_count_locator 必须有一个捕获组（用于取出数字），收到 {locator!r} "
+                    "——没有捕获组时 read_total_count 会一直返回 None，validate_manual 会"
+                    "把它误诊成「站点已改版」")
+
+        dimensions = d.get("dimensions") or []
+        for i, dim in enumerate(dimensions):
+            if not isinstance(dim, dict) or "options" not in dim:
+                raise ManualError(
+                    f"dimensions[{i}] 缺 options 键（收到 {dim!r}）——validate_manual 的判据②"
+                    "靠 dimensions[0].get('options') 拿期望的选项集合，缺这个键会让判据"
+                    "静默变成永远通过")
+            if not isinstance(dim["options"], list):
+                raise ManualError(
+                    f"dimensions[{i}].options 必须是列表，收到 {dim['options']!r}")
+
         return cls(
             job_url_source=d["job_url_source"],
             pagination=d["pagination"],

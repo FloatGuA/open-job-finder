@@ -3,10 +3,14 @@
 分成 offline / online 两个函数**不是为了好看**：offline 这两种可以纯单测，
 online 那种要 fake 浏览器工具。混在一个函数里，可测的那部分就被不可测的部分拖下水了。
 """
+from pathlib import Path
+
 import pytest
 
-from multisite.executors import JobRow, job_url_offline
+from multisite.executors import JobRow, job_url_offline, split_rows
 from multisite.site_manual import SiteManual
+
+FIXTURE = (Path(__file__).parent / "fixtures" / "joinqq_post_list.txt").read_text(encoding="utf-8")
 
 
 def _manual(**over) -> SiteManual:
@@ -36,6 +40,21 @@ class TestLinkInRow:
         None 会被 harvest 记成"这条取 URL 失败"并计数，空串会被当成合法 URL 写进库。"""
         snap = '## Latest page snapshot\nuid=1_6 StaticText "地点"\n'
         assert job_url_offline(JobRow(anchor_uid="1_6", text="x"), snap, _manual()) is None
+
+    def test_real_fixture_rows_without_a_link_return_none_not_the_footer_link(self):
+        """FIX-2 回归测试：真实 fixture（join.qq.com 的 10 个岗位行）里每一行都只有
+        StaticText，没有 link 节点。旧实现从快照开头一路扫到锚点，取"最近见到的带 url
+        的 link"——快照里锚点之前永远有导航栏/页脚链接，所以实测**10 行全部**返回同一个
+        页脚链接 `https://join.qq.com/about.html`（"部门介绍"）。3 行的玩具快照测不出这个
+        bug，因为那份快照里唯一的链接恰好就是那一行自己的——必须用真实尺寸的 fixture。"""
+        manual = _manual(row_split="anchor_text", row_anchor="工作地点：")
+        rows = split_rows(FIXTURE, manual)
+        assert len(rows) == 10  # 真机这一页恰好 10 个岗位
+
+        for row in rows:
+            url = job_url_offline(row, FIXTURE, manual)
+            assert url is None, f"行 {row.anchor_uid} 没有链接，不该返回 {url!r}"
+            assert url != "https://join.qq.com/about.html"
 
 
 class TestIdTemplate:
