@@ -159,3 +159,37 @@ async def job_url_online(row: JobRow, tools, manual: SiteManual):
     idx, url = fresh[0]
     await _tool(tools, "close_page").ainvoke({"pageIdx": idx})
     return url
+
+
+async def validate_manual(manual: SiteManual, snapshot_text: str, tools) -> tuple:
+    """旧手册还成不成立。返回 `(过了没有, 人看得懂的原因)`。
+
+    只验三条（spec §3.5），约 3–5 步，远低于全量重探。**任一条不过整份作废**——
+    不做部分沿用：手册字段之间有耦合（`filter_interaction` 变了往往意味着筛选区重写，
+    `dimensions` 也不可信），逐格判断"哪格还能用"的成本接近重探，而判错的产物是
+    半对的手册，最难查。
+    """
+    # ① 计数文本仍在
+    if manual.total_count_locator and read_total_count(snapshot_text, manual) is None:
+        return False, f"计数文本读不到了（locator={manual.total_count_locator!r}），站点可能已改版"
+
+    # ② 第一个维度的选项集合没变
+    if manual.dimensions:
+        want = set(manual.dimensions[0].get("options") or [])
+        have = {name for _, name in _nodes(snapshot_text) if name}
+        missing = want - have
+        if missing:
+            return False, f"筛选维度「{manual.dimensions[0].get('name')}」的选项变了，快照里找不到：{sorted(missing)}"
+
+    # ③ 对第一个岗位实取一次 URL
+    rows = split_rows(snapshot_text, manual)
+    if not rows:
+        return False, f"按 row_anchor={manual.row_anchor!r} 一行都切不出来"
+    if manual.job_url_source == "new_tab_on_click":
+        url = await job_url_online(rows[0], tools, manual)
+    else:
+        url = job_url_offline(rows[0], snapshot_text, manual)
+    if not (url or "").startswith("http"):
+        return False, f"按 job_url_source={manual.job_url_source} 取不到第一个岗位的 URL"
+
+    return True, "手册仍然成立"
