@@ -53,3 +53,27 @@ def split_rows(snapshot_text: str, manual: SiteManual) -> list:
         rows.append(JobRow(anchor_uid=nodes[pos][0],
                            text=" ".join(n for _, n in chunk if n.strip())))
     return rows
+
+
+def read_total_count(snapshot_text: str, manual: SiteManual):
+    """按手册的正则读「共 N 个岗位」。读不到返回 None。
+
+    **None ≠ 0**：None 是"这个站没有计数/读不到"，0 是"筛得一个不剩"。合并会让
+    「筛太窄」和「locator 失效」无法区分，而这两件事的处理完全不同。
+
+    正则写错（没有捕获组）也返回 None 而不抛——这一格是 agent 填的，写错概率不低，
+    整条 run 不该因此崩掉；轻校验（Task 8）会把它拦下来。
+    """
+    pattern = (manual.total_count_locator or "").strip()
+    if not pattern:
+        return None
+    try:
+        m = re.search(pattern, snapshot_text)
+    except re.error:
+        return None
+    if not m or not m.groups():
+        return None
+    try:
+        return int(m.group(1))
+    except (ValueError, IndexError):
+        return None
