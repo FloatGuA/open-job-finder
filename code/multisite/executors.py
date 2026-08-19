@@ -108,3 +108,49 @@ def job_url_offline(row: JobRow, snapshot_text: str, manual: SiteManual):
     # id_template
     m = _ID_RE.search(row.text)
     return manual.url_template.replace("{id}", m.group(1)) if m else None
+
+
+_PAGE_LINE_RE = re.compile(r"^\s*(?P<idx>\d+):\s*.*?\((?P<url>https?://[^)]+)\)(?P<sel>.*)$", re.M)
+
+
+def _parse_pages(text: str) -> list:
+    """`list_pages` 的输出 → [(idx, url, is_selected)]。"""
+    return [(int(m.group("idx")), m.group("url"), "[selected]" in m.group("sel"))
+            for m in _PAGE_LINE_RE.finditer(text or "")]
+
+
+def _flat(result) -> str:
+    if isinstance(result, list):
+        return "\n".join(b.get("text", "") for b in result if isinstance(b, dict))
+    return str(result)
+
+
+def _tool(tools, name):
+    for t in tools:
+        if t.name == name:
+            return t
+    raise RuntimeError(f"工具集里没有 {name}——new_tab_on_click 必须有 click/list_pages/close_page")
+
+
+async def job_url_online(row: JobRow, tools, manual: SiteManual):
+    """点开卡片、从新标签页读 URL、关掉。取不到返回 None。
+
+    **拿完必须关**：不关的话标签页越积越多，`list_pages` 里"哪个是刚开的"就判不准了，
+    第 11 个岗位会拿到第 3 个岗位的 URL——而这种错完全不会报错，只会让库里躺着
+    一批指错地方的记录。
+    """
+    if manual.job_url_source != "new_tab_on_click":
+        raise ValueError(f"job_url_online 只处理 new_tab_on_click，收到 {manual.job_url_source}")
+
+    before = {u for _, u, _ in _parse_pages(_flat(await _tool(tools, "list_pages").ainvoke({})))}
+    await _tool(tools, "click").ainvoke({"uid": row.anchor_uid})
+    after = _parse_pages(_flat(await _tool(tools, "list_pages").ainvoke({})))
+
+    fresh = [(idx, url) for idx, url, _ in after if url not in before]
+    if not fresh:
+        # 点了没开新页。返回 None 让调用方计一次失败——**绝不能把当前列表页的 URL
+        # 当成岗位 URL**。
+        return None
+    idx, url = fresh[0]
+    await _tool(tools, "close_page").ainvoke({"pageIdx": idx})
+    return url
