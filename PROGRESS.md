@@ -12,6 +12,43 @@
 
 ## 待跟进（另开会话）
 
+### 🧱 计划 A（站点手册地基）已完工，在分支 `m1-manual-foundation` 上待合并（2026-08-19）
+
+**14 个提交，全量 1306 passed（退出码 0），`layer1_agent.py` 一行未改**——它刻意不接进现有
+工作流，m1/m2 的行为完全不变。接线是计划 B 的事。
+
+spec：`docs/superpowers/specs/2026-08-19-m1-survey-plan-scan-design.md`
+计划：`docs/superpowers/plans/2026-08-19-m1-manual-foundation.md`
+
+**产出**：`multisite/site_manual.py`（手册模型 + 入口校验）、`multisite/executors.py`
+（行切分 / 读总数 / 三种取 URL / 轻校验）、`site_manuals` 表 + tracker 读写、
+真实尺寸的脱敏 fixture + PII 守门测试。新增 51 条测试。
+
+**执行方式**：subagent-driven，8 个 task 各自派工 + 独立评审，1 个 task 进过修复轮，
+末尾一次整支评审（opus）+ 一次修复波 + 一次范围受限复审。**11 条控制端裁决**记在过程账本里。
+
+**最有价值的一件事：八个 task 全部通过各自评审、全量一直绿，最终整支评审仍挖出 1 个 Critical
+和 6 个 Important。** 差别在方法——任务级评审核"这个 diff 符不符合它的 brief"，
+整支评审**拿真实 fixture 去跑那些函数**。两个真缺陷都是这么现形的，且**都产生"看起来完全
+正常的错数据"**（10 个岗位全部指向同一个页脚链接；`list_pages` 出错时把列表页当岗位 URL
+返回并关掉列表页）。详见 PITFALLS 新增的三条。
+
+**已知遗留（计划 B 动手时按顺序处理）**：
+
+1. **`job_url_online` 不返回 JD**——与 spec §5.1 的成本模型冲突，**必须是计划 B 的第一个
+   task**（见 DECISION 对应条）。拖到 harvest 写了一半再改，run 时长按 spec 自己的估算会翻倍。
+2. **`JobRow` 只有 `(anchor_uid, text)`**，行窗口算出来就扔了。加字段现在零成本。
+3. **`split_rows` 把站点几何焊进了代码**（锚点等距、锚点后 2 个节点属于本行），手册里没有
+   对应字段。某行多一个节点会让所有更宽的行**从头部被截掉**——而头部正是标题，且不报错。
+4. **`_NODE_RE` / `_flat` 在仓库里已是第三份拷贝**（另两份在 `safe_tools.py` 与
+   `layer1_agent.py`，且 `_flat` 与那两份**语义有差**：那两份过滤 `type == "text"`，这份不过滤）。
+   已在文件顶部注明是刻意取舍，但契约一变仍会漂移。
+5. **`_ID_RE = r"\b(\d{4,})\b"` 会把年份当岗位 ID**（"2027校园招聘" → 2027）。当前无站点走
+   `id_template` 故不可达；启用前必须收紧，否则**错的是 URL 本身**、库里躺着指错地方的记录。
+6. 判据②只检测选项消失、检测不到新增（见 DECISION，含三条可行路径）。
+7. 其余 11 条 deferred minor 与全部 11 条裁决在过程账本
+   `.superpowers/sdd/2026-08-19-m1-manual-foundation/progress.md`（gitignore，**收尾会删**）。
+
 ### 🚧 join.qq.com（腾讯校招）：死循环已解，现在卡在「不肯开始记岗位」（2026-08-19）
 
 **排查过程里我下过三个错误结论，全被推翻。按顺序记下来免得重走**：
