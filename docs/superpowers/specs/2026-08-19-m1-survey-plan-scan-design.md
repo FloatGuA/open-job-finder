@@ -100,7 +100,7 @@ write_pending_jobs  代码       落库（不变）
 | `filter_interaction` | `direct_click` / `expand_group_then_click` | 筛选选项要不要先展开分组 |
 | `filters_survive_reload` | bool | 重新导航能不能重置筛选（见 §7） |
 | `total_count_locator` | 字符串，可空 | 计数文本的**正则**，须含一个数字捕获组（如 `共(\d+)个岗位`）。空＝这个站没有计数，则 §3.3 的试探判定退化为「对比列表行数」，可靠性下降，手册需在 `notes` 里注明 |
-| `row_split` | `container_per_row` / `anchor_text` | 列表怎么切成一行一行，见 §3.7 |
+| `row_split` | `anchor_text`（已实现）/ `container_per_row`（**声明未实现**）| 列表怎么切成一行一行，见 §3.7。未实现的取值由 `from_dict` 拒绝——闭集的意义是「过了校验就代表代码能执行」，否则它会被写进 survey prompt、然后在运行中途崩溃，绕开 §7 那个「所有执行器都不匹配就诚实报搞不定」的出口 |
 | `row_anchor` | 字符串 | 仅 `anchor_text` 用：每个岗位行里必现且仅现一次的文本 |
 | `dimensions` | 列表 | 每个筛选维度：`name` / `options[]` / `multi_select`(bool) |
 | `important_notes` | 自由文本 | **超出手册设计预期的一切**。留空是常态，见 §3.6 |
