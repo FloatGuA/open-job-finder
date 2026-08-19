@@ -77,3 +77,34 @@ def read_total_count(snapshot_text: str, manual: SiteManual):
         return int(m.group(1))
     except (ValueError, IndexError):
         return None
+
+
+_ID_RE = re.compile(r"\b(\d{4,})\b")
+
+
+def job_url_offline(row: JobRow, snapshot_text: str, manual: SiteManual):
+    """不碰浏览器就能取到的 URL。取不到返回 None。
+
+    **None 而不是空串**：调用方要能区分"这一行没有链接"（记一次失败并计数）和
+    "链接是空的"（会被当成合法 URL 写进库）。
+    """
+    if manual.job_url_source == "new_tab_on_click":
+        raise ValueError("new_tab_on_click 要走 job_url_online()——它必须真的点一下浏览器")
+
+    if manual.job_url_source == "link_in_row":
+        # 锚点所在行的**同一张卡片**里那个 link 节点。快照是平铺的，取锚点之前
+        # 最近的一个带 url= 的 link。
+        best = None
+        for line in snapshot_text.splitlines():
+            m = _NODE_RE.search(line)
+            if not m:
+                continue
+            if m.group("role") == "link" and 'url="' in line:
+                best = re.search(r'url="([^"]*)"', line).group(1)
+            if m.group("uid") == row.anchor_uid:
+                return best or None
+        return None
+
+    # id_template
+    m = _ID_RE.search(row.text)
+    return manual.url_template.replace("{id}", m.group(1)) if m else None
