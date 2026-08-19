@@ -66,9 +66,13 @@ class TestJobUrlOnline:
         assert ("click", "1_87") in calls
 
     def test_closes_the_tab_afterwards(self):
+        """不仅要关一页，关的必须是**新开的那一页**（索引 1），绝不能是列表页本身
+        （索引 0）——关错列表页比不关更严重：后续每一个岗位都会取不到 URL，
+        而这种错同样不报错、不崩溃。"""
         tools, calls = _tools()
         _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
-        assert any(c[0] == "close_page" for c in calls), "开了不关，下一个岗位就会取错 URL"
+        assert ("close_page", 1) in calls, "没关掉新开的详情页（索引 1）"
+        assert ("close_page", 0) not in calls, "绝不能关掉列表页本身（索引 0）"
 
     def test_click_that_opens_nothing_returns_none_and_closes_nothing(self):
         """有的行点了不跳转（比如那一行其实是广告）。要返回 None 让调用方计一次失败，

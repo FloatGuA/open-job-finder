@@ -138,6 +138,11 @@ async def job_url_online(row: JobRow, tools, manual: SiteManual):
     **拿完必须关**：不关的话标签页越积越多，`list_pages` 里"哪个是刚开的"就判不准了，
     第 11 个岗位会拿到第 3 个岗位的 URL——而这种错完全不会报错，只会让库里躺着
     一批指错地方的记录。
+
+    **异常安全性**：本函数不吞异常（fail fast）。如果 `close_page` 本身调用失败，
+    异常会原样上抛，新开的那个标签页**不会**被关闭。计划 B 的 harvest 循环会连续
+    调用本函数几十次，这种残留会累积，并让后续调用里"哪个是刚开的"判定失准——
+    调用方需要知晓这一点（例如捕获异常时考虑是否需要额外清理）。
     """
     if manual.job_url_source != "new_tab_on_click":
         raise ValueError(f"job_url_online 只处理 new_tab_on_click，收到 {manual.job_url_source}")
