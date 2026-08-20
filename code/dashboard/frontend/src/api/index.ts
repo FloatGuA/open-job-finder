@@ -157,6 +157,10 @@ export interface PendingJob {
   is_golden: boolean
   // 在站点的哪个招聘项目里找到的。投递上限常常按它算，'' = 老数据没记录。
   bucket: string
+  // 批准这个岗位之后会发哪一份简历。后端用 resume_matcher.pick_resume 算出，
+  // 前端绝不自己另算一遍——审批页显示的和实际发出去的必须是同一份判断。
+  // slug='' = 一份简历都没有；matched=false = 没对上、按当前激活份兜底。
+  resume: { slug: string; name: string; matched: boolean; reason: string; pdf_state: ResumePdfState }
 }
 
 export interface SiteLimitInfo {

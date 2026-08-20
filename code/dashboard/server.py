@@ -1793,10 +1793,32 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
     """
     _initialize_state()
     from multisite import preferences
+    from services.resume_matcher import pick_resume
+    from services.resume_store import ResumeStore
 
     tracker = app.state.tracker
     items = tracker.get_pending_jobs(status=status)
     categories = preferences.load_profile().job_seeking.category_names
+
+    # 每个岗位要带上"批了会发哪份简历"——这是 Checkpoint 1 唯一的人工决策点，
+    # 判断所需的信息必须都在这一页上（2026-08-20 真机事故：批了个「服务运营」岗位，
+    # 实际兜底发的是「游戏岗版」，页面上完全看不出来）。
+    # **复用 pick_resume，绝不在这里另写匹配**：一旦分叉，审批页显示的和实际发出去
+    # 的就不是同一份，比不显示还糟。list()/pdf_status() 各调一次，循环内只调
+    # pick_resume——避免 pick_for_job 每个岗位都重读一遍 index。
+    resume_store = ResumeStore(str(DATA_DIR))
+    resume_index = resume_store.list()
+    resume_items = resume_index.get("items") or []
+    active_slug = resume_index.get("active") or ""
+    resume_pdf_status = resume_store.pdf_status()
+
+    def _resume_choice(job) -> dict:
+        picked = pick_resume(resume_items, active_slug, job_title=job.title or "", jd_text=job.why or "")
+        state = (resume_pdf_status.get(picked["slug"]) or {}).get("state", "missing")
+        return {
+            "slug": picked["slug"], "name": picked["name"], "matched": picked["matched"],
+            "reason": picked["reason"], "pdf_state": state,
+        }
 
     # 站点投递上限 + 该站已批准数，一起返回给前端算告警。
     # **已批准数在这里统计（而不是数上面的 items）**：上面按 status 过滤过，
@@ -1829,7 +1851,7 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
             "brief": vars(brief) if brief else None,
         }
     return JSONResponse({
-        "jobs": [vars(j) for j in items],
+        "jobs": [{**vars(j), "resume": _resume_choice(j)} for j in items],
         "total": len(items),
         "categories": categories,
         "sites": site_info,

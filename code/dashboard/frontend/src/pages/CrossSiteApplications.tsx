@@ -49,6 +49,17 @@ const T_C1_IS_GOLDEN = '\u5df2\u5f55\u5165\u6837\u4f8b\u5e93'
 const T_C1_UNDO_GOLDEN = '\u64a4\u9500'
 const T_C1_GOLDEN_HINT = '\u786e\u8ba4\u540e\u4f1a\u4f5c\u4e3a\u4f8b\u5b50\u5199\u8fdb\u9009\u5c97 agent \u7684 prompt'
 
+// ---- checkpoint 1: which resume gets sent ----
+const T_RESUME_LABEL = '\u7b80\u5386'
+const T_RESUME_NONE = '\u6ca1\u6709\u53ef\u53d1\u7684\u7b80\u5386'
+const T_RESUME_FALLBACK = '\u515c\u5e95'
+const T_PDF_READY = '\u53ef\u53d1\u9001'
+const T_PDF_READY_HINT = '\u6709\u5df2\u5bfc\u51fa\u7684 PDF\uff0c\u4e14\u4e0d\u65e9\u4e8e\u7b80\u5386\u6700\u540e\u4fee\u6539'
+const T_PDF_STALE = 'PDF \u8fc7\u671f'
+const T_PDF_STALE_HINT = '\u7b80\u5386\u6539\u8fc7\u4e4b\u540e\u6ca1\u6709\u91cd\u65b0\u5bfc\u51fa\uff0cm2 \u4f1a\u62d2\u7edd\u7528\u8fd9\u4e00\u4efd'
+const T_PDF_MISSING = '\u672a\u5bfc\u51fa'
+const T_PDF_MISSING_HINT = '\u4ece\u6ca1\u5bfc\u51fa\u8fc7 PDF\uff0cm2 \u6ca1\u6cd5\u53d1\u9001'
+
 // ---- slot budget ----
 const T_SLOT_QUOTA = '\u540d\u989d'
 const T_SLOT_APPROVED = '\u5df2\u6279\u51c6'
@@ -118,6 +129,25 @@ const STATUS_STYLE: Record<Status, { label: string; color: string; bg: string }>
   pending: { label: T_FILTER_PENDING, color: '#ff9f0a', bg: 'rgba(255,159,10,0.15)' },
   approved: { label: T_FILTER_APPROVED, color: '#30d158', bg: 'rgba(48,209,88,0.15)' },
   rejected: { label: T_FILTER_REJECTED, color: '#ff453a', bg: 'rgba(255,69,58,0.15)' },
+}
+
+const RESUME_PDF_STATE_STYLE: Record<string, { label: string; hint: string; color: string; bg: string }> = {
+  ready: { label: T_PDF_READY, hint: T_PDF_READY_HINT, color: '#30d158', bg: 'rgba(48,209,88,0.15)' },
+  stale: { label: T_PDF_STALE, hint: T_PDF_STALE_HINT, color: '#ff9f0a', bg: 'rgba(255,159,10,0.15)' },
+  missing: { label: T_PDF_MISSING, hint: T_PDF_MISSING_HINT, color: '#ff453a', bg: 'rgba(255,69,58,0.15)' },
+}
+
+function ResumePdfPill({ state }: { state: string }) {
+  const s = RESUME_PDF_STATE_STYLE[state] ?? RESUME_PDF_STATE_STYLE.missing
+  return (
+    <span
+      className="rounded-full px-2 py-0.5 text-[11.5px] font-semibold"
+      style={{ background: s.bg, color: s.color }}
+      title={s.hint}
+    >
+      {s.label}
+    </span>
+  )
 }
 
 function StatusBadge({ status }: { status: Status }) {
@@ -593,6 +623,32 @@ function JobRow({
               {'\uff1a'}
               {job.decided_at.slice(0, 16).replace('T', ' ')}
             </span>
+          )}
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px]">
+          <span className="text-text-3">{T_RESUME_LABEL}</span>
+          {job.resume.slug ? (
+            <>
+              <span
+                className={job.resume.matched ? 'text-text-2' : 'font-medium'}
+                style={job.resume.matched ? undefined : { color: '#ff9f0a' }}
+              >
+                {job.resume.name}
+              </span>
+              {!job.resume.matched && (
+                <span
+                  className="rounded-full px-2 py-0.5 text-[11.5px] font-semibold"
+                  style={{ background: 'rgba(255,159,10,0.16)', color: '#ff9f0a' }}
+                  title={job.resume.reason}
+                >
+                  {T_RESUME_FALLBACK}
+                </span>
+              )}
+              <ResumePdfPill state={job.resume.pdf_state} />
+            </>
+          ) : (
+            <span className="font-semibold" style={{ color: '#ff453a' }}>{T_RESUME_NONE}</span>
           )}
         </div>
 
