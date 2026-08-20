@@ -35,7 +35,8 @@ def _build(select_only):
 
 class TestStageNames:
     def test_m1_is_selection_only(self):
-        assert stage_names("m1") == ("ensure_ready", "find_jobs", "write_pending_jobs")
+        assert stage_names("m1") == ("ensure_ready", "survey_structure",
+                                     "plan_buckets", "scan_buckets", "write_pending_jobs")
 
     def test_m2_surveys_the_form(self):
         assert stage_names("m2") == (

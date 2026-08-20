@@ -77,6 +77,17 @@ class TestCandidatesStillLandInTheirOwnTable:
         assert out["pending_job_ids"] == []          # 没有新行
         assert len(tracker.get_pending_jobs()) == 1  # 也没重复插
 
+    def test_jd_is_persisted_alongside_the_job(self, tracker):
+        """Task 2 给 `pending_jobs` 加了 `jd` 列、给 `add_pending_job` 加了入参，但
+        真正把 JD 写进去的是这里——`record_candidates` 不传 `jd` 的话，抓了 JD 但
+        没落库，三个消费方（W1 评分器/Checkpoint 1 审批页/eval）全部静默降级。"""
+        state = {"site_name": "s", "found_jobs": [
+            FoundJob(url="https://x/1", title="t", jd="职责：负责某系统的设计与开发"),
+        ]}
+        record_candidates(tracker, state)
+        row = tracker.get_pending_jobs()[0]
+        assert row.jd == "职责：负责某系统的设计与开发"
+
 
 class TestM2InitialStateCarriesJobIdentity:
     """m2 的真实调用路径：`run_layer1` 必须把 `job_title`/`company`/`source_job_id`

@@ -51,8 +51,13 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from multisite import agent_runtime, chrome_mcp_client, preferences, safe_tools
+from multisite.bucket_plan import plan_buckets as compute_bucket_plan
+from multisite.classify import classify_jobs
+from multisite.executors import validate_manual
+from multisite.harvest import harvest_page
 from multisite.observability import agent_step_sink, run_scope, traced_stage
 from multisite.personal_info_loader import load_candidates, load_personal_info, match_value
+from multisite.site_manual import ManualError, SiteManual
 from services.console_utf8 import safe_print
 from services.prompt_manager import PromptManager
 from services.tracker import ApplicationTracker
@@ -88,6 +93,7 @@ class FoundJob(BaseModel):
     category: str = Field(default="", description="归到哪个方向，必须是 profile 里配置的类别之一")
     bucket: str = Field(default="", description="在站点的哪个招聘项目/顶层分类里找到的")
     why: str = Field(default="", description="一句话说明对上了哪几条求职条件")
+    jd: str = Field(default="", description="职责详情正文——评分/审批页/eval 三个消费方都靠它")
 
 
 class FindJobsOutput(BaseModel):
@@ -126,6 +132,11 @@ class Layer1State(TypedDict, total=False):
     site_name: str
     job_title: str
     company: str
+    # survey_structure 的产出：这个站怎么运作的结构化事实，plan_buckets/scan_buckets
+    # 两个下游节点都读它。
+    manual: SiteManual
+    # plan_buckets 的产出：这一轮该扫哪几个桶，每项 {dimension, option, why, targets}。
+    bucket_plan: list[dict]
     # 选岗 agent 的产出
     found_jobs: list[FoundJob]
     pending_job_ids: list[int]   # Checkpoint 1 落库后的 id（重复 url 不在内）
@@ -686,7 +697,17 @@ _PASSTHROUGH_OPEN_APPLICATION = ("navigate_page", "wait_for", "upload_file",
 # 两张图各自完整的节点顺序。**刻意不写成「m2 = m1 + 后缀」**——那正是拆图前的形状
 # （`STAGE_ORDER[:3]`），它把一个错误的假设编码进了代码：m2 根本不选岗，它拿到的是
 # 调用方指定的那一个岗位，`find_jobs` / `write_pending_jobs` 在 m2 里是幽灵节点。
-M1_STAGES = ("ensure_ready", "find_jobs", "write_pending_jobs")
+#
+# m1 三站拆五站（2026-08-20）：原来的 `find_jobs` 是一个巨大的 ReAct 节点，混着
+# 性质完全不同的三件事——摸清站点结构（探索）、决定打哪几个桶（纯判断，不碰
+# 浏览器）、逐条读岗位判类别落袋（机械+判断）。三件事共享一个步数预算、一个
+# 完成判据，表现是"一段跑飞就把整轮预算吃光"，前端也只看得到"find_jobs 卡住了"。
+# 拆成 survey_structure（ReAct，产出站点手册）/ plan_buckets（普通 LLM 调用，
+# 不是 ReAct，可单测可 eval）/ scan_buckets（ReAct，逐桶调 harvest 工具）三站，
+# 各自独立的步数预算和完成判据。详见
+# docs/superpowers/specs/2026-08-19-m1-survey-plan-scan-design.md。
+M1_STAGES = ("ensure_ready", "survey_structure", "plan_buckets", "scan_buckets",
+             "write_pending_jobs")
 M2_STAGES = ("ensure_ready", "open_application",
              "scan_and_classify_fields", "write_pending_application")
 
@@ -863,6 +884,85 @@ def make_record_site_brief_tool(tracker, site_name: str) -> "object":
     )
 
 
+class _ManualDimensionInput(BaseModel):
+    """`record_site_manual` 里 `dimensions` 一项的输入形状。**独立于
+    `SiteManual.dimensions`**（那是宽松的 `list[dict]`，代码内部消费）——工具入参
+    需要一份 pydantic 形状给 LangChain 校验 agent 传的结构化参数，两者字段虽然同名，
+    但一个是"agent 汇报的接口"，一个是"代码执行的数据结构"，没有必要合并成一份。"""
+    name: str = Field(description="维度名字，页面上筛选器的原文，比如「应聘项目」「工作地点」")
+    options: list[str] = Field(default_factory=list, description="这个维度下所有选项的原文文字")
+    multi_select: bool = Field(default=False, description="这个维度能不能同时勾多个（多选）；不确定就填 false")
+
+
+def make_record_site_manual_tool(sink: dict) -> "object":
+    """让勘察 agent 把探到的站点操作手册结构化报回来。
+
+    照 `make_record_site_limit_tool` 的样子——**外置结果，不指望 agent 最后一次性
+    输出**：agent 半途没步数了，已经调用过的这一次照样能拿到手册（只要它调用
+    在耗尽步数之前完成）。
+
+    **校验走 `SiteManual.from_dict`，不重新写一遍闭集规则**——那份校验已经是"手册
+    要被代码执行"这条约束的唯一实现，这里重新写一份闭集校验就是同一条规则两份
+    实现，改一处漏一处的经典形状。校验失败把 `ManualError` 的原文回给 agent，
+    让它有机会看着错误信息纠正重报，而不是直接把半成品交出去。
+    """
+    from langchain_core.tools import StructuredTool
+
+    async def record_site_manual(
+        job_url_source: str,
+        pagination: str,
+        filter_interaction: str,
+        row_split: str,
+        filters_survive_reload: bool = False,
+        url_template: str = "",
+        total_count_locator: str = "",
+        row_anchor: str = "",
+        dimensions: Optional[list[_ManualDimensionInput]] = None,
+        important_notes: str = "",
+    ) -> str:
+        try:
+            manual = SiteManual.from_dict({
+                "job_url_source": job_url_source,
+                "pagination": pagination,
+                "filter_interaction": filter_interaction,
+                "row_split": row_split,
+                "filters_survive_reload": filters_survive_reload,
+                "url_template": url_template,
+                "total_count_locator": total_count_locator,
+                "row_anchor": row_anchor,
+                "dimensions": [
+                    {"name": d.name, "options": d.options, "multi_select": d.multi_select}
+                    for d in (dimensions or [])
+                ],
+                "important_notes": important_notes,
+            })
+        except ManualError as exc:
+            return f"记录失败：{exc}"
+        sink["manual"] = manual
+        return "已记录站点手册。探完了就结束，不用再调用任何工具。"
+
+    return StructuredTool.from_function(
+        coroutine=record_site_manual,
+        name="record_site_manual",
+        description=(
+            "把探到的站点结构记下来，这是你这一步唯一的产出。字段解释：\n"
+            "job_url_source：怎么拿到岗位详情页 URL —— link_in_row（卡片本身就是带 url 的链接）/ "
+            "new_tab_on_click（点了在新标签页打开，需配合 list_pages/select_page 确认）/ "
+            "id_template（URL 靠一个数字 ID 拼出来，配合 url_template 用，须含 {id} 占位符）。\n"
+            "pagination：next_button / url_param / infinite_scroll / none。\n"
+            "filter_interaction：direct_click（选项直接可点） / expand_group_then_click"
+            "（要先点开分组才能点选项）。\n"
+            "row_split：目前只支持 anchor_text——给 row_anchor 填一段每个岗位行里必现"
+            "且仅现一次的文字。真的找不到规律就不要硬填，直接说明搞不定，不要调用本工具。\n"
+            "total_count_locator：读「共 N 个岗位」这类计数文本的正则，须带一个数字捕获组"
+            "（如 `共(\\d+)个岗位`）；没有这类计数就留空。\n"
+            "dimensions：筛选维度列表，每项给 name/options/multi_select；multi_select 只能"
+            "靠试探判定（勾一个、回读总数、再勾一个、看总数怎么变），不确定就填 false。\n"
+            "important_notes：以上字段都装不下的情况才写，正常情况留空。"
+        ),
+    )
+
+
 def build_agent_toolset(
     tools: list,
     snapshot_provider,
@@ -975,6 +1075,7 @@ def record_candidates(tracker, state: dict) -> dict:
             category=job.category,
             why=job.why,
             bucket=job.bucket,
+            jd=job.jd,
         )
         if new_id is None:
             skipped += 1  # 这个 url 已经在待审批表里了，正常情况不是错误
@@ -1056,6 +1157,22 @@ def record_application(tracker, state: dict, personal_info: dict) -> dict:
     return {"pending_application_id": app_id}
 
 
+def _render_bucket_plan(plan: list[dict]) -> str:
+    """把 `plan_buckets` 的产出渲染成给 `scan_buckets` agent 看的清单。纯函数，
+    单独抽出来是为了能单测（不需要真浏览器/真 LLM）。"""
+    if not plan:
+        return "（本轮没有需要扫的桶）"
+    lines = []
+    for i, item in enumerate(plan, 1):
+        targets = "、".join(item.get("targets") or []) or "（未指定）"
+        why = item.get("why") or ""
+        line = f"{i}. 「{item.get('dimension')}」= 「{item.get('option')}」 —— 目标类别：{targets}"
+        if why:
+            line += f"（{why}）"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _make_nodes(
     tools: list,
     personal_info: Optional[dict] = None,
@@ -1063,18 +1180,28 @@ def _make_nodes(
     quotas: Optional[dict] = None,
     max_pages: int = 8,
     max_filter_clicks: int = 4,
+    candidates_per_bucket: int = 15,
     logger=None,
 ) -> tuple:
-    """节点工厂：Layer 1 的六个阶段函数只在这里定义一份。`build_select_graph` /
+    """节点工厂：Layer 1 的八个阶段函数只在这里定义一份。`build_select_graph` /
     `build_survey_graph` 从返回的字典里各取自己需要的子集组装图——**拆的是接线，
     不是实现**：一张图要连哪些节点变了，不代表节点本身的行为该抄两份。
 
     tools 来自 chrome_mcp_client.get_tools()，通过闭包绑定进各节点——不放进
-    state（不是可序列化/可 checkpoint 的东西）。外层是确定性编排，`find_jobs` /
-    `open_application` 两个节点内部才是 agent 循环（见模块 docstring 的分工表）。
+    state（不是可序列化/可 checkpoint 的东西）。外层是确定性编排，`survey_structure` /
+    `scan_buckets` / `open_application` 三个节点内部才是 agent 循环，`plan_buckets`
+    是纯判断的普通 LLM 调用（见模块 docstring 的分工表、spec §2.1）。
 
     `quotas` = {类别: 最多几个}，默认读 profile.yaml 的 job_seeking.categories。
-    它同时是 `record_job` 的枚举约束和选岗的终止条件。
+    它是分类的枚举约束（`classify_jobs`）——不再是选岗的终止条件：候选上限已经
+    拆给 `candidates_per_bucket`（见 spec §4），quotas 只决定"这条岗位算哪一类"，
+    真正按名额精选发生在评分排序之后。
+
+    `candidates_per_bucket`：`scan_buckets` 里每个桶最多抓多少份候选（决定取多少
+    份 JD，也就决定 run 跑多长）——**这不是 profile.yaml 里的字段**，那需要改
+    `services/profile_loader.py`/前端设置页，不在这次接线的范围内（spec §4 提到
+    的"前端可调"留给计划 C，见 task-7-brief）；这里先按现成的 `max_pages`/
+    `max_filter_clicks` 同款套路开一个带默认值的参数占位。
 
     返回 `(nodes, snapshot_provider)`：
       `nodes`：`{阶段名: (节点函数, run 日志摘要函数)}`。
@@ -1160,67 +1287,204 @@ def _make_nodes(
                 raise RuntimeError("等待手动登录超时（10 分钟），请重新运行")
         return {"snapshot_text": snapshot}
 
-    async def find_jobs(state: Layer1State) -> dict:
-        """选岗 agent：从入口页自己浏览、筛选、判断岗位符不符合求职偏好。
+    async def survey_structure(state: Layer1State) -> dict:
+        """勘察 agent：摸清这个站怎么组织（分几个桶、URL 怎么拿、怎么翻页……），
+        产出一份结构化的站点操作手册（`SiteManual`）。**允许试探筛选器**——多选
+        还是互斥这类信息 a11y 快照里没有，唯一可靠的判定方式是"勾一个、回读总数、
+        再勾一个"（spec §3.3）。
 
-        **这个节点只在 m1 的图里。** 拆图之前它还有一条 `if state.get("job_url")`
-        的短路分支，专为让 m2 复用本节点而存在：m2 拿到的是调用方指定的那一个岗位，
-        那条分支把它包成 `FoundJob` 返回，顺带按 URL 反查 `pending_jobs` 补 title/company。
-        拆图之后 m2 有自己的图（没有这个节点），岗位与身份信息由调用方直接传进 state
-        （见 `job_from_state` 与 `run_layer1` 的 `job_title`/`company`/`source_job_id`），
-        那条分支就是一条"选岗节点其实不选岗"的暗路，删掉。
+        **先试旧手册，省 15 步**：`tracker.get_site_manual` 有旧手册就先跑
+        `validate_manual` 轻校验，过了直接用、不进 agent；不过就整份丢弃重探
+        （**不做部分沿用**——一份半对的手册比没有更糟，spec §3.5）。
+
+        **结束时由代码重新导航回入口页**，不依赖 agent 自己撤销试探时勾过的
+        筛选器——a11y 快照不报 `checked` 状态，agent 无从确认自己恢复没恢复，
+        那正是刚踩过的"动作做了但看不见结果"的坑（spec §3.4）。
+
+        **搞不定就抛，绝不硬填**：手册为 None 时节点让 run 失败，因为硬填出的
+        手册会让下游抓回一堆垃圾，而那看起来跟"这个站没有岗位"一模一样（spec §7）。
         """
+        site_name = state.get("site_name", "")
+        entry = state["search_url"]
+
+        existing = tracker.get_site_manual(site_name)
+        if existing is not None:
+            old_manual, _updated_at = existing
+            ok, reason = await validate_manual(state.get("snapshot_text", ""), tools, old_manual)
+            if ok:
+                return {"manual": old_manual, "truncated": False}
+            if logger is not None:
+                logger.log("site_manual_invalidated", scope={"site": site_name},
+                           data={"reason": reason})
+
         prompt = pm.render(
-            "layer1_find_jobs",
+            "layer1_survey_structure",
             {
-                "constraints": preferences.render_constraints(),
-                "max_pages": str(max_pages),
-                "quota_table": "、".join(f"{n} {c} 个" for n, c in quotas.items()) or "（未配置）",
-                # 人工确认过的归类纠正。传同一个 tracker，别让它自己再开一份连接。
-                "golden_examples": preferences.render_golden_examples(tracker),
-                # 上次跑完这个站时 agent 自己写的笔记，省得每次重新摸索一遍。
-                "site_brief": preferences.render_site_brief(tracker, state.get("site_name", "")),
-                # 筛选器点击预算。第一次真机跑就是死在这里：agent 正确点了
-                # 深圳/产品/研发/日常实习，但每次截图后又去点下一个筛选器，
-                # 始终不收敛，一路撞到 recursion limit。"最多翻 N 页"约束不住
-                # 这种打转——翻页和调筛选器是两件事，必须分别给预算。
+                "site_brief": preferences.render_site_brief(tracker, site_name),
                 "max_filter_clicks": str(max_filter_clicks),
             },
         )
-        # 岗位随时经 record_job 落到这个 sink 里，不依赖 agent 最后一次性输出。
-        sink: list[FoundJob] = []
-        # 库里已经收录过的岗位不该再占本次名额，见 make_record_job_tool 的说明。
-        known_urls = {j.url for j in tracker.get_pending_jobs()}
+        # 手册经 record_site_manual 落到这个 sink 里，跟 record_job 同一个套路——
+        # agent 半途没步数了，只要那次调用已经完成，手册照样拿得到。
+        sink: dict = {}
         tools_for_agent = [
             *_agent_tools(_PASSTHROUGH_FIND_JOBS),
-            make_record_job_tool(sink, quotas, known_urls=known_urls),
-            make_record_site_limit_tool(tracker, state.get("site_name", "")),
-            make_record_site_brief_tool(tracker, state.get("site_name", "")),
+            make_record_site_manual_tool(sink),
         ]
         agent = agent_runtime.build_agent(tools_for_agent, prompt)
         try:
             result = await agent_runtime.run_agent(
+                agent, f"入口页面：{entry}\n请开始。",
+                on_step=agent_step_sink(logger, "survey_structure"))
+            truncated = agent_runtime.hit_step_limit(result)
+        except GraphRecursionError:
+            truncated = True
+            result = {}
+            safe_print("[layer1] 勘察 agent 达到步数上限。", flush=True)
+
+        # 结束时由代码重新导航回入口页，重置试探筛选器时留下的状态——不依赖 agent
+        # 自己撤销，见 docstring。
+        navigate = chrome_mcp_client.get_tool(tools, "navigate_page")
+        await navigate.ainvoke({"type": "url", "url": entry})
+        reset_snapshot = await _snapshot_and_cache()
+
+        manual = sink.get("manual")
+        if manual is None:
+            _dump_debug_snapshot("survey_structure_no_manual", reset_snapshot)
+            raise RuntimeError(
+                f"survey_structure 没能产出站点手册（{site_name}）：agent 没有成功调用 "
+                f"record_site_manual。最后一句：{agent_runtime.last_text(result)[:300]}"
+            )
+
+        tracker.upsert_site_manual(site_name, manual)
+        return {"manual": manual, "truncated": truncated, "snapshot_text": reset_snapshot}
+
+    async def plan_buckets(state: Layer1State) -> dict:
+        """纯判断，不碰浏览器：对着 `survey_structure` 探到的手册和求职条件，
+        决定这一轮该扫站点的哪几个桶。做成普通 LLM 调用而不是 ReAct，换来可单测、
+        可 eval（spec §2.1）。空列表是合法结果（站上确实没有相关的桶）。
+        """
+        manual: SiteManual = state["manual"]
+        plan = await compute_bucket_plan(manual, quotas, preferences.render_constraints())
+        return {"bucket_plan": plan}
+
+    async def scan_buckets(state: Layer1State) -> dict:
+        """执行 agent：按 `plan_buckets` 给的桶计划逐桶切换，调 `harvest_current_page`
+        工具把当前列表页的岗位抓下来。分工（spec §5）：**agent 只决定去哪个桶、
+        勾哪个框、还要不要继续**；抓取一页 N 条 URL/JD 和批量分类是代码 + 一次
+        LLM 调用，不占 ReAct 轮次。
+
+        `bucket_plan` 为空是合法结果（手册探出的桶里没有一个匹配任何目标类别）
+        ——没有活可干，不当失败处理。
+        """
+        manual: SiteManual = state["manual"]
+        plan = state.get("bucket_plan") or []
+        site_name = state.get("site_name", "")
+
+        if not plan:
+            return {"found_jobs": [], "truncated": False}
+
+        # 岗位随时经 harvest_current_page 落到这个 sink 里（原始字典，形状见
+        # harvest.harvest_page），不依赖 agent 最后一次性输出。
+        raw_sink: list[dict] = []
+        # 库里已经收录过的岗位不该重复抓；每次 harvest_current_page 调用后会把
+        # 新记的 url 并入这个集合，防止同一岗位在本轮里被跨页/跨桶重复收录。
+        known_urls = {j.url for j in tracker.get_pending_jobs()}
+
+        async def _classify(items: list[dict]) -> list[dict]:
+            # harvest_page 产出 {url, jd, bucket, text}；classify_jobs 的 prompt
+            # 要读 title/site_category 才谈得上"职责里出现 LLM/Agent 就归 AI
+            # NATIVE"这条核心规则——这里把 harvest 的字段名接到 classify 期待的
+            # 字段名上。两个模块的字段契约本来就不同（分属 Task 3/Task 4，各自
+            # 独立可测），不是同一份数据的两处实现，这层适配只在接线处存在一次。
+            mapped = [{**it, "title": it.get("text", ""), "site_category": it.get("bucket", "")}
+                     for it in items]
+            return await classify_jobs(mapped, quotas)
+
+        def _harvest_current_page_tool() -> "object":
+            from langchain_core.tools import StructuredTool
+
+            async def harvest_current_page(bucket: str) -> str:
+                # candidates_per_bucket 是**按桶**的候选上限（spec §4），不是每次
+                # 调用各自独立的上限——否则一个桶翻 5 页、每页各拿满 limit，会
+                # 让这个旋钮形同虚设。按桶已收数量算出这次还能拿多少。
+                already = sum(1 for j in raw_sink if j.get("bucket") == bucket)
+                remaining = max(0, candidates_per_bucket - already)
+                if remaining == 0:
+                    return (f"「{bucket}」这个桶已经到候选上限（{candidates_per_bucket}），"
+                            f"不要再翻这个桶了，切下一个桶。")
+                before = len(raw_sink)
+                counts = await harvest_page(
+                    _latest_snapshot["text"], tools, manual, bucket=bucket,
+                    classify=_classify, sink=raw_sink, known_urls=known_urls,
+                    limit=remaining,
+                )
+                known_urls.update(j["url"] for j in raw_sink[before:])
+                msg = (f"「{bucket}」这一页：解析出 {counts['rows']} 行，"
+                      f"新记 {counts['collected']} 个，"
+                      f"跳过已收录 {counts['skipped_known']} 个，"
+                      f"取URL/JD失败 {counts['url_failed']} 个。")
+                if counts["truncated"]:
+                    msg += (f" **已到「{bucket}」的候选上限（{candidates_per_bucket}），"
+                           f"停止翻这个桶，切下一个。**")
+                elif counts["rows"] == 0:
+                    msg += " 这一页没有可解析的岗位行——这个桶可能已经翻到头了。"
+                return msg
+
+            return StructuredTool.from_function(
+                coroutine=harvest_current_page,
+                name="harvest_current_page",
+                description=(
+                    "抓取当前列表页上的岗位：解析这一页、逐条取 URL 和职责详情、批量交给"
+                    "分类模型、记进候选池。bucket 填你当前所在的那个招聘项目/顶层分类的名字。"
+                    "**调用前必须先 take_snapshot**——它读的是你最近拍的那一张，不会自己去拍。"
+                    "每翻一页新的列表页都要重新调用一次。"
+                ),
+            )
+
+        tools_for_agent = [
+            *_agent_tools(_PASSTHROUGH_FIND_JOBS),
+            _harvest_current_page_tool(),
+            make_record_site_limit_tool(tracker, site_name),
+            make_record_site_brief_tool(tracker, site_name),
+        ]
+        prompt = pm.render(
+            "layer1_scan_buckets",
+            {
+                "constraints": preferences.render_constraints(),
+                "bucket_plan": _render_bucket_plan(plan),
+                "max_pages": str(max_pages),
+                "max_filter_clicks": str(max_filter_clicks),
+                "candidates_per_bucket": str(candidates_per_bucket),
+                "site_brief": preferences.render_site_brief(tracker, site_name),
+            },
+        )
+        agent = agent_runtime.build_agent(tools_for_agent, prompt)
+        try:
+            result = await agent_runtime.run_agent(
                 agent, f"入口页面：{state['search_url']}\n请开始。",
-                on_step=agent_step_sink(logger, "find_jobs"))
+                on_step=agent_step_sink(logger, "scan_buckets"))
             truncated = agent_runtime.hit_step_limit(result)
             if truncated:
-                # `create_react_agent` 步数耗尽时不抛异常、只塞一句固定文案就返回，
-                # 所以下面那个 except 分支其实从没走到过（见 agent_runtime 的说明）。
-                # **写进 state**，不只是 print：traced_stage 会把它翻译成 partial
-                # 状态，否则"扫完了"和"扫到一半断了"在日志和前端里完全一样。
-                safe_print(f"[layer1] ⚠ 选岗未跑完就耗尽步数，只采用已记录的 {len(sink)} 个岗位。"
-                           f"名额没满的类别可能只是没扫到，不代表站上没有。", flush=True)
+                safe_print(f"[layer1] ⚠ 扫桶未跑完就耗尽步数，只采用已记录的 {len(raw_sink)} 个岗位。",
+                           flush=True)
         except GraphRecursionError:
-            # 理论上到不了这儿（LangGraph 走的是 remaining_steps 软着陆），保留是因为
-            # 万一它换了实现，超限**不该是全损**：已经 record 下来的岗位照样要带出去。
             truncated = True
-            safe_print(f"[layer1] 选岗 agent 达到步数上限，采用已记录的 {len(sink)} 个岗位。", flush=True)
-        # 不再按总数截断：配额已经在 record_job 里按类别拦过了，这里再截一刀只会
-        # 悄悄砍掉某一类刚记满的名额（截断按记录顺序，跟类别无关）。
-        # `truncated` 让 traced_stage 把这一段记成 partial 而不是 successful——
-        # "扫完了"和"扫到一半没步数了"必须能区分，否则「某类 0/N」会被读成
-        # "站上没有这类岗"，而真相是压根没扫到。
-        return {"found_jobs": list(sink), "truncated": truncated}
+            safe_print(f"[layer1] 扫桶 agent 达到步数上限，采用已记录的 {len(raw_sink)} 个岗位。",
+                       flush=True)
+
+        found_jobs = [
+            FoundJob(
+                url=j["url"],
+                title=(j.get("text") or "").strip()[:200],
+                category=j.get("category") or "",
+                bucket=j.get("bucket") or "",
+                why=j.get("why") or "",
+                jd=j.get("jd") or "",
+            )
+            for j in raw_sink
+        ]
+        return {"found_jobs": found_jobs, "truncated": truncated}
 
     async def write_pending_jobs(state: Layer1State) -> dict:
         """Checkpoint 1：把候选岗位落库，然后**结束这次 run**。
@@ -1343,10 +1607,16 @@ def _make_nodes(
     return {
         "ensure_ready": (ensure_ready,
                          lambda out: _describe_page(out.get("snapshot_text") or "")),
-        "find_jobs": (find_jobs,
-                     lambda out: {"found": len(out.get("found_jobs") or []),
-                                  "by_category": dict(Counter(j.category for j in
-                                                              (out.get("found_jobs") or [])))}),
+        "survey_structure": (survey_structure,
+                             lambda out: {"job_url_source": getattr(out.get("manual"), "job_url_source", ""),
+                                          "row_split": getattr(out.get("manual"), "row_split", ""),
+                                          "dimensions": len(getattr(out.get("manual"), "dimensions", None) or [])}),
+        "plan_buckets": (plan_buckets,
+                        lambda out: {"buckets": len(out.get("bucket_plan") or [])}),
+        "scan_buckets": (scan_buckets,
+                        lambda out: {"found": len(out.get("found_jobs") or []),
+                                     "by_category": dict(Counter(j.category for j in
+                                                                 (out.get("found_jobs") or [])))}),
         "write_pending_jobs": (write_pending_jobs,
                                lambda out: {"new": len(out.get("pending_job_ids") or [])}),
         "open_application": (open_application,
@@ -1397,24 +1667,28 @@ def build_select_graph(
     quotas: Optional[dict] = None,
     max_pages: int = 8,
     max_filter_clicks: int = 4,
+    candidates_per_bucket: int = 15,
     logger=None,
 ):
-    """m1：入口页 → 选岗 → 落库 → 结束。**没有 open_application**，对外零副作用。
+    """m1：入口页 → 探结构 → 定桶计划 → 扫桶 → 落库 → 结束。**没有 open_application**，
+    对外零副作用。
 
     参数与旧版 `build_graph` 一致，去掉了 `select_only`——这张图本身就是那条
     select_only=True 的路径，不用再传布尔量去挑分支。
     """
     nodes, snapshot_provider = _make_nodes(
         tools, personal_info=personal_info, tracker=tracker, quotas=quotas,
-        max_pages=max_pages, max_filter_clicks=max_filter_clicks, logger=logger,
+        max_pages=max_pages, max_filter_clicks=max_filter_clicks,
+        candidates_per_bucket=candidates_per_bucket, logger=logger,
     )
     # 阶段名读**活的**模块全局 M1_STAGES（不是拷贝一份字面量）：_compile 里对着的
     # stage_names() 读的是导入时就定住的 _STAGES_BY_WORKFLOW 字典，只有这里也读
     # "活的" M1_STAGES，两者才可能真的对不上——drift 测试 monkeypatch M1_STAGES
     # 才有意义，不然 patch 了也没人读它。
     stages = _stages_for(nodes, M1_STAGES)
-    edges = [(START, "ensure_ready"), ("ensure_ready", "find_jobs"),
-             ("find_jobs", "write_pending_jobs"), ("write_pending_jobs", END)]
+    edges = [(START, "ensure_ready"), ("ensure_ready", "survey_structure"),
+             ("survey_structure", "plan_buckets"), ("plan_buckets", "scan_buckets"),
+             ("scan_buckets", "write_pending_jobs"), ("write_pending_jobs", END)]
     return _compile(stages, "m1", edges, logger, snapshot_provider)
 
 
@@ -1425,14 +1699,20 @@ def build_survey_graph(
     quotas: Optional[dict] = None,
     max_pages: int = 8,
     max_filter_clicks: int = 4,
+    candidates_per_bucket: int = 15,
     logger=None,
 ):
-    """m2：直接从调用方给定的岗位 URL 开表单。**没有 find_jobs / write_pending_jobs**
-    ——m2 拿到的是已经批准过的那一个岗位，不需要再选一遍。
+    """m2：直接从调用方给定的岗位 URL 开表单。**没有 m1 那五站里除 ensure_ready
+    之外的任何一站**——m2 拿到的是已经批准过的那一个岗位，不需要再探结构/定桶/选。
+
+    `candidates_per_bucket` 在这张图里不生效（m2 没有 `scan_buckets` 节点），
+    留着只是为了跟 `build_select_graph` 签名对称——两个 builder 共用同一个
+    `_make_nodes`，参数表历来是对称的（`max_filter_clicks` 同理）。
     """
     nodes, snapshot_provider = _make_nodes(
         tools, personal_info=personal_info, tracker=tracker, quotas=quotas,
-        max_pages=max_pages, max_filter_clicks=max_filter_clicks, logger=logger,
+        max_pages=max_pages, max_filter_clicks=max_filter_clicks,
+        candidates_per_bucket=candidates_per_bucket, logger=logger,
     )
     stages = _stages_for(nodes, M2_STAGES)
     edges = [(START, "ensure_ready"), ("ensure_ready", "open_application"),
@@ -1453,6 +1733,7 @@ async def run_layer1(
     quotas: Optional[dict] = None,
     max_pages: int = 8,
     max_filter_clicks: int = 4,
+    candidates_per_bucket: int = 15,
     emitter=None,
     job_title: str = "",
     company: str = "",
@@ -1519,6 +1800,7 @@ async def run_layer1(
             app = builders[workflow](tools, tracker=tracker, quotas=quotas,
                                      max_pages=max_pages,
                                      max_filter_clicks=max_filter_clicks,
+                                     candidates_per_bucket=candidates_per_bucket,
                                      logger=run.logger)
             state = await app.ainvoke({
                 "job_url": job_url,
