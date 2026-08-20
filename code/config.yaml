@@ -68,3 +68,6 @@ m1:                           # 多站点选岗（Layer 1 Checkpoint 1；对外�
                               # 偏好由 profile.yaml 的 job_seeking 表达，agent 自己去页面上找筛选功能；
                               # 把筛选编进 URL 会静默过滤掉整类岗位，实测 87 条 vs 去掉后 134 条）
   max_pages: 8                # 每个分类桶最多翻几页
+  candidates_per_bucket: 15   # 每个桶最多抓多少份候选（成本旋钮：直接决定 scan_buckets 要点开多少个
+                              # 详情页，每个岗位约 8 秒。抓少了一屏没几条可审，抓多了一次 run
+                              # 拖成十几分钟）。跟 run_layer1 的默认值保持一致

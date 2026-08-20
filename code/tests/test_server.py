@@ -1512,6 +1512,38 @@ class TestCheckpoint1Review:
                            json={"is_golden": True}).status_code == 404
 
 
+class TestM1CandidatesPerBucketDefault:
+    """`candidates_per_bucket` 必须能存成 m1 的默认值。
+
+    **这条测试对着一种静默失败**：`POST /api/workflow/defaults` 只接受
+    `config.yaml[<workflow>]` 里**已经存在**的键
+    （`allowed = set(config.get(workflow).keys())`），别的键**无声丢掉、
+    仍然返回 200**。前端点了「设为默认」会显示成功、下次打开却是老值，
+    而且不会有任何报错。
+
+    同一个形状在 W2 接简历时踩过：参数逐个枚举传递，漏一处开关永远传不到、
+    没有任何提示。**新增一个运行参数，出厂 config.yaml 里必须同时有它。**
+    """
+
+    def test_it_is_in_the_factory_config(self):
+        """校验的是**仓库里的出厂 config.yaml**，不是测试沙箱那份最小配置——
+        沙箱写的是 `llm: {}`，用它做断言等于什么都没验。"""
+        import yaml
+        cfg = yaml.safe_load(
+            (Path(__file__).parent.parent / "config.yaml").read_text(encoding="utf-8"))
+        assert "candidates_per_bucket" in (cfg.get("m1") or {}), \
+            "config.yaml 的 m1 节缺 candidates_per_bucket，设为默认会被静默丢弃"
+
+    def test_saving_it_actually_persists(self, client):
+        """端点这一侧：键在 config 里时，保存必须真的落下去。"""
+        app.state.config["m1"] = {"candidates_per_bucket": 15}
+        r = client.post("/api/workflow/defaults",
+                        json={"workflow": "m1", "updates": {"candidates_per_bucket": 5}})
+        assert r.status_code == 200
+        assert r.json()["m1"]["candidates_per_bucket"] == 5, \
+            "端点返回 200 但值没落下——正是那种静默丢弃"
+
+
 class TestCheckpoint1SiteManual:
     """站点操作手册要跟着站点信息一起返回，`important_notes` 尤其不能只存不看。
 

@@ -33,6 +33,11 @@ export default function WorkflowPanel() {
   const [m1Site, setM1Site] = useState('')
   const [m1SearchUrl, setM1SearchUrl] = useState('')
   const [m1MaxPages, setM1MaxPages] = useState(8)
+  // 每个桶抓多少份候选。**成本旋钮**：候选数直接决定 scan_buckets 要点开多少个
+  // 详情页，每个岗位大约 8 秒。抓少了一屏没几条可审，抓多了一次 run 拖成十几分钟——
+  // 合适的值跟站点和当时想干什么有关（先摸形状 vs 攒一批来审），没有放之四海皆准的
+  // 默认值。15 跟后端 run_layer1 的默认值一致。
+  const [m1Candidates, setM1Candidates] = useState(15)
   // 参数按 workflow 分页，但 state 全部留在这一层——切 tab 因此**天然**保住正在
   // 编辑的值（把它们下放进各 tab 子组件才会丢，而那种丢法没人会当成 bug）。
   const [tab, setTab] = useState<DefaultableWorkflow>('w1')
@@ -47,6 +52,7 @@ export default function WorkflowPanel() {
         if (m1?.site != null) setM1Site(String(m1.site))
         if (m1?.search_url != null) setM1SearchUrl(String(m1.search_url))
         if (m1?.max_pages != null) setM1MaxPages(Number(m1.max_pages))
+        if (m1?.candidates_per_bucket != null) setM1Candidates(Number(m1.candidates_per_bucket))
         if (w1?.score_threshold != null) setScoreThreshold(Number(w1.score_threshold))
         if (w1?.max_cards != null) setApplyLimit(Number(w1.max_cards))
         if (w1?.dry_run != null) setDryRun(Boolean(w1.dry_run))
@@ -65,7 +71,12 @@ export default function WorkflowPanel() {
         wf === 'w1'
           ? { score_threshold: scoreThreshold, max_cards: applyLimit, dry_run: dryRun, headless }
           : wf === 'm1'
-            ? { site: m1Site.trim(), search_url: m1SearchUrl.trim(), max_pages: m1MaxPages }
+            ? {
+                site: m1Site.trim(),
+                search_url: m1SearchUrl.trim(),
+                max_pages: m1MaxPages,
+                candidates_per_bucket: m1Candidates,
+              }
             : { max_conversations: maxConversations, no_response_days: days, headless }
       await API.saveWorkflowDefault(wf, updates)
       setSavedDefault(wf)
@@ -193,6 +204,7 @@ export default function WorkflowPanel() {
         site: m1Site.trim(),
         search_url: m1SearchUrl.trim(),
         max_pages: m1MaxPages,
+        candidates_per_bucket: m1Candidates,
         headless,
       })) as { status?: string }
       flashInfo(res?.status === 'started' ? '\u5df2\u5f00\u59cb\u9009\u5c97' : '\u5df2\u6392\u5165\u961f\u5217')
@@ -389,6 +401,13 @@ export default function WorkflowPanel() {
               placeholder="https://xxx.jobs.feishu.cn/campus/"
             />
             <FieldNum label="max_pages" value={m1MaxPages} onChange={setM1MaxPages} min={1} max={30} />
+            <FieldNum
+              label="candidates_per_bucket"
+              value={m1Candidates}
+              onChange={setM1Candidates}
+              min={1}
+              max={50}
+            />
             <p className="text-xs text-text-3">{'\u5165\u53e3\u9875\u586b\u62db\u8058\u9996\u9875\uff0c\u522b\u5e26\u7b5b\u9009\u53c2\u6570\u2014\u2014\u7b5b\u9009\u6761\u4ef6\u7531 profile \u7684\u6c42\u804c\u504f\u597d\u8868\u8fbe\uff0cagent \u81ea\u5df1\u53bb\u9875\u9762\u4e0a\u627e'}</p>
             {m1Issues.warning && (
               <p className="rounded-lg bg-signal-amber/10 px-3 py-2 text-xs text-signal-amber">{m1Issues.warning}</p>
