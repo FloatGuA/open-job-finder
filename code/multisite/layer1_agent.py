@@ -1185,10 +1185,20 @@ def _make_nodes(
     max_filter_clicks: int = 4,
     candidates_per_bucket: int = 15,
     logger=None,
+    workflow: str = "m2",
 ) -> tuple:
     """节点工厂：Layer 1 的八个阶段函数只在这里定义一份。`build_select_graph` /
     `build_survey_graph` 从返回的字典里各取自己需要的子集组装图——**拆的是接线，
     不是实现**：一张图要连哪些节点变了，不代表节点本身的行为该抄两份。
+
+    `workflow`：`"m1"` 还是 `"m2"`，只被 `ensure_ready` 用来决定"检测到未登录该
+    不该等"（见该函数 docstring）。**必须由调用方显式传入**——`build_select_graph`
+    传 `"m1"`，`build_survey_graph` 传 `"m2"`；`ensure_ready` 内部绝不用 state 里
+    的字段（比如有没有 `job_url`）反推自己在哪张图里，这个项目吃过"幽灵分支"的
+    亏（同一节点靠隐式信号在两张图里表现不同，最后没人说得清它到底跑哪条路）。
+    默认值 `"m2"` 只是为了不逼着每个不关心登录门禁的测试/调用点都显式传一遍
+    （历史上就没有这个参数，行为等价于现在的 m2）——两个真正的图构造函数仍然
+    各自显式传自己的 workflow，不依赖这个默认值。
 
     tools 来自 chrome_mcp_client.get_tools()，通过闭包绑定进各节点——不放进
     state（不是可序列化/可 checkpoint 的东西）。外层是确定性编排，`survey_structure` /
@@ -1244,6 +1254,15 @@ def _make_nodes(
         **刻意留在代码里而不是交给 agent**：这两件事都不是判断题，是等待循环。
         交给 agent 只会让它在一张空白页/登录页上反复截图、烧上下文，最后报一个
         含糊的失败——而且它没有"等 10 分钟"这种耐心（recursion_limit 会先到）。
+
+        **登录门禁只对 m2 生效，m1 检测到未登录不等、直接往下走**（2026-08-21
+        真机事故：join.qq.com 不登录也能看到全部岗位——同一页面的快照，已登录
+        6613 字符、未登录 6678 字符，940 个岗位一个不少；`_looks_logged_out` 只是
+        看页面文字里有没有"登录"，分不清"必须登录才能看内容"和"页眉有个登录按钮、
+        内容照看不误"，于是每次登录态过期，m1 都要白等 10 分钟才失败）。
+        取舍：m1 的产出只有 `pending_jobs`，对外零副作用；站点真把岗位藏起来的话，
+        `scan_buckets`/`write_pending_jobs` 会诚实地找不到岗位，不需要在入口再拦
+        一道。m2 会真的打开申请表、传简历，必须维持等待。
         """
         entry = state.get("job_url") or state["search_url"]
         navigate = chrome_mcp_client.get_tool(tools, "navigate_page")
@@ -1262,7 +1281,14 @@ def _make_nodes(
             _dump_debug_snapshot("page_still_blank_after_wait", snapshot)
             raise RuntimeError("页面加载后仍是空白（等待 10 秒未渲染），已存快照到 data/multisite_debug/")
 
-        if _looks_logged_out(snapshot):
+        if _looks_logged_out(snapshot) and workflow == "m1":
+            # 不等：见上面 docstring 的取舍论证。只记一条日志留痕——不是"警告"，
+            # 是给事后排查（"这个 run 为什么找到的岗位比预期少"）留一个可查的锚点。
+            print("检测到可能未登录，m1 不等待登录，按匿名浏览继续（若站点对匿名用户"
+                  "隐藏岗位/限制条数，后续步骤可能看不到）。")
+            if logger is not None:
+                logger.log("anonymous_browsing", scope={}, data={"url": entry})
+        elif _looks_logged_out(snapshot):
             # 轮询而不是阻塞在 input()：这个函数经常被别的进程（比如 Claude Code
             # 自己的 Bash 工具）拉起，那种场景下没有真实 stdin 可等用户敲回车。
             # 用户在弹出的 Chrome 窗口里手动登录（鼠标/键盘直接操作那个窗口，不
@@ -1693,6 +1719,7 @@ def build_select_graph(
         tools, personal_info=personal_info, tracker=tracker, quotas=quotas,
         max_pages=max_pages, max_filter_clicks=max_filter_clicks,
         candidates_per_bucket=candidates_per_bucket, logger=logger,
+        workflow="m1",
     )
     # 阶段名读**活的**模块全局 M1_STAGES（不是拷贝一份字面量）：_compile 里对着的
     # stage_names() 读的是导入时就定住的 _STAGES_BY_WORKFLOW 字典，只有这里也读
@@ -1726,6 +1753,7 @@ def build_survey_graph(
         tools, personal_info=personal_info, tracker=tracker, quotas=quotas,
         max_pages=max_pages, max_filter_clicks=max_filter_clicks,
         candidates_per_bucket=candidates_per_bucket, logger=logger,
+        workflow="m2",
     )
     stages = _stages_for(nodes, M2_STAGES)
     edges = [(START, "ensure_ready"), ("ensure_ready", "open_application"),

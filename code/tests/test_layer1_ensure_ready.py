@@ -58,10 +58,32 @@ def _tools(snapshots):
     ]
 
 
-def _ensure_ready(tools, logger):
+def _ensure_ready(tools, logger, workflow="m2"):
     nodes, _ = _make_nodes(tools, personal_info={}, tracker=FakeTracker(),
-                           quotas={}, logger=logger)
+                           quotas={}, logger=logger, workflow=workflow)
     return nodes["ensure_ready"][0]
+
+
+def _tools_single_snapshot(snapshot):
+    """`take_snapshot` 只允许被调用一次——第二次调用直接抛。用来证明 m1 分支
+    检测到未登录后**没有**再截一次图去判断登录态是否变化（m1 根本不等）。"""
+    calls = {"n": 0}
+
+    async def navigate_page(type: str, url: str):
+        return "ok"
+
+    async def take_snapshot():
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise AssertionError("m1 不该发起第二次截图（不该等待登录）")
+        return snapshot
+
+    return [
+        StructuredTool.from_function(coroutine=navigate_page, name="navigate_page",
+                                     description="navigate_page"),
+        StructuredTool.from_function(coroutine=take_snapshot, name="take_snapshot",
+                                     description="take_snapshot"),
+    ]
 
 
 def _run(c):
@@ -105,3 +127,44 @@ class TestEnsureReadyWaitsForManualLogin:
         ensure_ready = _ensure_ready(tools, logger=None)
         with pytest.raises(RuntimeError, match="超时"):
             _run(ensure_ready({"search_url": "https://example.com"}))
+
+
+class TestEnsureReadyM1DoesNotBlockOnLogin:
+    """m1（选岗）对外零副作用，站点真把岗位藏起来的话 scan_buckets/write_pending_jobs
+    会诚实地找不到岗位——不需要在入口再拦一道。等 10 分钟登录的代价只对 m2（会真的
+    填表/传简历）成立，m2 必须维持原有行为——见 TestEnsureReadyWaitsForManualLogin。
+    """
+
+    def test_does_not_wait_when_logged_out(self, monkeypatch):
+        _patch_sleep(monkeypatch)
+        tools = _tools_single_snapshot(LOGGED_OUT_SNAPSHOT)
+        ensure_ready = _ensure_ready(tools, logger=None, workflow="m1")
+        result = _run(ensure_ready({"search_url": "https://example.com"}))
+        assert result["snapshot_text"] == LOGGED_OUT_SNAPSHOT
+
+    def test_logs_anonymous_browsing(self, monkeypatch):
+        _patch_sleep(monkeypatch)
+        tools = _tools_single_snapshot(LOGGED_OUT_SNAPSHOT)
+        logger = FakeLogger()
+        ensure_ready = _ensure_ready(tools, logger=logger, workflow="m1")
+        _run(ensure_ready({"search_url": "https://example.com"}))
+
+        events = [c[0] for c in logger.calls]
+        assert "anonymous_browsing" in events
+        data = next(d for e, _, d in logger.calls if e == "anonymous_browsing")
+        assert data.get("url") == "https://example.com"
+
+    def test_survives_without_a_logger(self, monkeypatch):
+        _patch_sleep(monkeypatch)
+        tools = _tools_single_snapshot(LOGGED_OUT_SNAPSHOT)
+        ensure_ready = _ensure_ready(tools, logger=None, workflow="m1")
+        result = _run(ensure_ready({"search_url": "https://example.com"}))
+        assert result["snapshot_text"] == LOGGED_OUT_SNAPSHOT
+
+    def test_m2_still_waits_for_login(self, monkeypatch):
+        """回归闸：改 m1 的路径绝不能把 m2 的等待门禁一起拆了。"""
+        _patch_sleep(monkeypatch)
+        tools = _tools([LOGGED_OUT_SNAPSHOT, LOGGED_IN_SNAPSHOT])
+        ensure_ready = _ensure_ready(tools, logger=None, workflow="m2")
+        result = _run(ensure_ready({"search_url": "https://example.com"}))
+        assert result["snapshot_text"] == LOGGED_IN_SNAPSHOT
