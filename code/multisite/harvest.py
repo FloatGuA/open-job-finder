@@ -12,6 +12,23 @@
 from multisite.executors import job_url_offline, job_url_online, split_rows
 from multisite.site_manual import SiteManual
 
+# 详情页 a11y 快照全文可能有 75-120KB（真实列表页 fixture 是 8.5KB/10 行，详情页
+# 比列表行密得多）；`classify_jobs` 把一整页所有条目的 jd **拼进同一个 prompt**，
+# 撑爆 deepseek-chat 64k 上下文 → classify 抛 → 整页被丢弃（found=0，看起来像
+# "这个站没有岗位"，其实是自己的截断没做）。
+#
+# **必须在这里（harvest 边界）截，不能挪到 classify 里**：分类只是这份 jd 的一个
+# 消费方，`pending.append(...)` 之后同一个 jd 还会经 `sink.extend(classified)`
+# 落进 pending_jobs 表——如果只在 classify 的 prompt 拼接处截断，落库的 jd 依然
+# 是全文，库里会堆一堆帯 uid 属性的原始 a11y 标记，且换一个消费方（比如以后加的
+# eval/审批页）又得重新面对同一个撑爆问题。
+#
+# 2-3KB 是量级估计，不是精确调过的值：15 条候选 × 2KB ≈ 30KB，加上 prompt 里
+# quota_table/golden_examples/说明文字，仍然远低于 64k 上下文；截断点选在
+# "字符数"而不是"token 数"，因为这里没有现成的 tokenizer，字符数是可以不依赖
+# 任何库、立刻算出来的近似量。
+_JD_MAX_CHARS = 3000
+
 
 async def harvest_page(
     snapshot_text: str,
@@ -48,6 +65,7 @@ async def harvest_page(
                 url_failed += 1
                 continue
             url, jd = got
+            jd = jd[:_JD_MAX_CHARS]
         else:
             url = job_url_offline(row, snapshot_text, manual)
             if url is None:

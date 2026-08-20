@@ -42,15 +42,15 @@ def _tools(fail_uids=()):
     async def list_pages():
         return state["pages"]
 
-    async def select_page(pageIdx: int):
-        calls.append(("select_page", pageIdx))
+    async def select_page(pageId: int):
+        calls.append(("select_page", pageId))
         return "ok"
 
     async def take_snapshot():
         return f"## Latest page snapshot\nJD-{state['n']}"
 
-    async def close_page(pageIdx: int):
-        calls.append(("close_page", pageIdx))
+    async def close_page(pageId: int):
+        calls.append(("close_page", pageId))
         state["pages"] = "## Pages\n0: list (https://x/list) [selected]\n"
         return "closed"
 
@@ -160,3 +160,53 @@ class TestHarvestPage:
                                 bucket="技术", classify=_classify_all, sink=sink,
                                 known_urls=set(), limit=100))
         assert out["rows"] == 0 and out["collected"] == 0
+
+
+class TestHarvestPageTruncatesOversizedJd:
+    """真实详情页 a11y 快照全文可能有 75-120KB；`classify_jobs` 把一页所有条目的
+    jd 拼进同一个 prompt，撑爆 deepseek-chat 64k 上下文 → classify 抛 → 整页被
+    丢弃（found=0）。必须在 harvest 边界截断，不能留到 classify 才截——那样落库
+    的 jd 依然是全文。"""
+
+    def _tools_with_long_jd(self, jd_len: int):
+        state = {"n": 0, "pages": "## Pages\n0: list (https://x/list) [selected]\n"}
+
+        async def click(uid: str):
+            state["n"] += 1
+            state["pages"] = ("## Pages\n0: list (https://x/list) [selected]\n"
+                              f"1: detail (https://x/job/{state['n']})\n")
+            return "Successfully clicked on the element"
+
+        async def list_pages():
+            return state["pages"]
+
+        async def select_page(pageId: int):
+            return "ok"
+
+        async def take_snapshot():
+            return "JD" * jd_len  # 远超任何合理截断上限的超长详情页快照
+
+        async def close_page(pageId: int):
+            state["pages"] = "## Pages\n0: list (https://x/list) [selected]\n"
+            return "closed"
+
+        fns = ((click, "click"), (list_pages, "list_pages"), (select_page, "select_page"),
+               (take_snapshot, "take_snapshot"), (close_page, "close_page"))
+        return [StructuredTool.from_function(coroutine=f, name=n, description=n) for f, n in fns]
+
+    def test_jd_over_the_cap_is_truncated(self):
+        from multisite.harvest import _JD_MAX_CHARS
+
+        tools = self._tools_with_long_jd(jd_len=50_000)
+        sink = []
+        _run(harvest_page(SNAPSHOT, tools, _manual(), bucket="技术",
+                          classify=_classify_all, sink=sink, known_urls=set(), limit=1))
+        assert len(sink) == 1
+        assert len(sink[0]["jd"]) == _JD_MAX_CHARS
+
+    def test_jd_under_the_cap_is_left_untouched(self):
+        tools = self._tools_with_long_jd(jd_len=10)  # "JD" * 10 = 20 字符，远低于上限
+        sink = []
+        _run(harvest_page(SNAPSHOT, tools, _manual(), bucket="技术",
+                          classify=_classify_all, sink=sink, known_urls=set(), limit=1))
+        assert sink[0]["jd"] == "JD" * 10
