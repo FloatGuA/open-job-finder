@@ -290,8 +290,16 @@ async def job_url_online(row: JobRow, tools, manual: SiteManual) -> tuple[str, s
             f"出错而非真的没有页面）。原始返回：{before_raw!r}")
     before_indices = {idx for idx, _, _ in before}
     # 点击前处于 [selected] 的那一页——即使索引集合判定出于某种原因失灵，也不能把
-    # 点击前的当前页误判成"新开的"。
+    # 点击前的当前页误判成"新开的"；同时也是关掉详情页之后要重选回去的那一页
+    # （见下方 close_page 之后的注释）。
     selected_before = {idx for idx, _, is_selected in before if is_selected}
+    if not selected_before:
+        # `before` 非空不代表一定有页处于 [selected]（理论上不该发生：本函数唯一
+        # 的调用方是 harvest 循环，每次调用结束都会重选回列表页，见下方）。没有
+        # selected 页就无法知道关闭详情页之后该重选哪一页，fail fast。
+        raise RuntimeError(
+            "list_pages 在点击前没有任何页面处于 [selected] 状态，不知道关闭详情页"
+            f"之后该重选哪一页。原始返回：{before_raw!r}")
 
     await get_tool(tools, "click").ainvoke({"uid": row.anchor_uid})
     after = _parse_pages(_flat(await get_tool(tools, "list_pages").ainvoke({})))
@@ -315,6 +323,21 @@ async def job_url_online(row: JobRow, tools, manual: SiteManual) -> tuple[str, s
     await get_tool(tools, "select_page").ainvoke({"pageId": idx})
     detail = _flat(await get_tool(tools, "take_snapshot").ainvoke({}))
     await get_tool(tools, "close_page").ainvoke({"pageId": idx})
+    # **必须显式重选回列表页**——真机观察到的行为（2026-08-20 run
+    # `m1_20260820_1620.jsonl`）：chrome-devtools-mcp 关闭「当前选中」的那一页后
+    # 不会自动重选任何页，`list_pages` 会持续返回
+    # "The selected page has been closed. Call list_pages to see open pages."
+    # 直到显式 select_page。（此前一次代码评审读 MCP 源码得出"`McpContext.
+    # createPagesSnapshot` 会自动重选 pages[0]，因此不重选是安全的"的结论——
+    # 真机行为推翻了它，以真机为准。）不重选的话，harvest 循环下一次取岗位时，
+    # 开头那次 `list_pages`（判据①）就会拿到错误字符串，触发上面的 fail-fast
+    # 守卫，整个 `scan_buckets` 阶段失败。
+    # 重选点击前处于 [selected] 的那一页（`selected_before`），**不硬编码某个
+    # pageId**——这个函数已经因为"对页面顺序/内容做假设"进过一次修复轮（用 URL
+    # 集合判定"新开的页"曾把列表页误判成新开的，见上面 docstring），页号本身
+    # 不可假设。
+    list_page_idx = next(iter(selected_before))
+    await get_tool(tools, "select_page").ainvoke({"pageId": list_page_idx})
     return url, detail
 
 
