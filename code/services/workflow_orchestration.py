@@ -185,6 +185,11 @@ class OrchestrationService:
             tracker=self._st.tracker,
             quotas=categories,
             max_pages=int(overrides.get("max_pages") or 8),
+            # 每个桶最多抓多少份候选（spec §4 的成本闸：每份候选 ≈ 一次详情页往返 ≈8 秒）。
+            # 不给就用 run_layer1 的默认值——**不在这里写死一个数**，否则同一个默认值
+            # 会有两处来源，改一处漏一处。
+            **({"candidates_per_bucket": int(overrides["candidates_per_bucket"])}
+               if overrides.get("candidates_per_bucket") else {}),
             emitter=getattr(self._st, "emitter", None),
             workflow="m1",
         ))
