@@ -57,6 +57,37 @@ class TestLinkInRow:
             assert url != "https://join.qq.com/about.html"
 
 
+class TestLinkInRowContainerPerRow:
+    """容器模式下行本身就是那个 link 节点：`row.anchor_uid` 直接就是要取 url 的节点，
+    不走 anchor_text 那套"窗口内搜索"（窗口算法是为"锚点只是行内一个节点、标题在
+    别处"的场景设计的，容器模式下没有别处）。"""
+
+    CONTAINER_SNAPSHOT = (
+        '## Latest page snapshot\n'
+        'uid=6_0 RootWebArea "x" url="https://example.com/"\n'
+        '  uid=6_1 link "导航" url="https://example.com/nav"\n'
+        '  uid=6_2 link "岗位A 上海" url="https://example.com/position/111/detail"\n'
+        '  uid=6_3 link "岗位B 深圳" url="https://example.com/position/222/detail"\n'
+    )
+
+    def _manual(self, **over):
+        d = {"job_url_source": "link_in_row", "url_template": "", "pagination": "none",
+             "filter_interaction": "direct_click", "filters_survive_reload": False,
+             "total_count_locator": "", "row_split": "container_per_row",
+             "row_anchor": "/position/", "dimensions": [], "important_notes": ""}
+        d.update(over)
+        return SiteManual.from_dict(d)
+
+    def test_reads_the_row_s_own_url_not_another_row_s(self):
+        row = JobRow(anchor_uid="6_3", text="岗位B 深圳")
+        url = job_url_offline(row, self.CONTAINER_SNAPSHOT, self._manual())
+        assert url == "https://example.com/position/222/detail"
+
+    def test_a_uid_with_no_matching_node_returns_none(self):
+        row = JobRow(anchor_uid="6_999", text="不存在")
+        assert job_url_offline(row, self.CONTAINER_SNAPSHOT, self._manual()) is None
+
+
 class TestIdTemplate:
     def test_fills_the_template_with_the_id_found_in_the_row(self):
         row = JobRow(anchor_uid="1_6", text="后端开发工程师 编号 98765 地点")

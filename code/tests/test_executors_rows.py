@@ -10,8 +10,8 @@
 """
 from pathlib import Path
 
-from multisite.executors import split_rows
-from multisite.site_manual import SiteManual, IMPLEMENTED_ROW_SPLITS
+from multisite.executors import job_url_offline, split_rows
+from multisite.site_manual import SiteManual
 
 SNAPSHOT = (Path(__file__).parent / "fixtures" / "joinqq_post_list.txt").read_text(encoding="utf-8")
 
@@ -83,21 +83,54 @@ class TestExactlyOneAnchor:
         assert "深圳" in rows[0].text
 
 
-class TestContainerPerRowIsNotImplementedYet:
-    def test_it_raises_instead_of_silently_returning_nothing(self):
-        """还没有哪个真实站点需要它。`from_dict` 现在已经把 `container_per_row` 挡在
-        构造边界之外（见 test_site_manual.py
-        `TestAnchorTextRequiresAnAnchor::test_container_per_row_is_rejected_as_unimplemented`），
-        所以这里绕过 `from_dict`、直接用 dataclass 构造函数，只测 `split_rows` 自己那道
-        兜底还在——万一将来别的路径绕开 `from_dict` 送进来这个值，也不能悄悄返回空列表。
-        **抛，不要返回空列表**——返回空等于谎报"这一页没有岗位"，是本项目反复吃亏的
-        那类假信号。"""
-        import pytest
-        assert "container_per_row" not in IMPLEMENTED_ROW_SPLITS, \
-            "这条测试的前提是 container_per_row 还没有执行器；一旦实现了，这条测试连同" \
-            "本类都该删掉，改为像 anchor_text 一样走 from_dict 的正常路径测试"
-        manual = SiteManual(job_url_source="new_tab_on_click", pagination="next_button",
-                            filter_interaction="expand_group_then_click",
-                            row_split="container_per_row", row_anchor="")
-        with pytest.raises(NotImplementedError, match="container_per_row"):
-            split_rows(SNAPSHOT, manual)
+BAMBULAB_SNAPSHOT = (Path(__file__).parent / "fixtures" / "bambulab_job_list.txt").read_text(encoding="utf-8")
+
+# bambulab 真机快照里的 15 个 link uid：10 个岗位 + 5 个导航（"职位"/"产品官网"/
+# "招聘官网首页"/"社会招聘"/"校招FAQ"）。导航链接的 url 不含 "/position/"。
+BAMBULAB_NAV_UIDS = {"6_1", "6_3", "6_5", "6_7", "6_9"}
+BAMBULAB_JOB_UIDS = {"6_53", "6_60", "6_67", "6_73", "6_80", "6_87", "6_94", "6_101", "6_108", "6_115"}
+
+
+def _container_manual(**over) -> SiteManual:
+    d = {"job_url_source": "link_in_row", "pagination": "next_button",
+         "filter_interaction": "direct_click", "row_split": "container_per_row",
+         "row_anchor": "/position/", "total_count_locator": ""}
+    d.update(over)
+    return SiteManual.from_dict({**d, "url_template": "", "filters_survive_reload": False,
+                                 "dimensions": [], "important_notes": ""})
+
+
+class TestContainerPerRow:
+    """bambulab：每个岗位就是一个 `link` 节点，没有 join.qq.com 那种"必现且仅现一次
+    的锚点文本"可用——但 url 里带 `/position/` 的 link 才是岗位，导航链接（"职位"/
+    "产品官网"…）的 url 不带。`row_anchor` 在这个模式下复用为"容器节点 url 必须包含
+    的片段"，见 site_manual.py 的字段注释。"""
+
+    def test_finds_every_job_row(self):
+        # 真机这一页 15 个 link，其中 10 个是岗位，5 个是导航。
+        assert len(split_rows(BAMBULAB_SNAPSHOT, _container_manual())) == 10
+
+    def test_nav_links_are_excluded(self):
+        rows = split_rows(BAMBULAB_SNAPSHOT, _container_manual())
+        uids = {r.anchor_uid for r in rows}
+        assert uids == BAMBULAB_JOB_UIDS
+        assert uids.isdisjoint(BAMBULAB_NAV_UIDS)
+
+    def test_row_text_contains_the_job_title(self):
+        rows = split_rows(BAMBULAB_SNAPSHOT, _container_manual())
+        by_uid = {r.anchor_uid: r for r in rows}
+        assert "AI Agent算法工程师" in by_uid["6_53"].text
+        assert "海外市场公关" in by_uid["6_60"].text
+
+    def test_each_row_has_its_own_distinct_url(self):
+        """容器模式下行本身就是那个 link——`job_url_offline` 的 `link_in_row` 分支
+        必须直接按 `row.anchor_uid` 取这一行自己的 url，不是复用 anchor_text 的窗口
+        搜索（那套窗口算法是给"锚点在行内、行是好几个节点"的场景设计的，这里行
+        本身只有一个节点）。"""
+        manual = _container_manual()
+        rows = split_rows(BAMBULAB_SNAPSHOT, manual)
+        urls = {row.anchor_uid: job_url_offline(row, BAMBULAB_SNAPSHOT, manual) for row in rows}
+        assert all(u is not None and u.startswith("http") for u in urls.values())
+        assert len(set(urls.values())) == 10, "10 行应该拿到 10 个不同的 url，不是重复同一个"
+        assert urls["6_53"].endswith("/7675998559749048626/detail")
+        assert urls["6_60"].endswith("/7674908422903941412/detail")

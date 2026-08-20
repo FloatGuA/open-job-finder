@@ -99,16 +99,42 @@ def _anchor_row_windows(
     return nodes, windows
 
 
+_URL_ATTR_RE = re.compile(r'url="([^"]*)"')
+
+
+def _split_rows_container_per_row(snapshot_text: str, manual: SiteManual) -> list[JobRow]:
+    """bambulab 这类站：每个岗位就是**一个 link 节点**，标题/地点/部门/JD 全部拼在
+    它的 accessible name 里，没有 join.qq.com 那种"必现且仅现一次的锚点文本"可用
+    （岗位卡片没有容器包裹，行文本各不相同，anchor_text 无从下手）。
+
+    **怎么认出"哪些 link 是岗位卡片"**：bambulab 真机快照里同一页有 15 个 link，
+    10 个岗位 + 5 个导航（"职位"/"产品官网"/"招聘官网首页"/"社会招聘"/"校招FAQ"）。
+    唯一稳定区分二者的信号是 **url**——岗位详情页 url 都带 `/position/`，导航链接
+    不带。标题、role、缩进层级三者在这个站的快照里岗位和导航完全一样，唯独 url
+    不同，所以取 `manual.row_anchor` 当"url 必须包含的子串"，而不是复用
+    anchor_text 那种"节点 name 精确匹配"。
+
+    这里**不限定 role**（没有硬编码检查 `role == "link"`）：判据是"这一行有没有
+    `url="..."` 属性、且这个 url 包含 row_anchor"，天然只命中带 url 的节点。
+    真实数据只见过这一种"容器＝link"的形状；如果将来出现"容器是别的 role 但
+    也带 url"的站，这条判据仍然成立，不需要改。若某站的容器根本没有 url 属性
+    （标题和链接分离到两个子节点），那是另一种几何，需要新的 row_split 执行器，
+    不是往这里加分支。"""
+    rows = []
+    for n in _matched_nodes(snapshot_text):
+        m = _URL_ATTR_RE.search(n.line)
+        if m and manual.row_anchor in m.group(1):
+            rows.append(JobRow(anchor_uid=n.uid, text=n.name))
+    return rows
+
+
 def split_rows(snapshot_text: str, manual: SiteManual) -> list[JobRow]:
     """把平铺的快照切成一行一个岗位。`anchor_text` 的窗口算法（等距回切 + `+2`）
     绑定了两条站点几何假设，写在 `_anchor_row_windows` 的注释里——不成立的站需要新的
-    row_split 执行器，不是调那两个数字。"""
+    row_split 执行器，不是调那两个数字。`container_per_row` 见
+    `_split_rows_container_per_row`。"""
     if manual.row_split == "container_per_row":
-        raise NotImplementedError(
-            "container_per_row 执行器还没实现——还没有真实站点需要它。"
-            "需要时在这里补一个，不要退化成返回空列表：返回空等于谎报「这一页没有岗位」。"
-            "实现后记得把 'container_per_row' 加进 site_manual.IMPLEMENTED_ROW_SPLITS，"
-            "否则 from_dict 会一直挡在门口，这个分支永远走不到。")
+        return _split_rows_container_per_row(snapshot_text, manual)
 
     nodes, windows = _anchor_row_windows(snapshot_text, manual)
     rows = []
@@ -161,6 +187,20 @@ def job_url_offline(row: JobRow, snapshot_text: str, manual: SiteManual) -> str 
         raise ValueError("new_tab_on_click 要走 job_url_online()——它必须真的点一下浏览器")
 
     if manual.job_url_source == "link_in_row":
+        if manual.row_split == "container_per_row":
+            # 容器模式下**行本身就是那个 link 节点**：`row.anchor_uid` 就是要取
+            # url 的节点，不需要（也不能）走下面 anchor_text 的窗口搜索——窗口
+            # 算法是为"锚点只是行内众多节点之一、标题在窗口别处"设计的，容器模式
+            # 下没有"别处"，`_anchor_row_windows` 按 `manual.row_anchor == n.name`
+            # 找锚点位置也无从匹配（container_per_row 下 row_anchor 是 url 子串，
+            # 不是节点 name）。直接按 uid 定位这一行自己，取它自己的 url。
+            node = next((n for n in _matched_nodes(snapshot_text)
+                         if n.uid == row.anchor_uid), None)
+            if node is None:
+                return None
+            m = re.search(r'url="([^"]*)"', node.line)
+            return m.group(1) if m else None
+
         # 锚点所在行的**同一张卡片**里那个 link 节点，**限定在这一行的窗口内搜索**。
         #
         # **不能扫全文**：快照是平铺的，锚点之前几乎总有导航栏/页脚链接。真实 fixture

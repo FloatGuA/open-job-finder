@@ -51,17 +51,24 @@ class TestAnchorTextRequiresAnAnchor:
         with pytest.raises(ManualError, match="row_anchor"):
             SiteManual.from_dict(d)
 
-    def test_container_per_row_is_rejected_as_unimplemented(self):
-        """`container_per_row` 在闭集里（ROW_SPLITS），但没有对应的执行器
-        （`executors.split_rows` 一碰它就 `NotImplementedError`）。闭集的全部意义是
-        "过了 from_dict 就代表代码能执行它"——所以 from_dict 必须挡在这里，而不是让
-        计划 B 的 LLM 选中它之后运行中途才崩溃。这是设计变更：`container_per_row` 从
-        "接受"改成"拒绝并说明原因"。"""
+    def test_container_per_row_without_row_anchor_raises(self):
+        """`container_per_row` 现在有执行器了（bambulab 用它），但和 `anchor_text` 一样，
+        `row_anchor` 在这个模式下含义是"容器节点 url 必须包含的片段"——同样不能为空，
+        空值等于"什么都能匹配"或"什么都匹配不上"，两种都是不可执行的手册。"""
         d = _valid()
         d["row_split"] = "container_per_row"
         d["row_anchor"] = ""
-        with pytest.raises(ManualError, match="执行器"):
+        with pytest.raises(ManualError, match="row_anchor"):
             SiteManual.from_dict(d)
+
+    def test_container_per_row_with_row_anchor_is_accepted(self):
+        """`row_anchor` 在 container_per_row 下是 url 子串（如 bambulab 的
+        `/position/`），不是 anchor_text 那种"必现且仅现一次的文本"——但校验只看
+        非空，两种语义共用一个字段。"""
+        d = _valid()
+        d["row_split"] = "container_per_row"
+        d["row_anchor"] = "/position/"
+        assert SiteManual.from_dict(d).row_split == "container_per_row"
 
 
 class TestIdTemplateRequiresATemplate:

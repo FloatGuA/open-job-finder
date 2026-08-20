@@ -670,3 +670,39 @@
 - **连带**：`jd` 在 **harvest 边界**截断到 3000 字（不是在拼 prompt 时截）——
   截在后面的话 `pending_jobs.jd` 会存一堆带 uid 的原始标记，而且一页 15 条全文
   会撑爆 deepseek-chat 的 64k 上下文 → 整页丢弃 → found=0。
+
+## `container_per_row` 执行器：用 url 子串识别岗位容器，不硬编码 role
+
+- **日期 / 版本**：2026-08-20
+- **背景**：bambulab 真机跑 `survey_structure` 诚实报"还差 row_split"——这个站每个
+  岗位就是**一个 link 节点**（标题/地点/部门/JD 全拼在 accessible name 里），没有
+  join.qq.com 那种平铺 StaticText + "必现且仅现一次的锚点文本"可用，`anchor_text`
+  无从下手。`container_per_row` 当时在 `ROW_SPLITS` 里但没有执行器（见上一条决策），
+  这是它第一次被真实站点撞上，补执行器的时机到了。
+- **选了什么**：
+  1. **复用 `row_anchor` 字段**表示"容器节点 url 属性必须包含的子串"（bambulab 是
+     `/position/`），而不是新增一个字段。`anchor_text` 下它是"节点 name 精确匹配"，
+     两种含义不同但都要求非空，`from_dict` 校验合并处理。
+  2. **识别判据是"节点带 url 属性且 url 命中子串"**，不检查 `role == "link"`。
+     bambulab 同一页 15 个 link，10 个岗位 + 5 个导航（"职位"/"产品官网"/
+     "招聘官网首页"/"社会招聘"/"校招FAQ"），标题、role、缩进层级三者岗位和导航
+     完全一样，唯独 url 不同——岗位详情页带 `/position/`，导航链接不带。
+  3. `job_url_source=link_in_row` 配合这个 row_split 时，`job_url_offline` 直接按
+     `row.anchor_uid` 取该节点自己的 url，不复用 `anchor_text` 那套"窗口内搜索"
+     ——容器模式下行本身就是那个 link，没有"窗口"这个概念。
+- **否掉了什么，为什么**：
+  ①**否掉新增独立字段**（如 `row_container_url_contains`）——bambulab 是目前唯一的
+  真实样本，只有一个字段"必须非空、含义由 row_split 决定"比"两个字段、一个永远
+  留空"更省，且和 `anchor_text` 的先例一致（同一字段、不同 row_split 下含义不同）。
+  ②**否掉硬编码 `role == "link"` 过滤**——虽然 bambulab 唯一的真实样本里容器碰巧
+  都是 link，但判据本身（"带 url 属性 + url 命中子串"）已经天然只命中带 url 的
+  节点，不需要额外限定 role；限定了反而是给一个只有一个数据点的假设强行加边界。
+- **代价 / 已知不足**：如果将来某站的容器根本没有 url 属性（标题和链接分离到两个
+  子节点），这条判据完全用不上——那是另一种几何，需要新的 row_split 执行器，
+  不是往这里加分支。目前没有这样的真实站点，不提前设计。
+- **连带**：`test_site_manual.py::TestAnchorTextRequiresAnAnchor` 里原来"container_per_row
+  应该被 from_dict 拒绝"的测试（连同它的 docstring 已注明"实现后该删/改"）替换成
+  "接受非空 row_anchor、拒绝空 row_anchor"；`test_executors_rows.py` 里同理替换
+  `TestContainerPerRowIsNotImplementedYet`。fixture `bambulab_job_list.txt` 由脚本
+  从真机快照 `logs/runs/m1_20260820_1437/survey_structure_snapshot.txt` 生成（剔除
+  页面上一处已打码的电话号码行，其余原样保留——招聘列表页公开信息，扫描确认无 PII）。

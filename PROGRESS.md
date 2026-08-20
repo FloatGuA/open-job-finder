@@ -726,6 +726,12 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 
 ## 已完成
 
+- **`container_per_row` 执行器（bambulab 真机缺口补完）**（2026-08-20，无版本号变更，`code` 目录全量 `pytest -q` 退出码 0）
+  - 真机在 bambulab 上跑 `survey_structure` 诚实报"还差 row_split"——这个站每个岗位是**一个 link 节点**（没有 join.qq.com 那种平铺 StaticText + 锚点文本可用），`container_per_row` 此前在 `ROW_SPLITS` 里声明但没有执行器（`executors.split_rows` 一碰即 `NotImplementedError`）。补上执行器：识别判据是"节点带 `url` 属性且 url 包含 `row_anchor` 子串"（bambulab 用 `/position/` 把 10 个岗位 link 和 5 个导航 link 分开），复用 `row_anchor` 字段而非新增字段；`job_url_offline` 的 `link_in_row` 分支加了容器模式分支——行本身就是那个 link，直接按 `row.anchor_uid` 取自己的 url，不复用 `anchor_text` 的窗口搜索。`IMPLEMENTED_ROW_SPLITS` 加入 `container_per_row`。
+  - fixture `code/tests/fixtures/bambulab_job_list.txt` 由脚本从真机快照 `logs/runs/m1_20260820_1437/survey_structure_snapshot.txt` 生成（剔除一处已打码的电话号码行，其余原样保留，扫描确认无 PII），新增/改写测试覆盖切出 10 行（非 15，排除导航）、行文本含标题、每行拿到各自不同的 url。
+  - 决策与识别判据的取舍见 `DECISION.md`「`container_per_row` 执行器：用 url 子串识别岗位容器，不硬编码 role」；spec `docs/superpowers/specs/2026-08-19-m1-survey-plan-scan-design.md` §3.2/§3.7 同步更新；`PITFALLS.md`「闭集枚举里混进…」条追加说明该例已解决。
+  - **未做**：bambulab 端到端真机跑 `scan_buckets`/`harvest` 拿真实数据尚未验证——本次只补齐 `survey_structure` 报的这一个缺口，下次真机跑这个站时留意。
+
 - **Checkpoint 1 补简历可见性**（2026-08-20，commit `e650d3b`，未升版本号；后端 pytest 全量退出码 0，前端 89 passed + tsc 无错 + build 绿）
   - 「待跟进」① 的简历那一半：`GET /api/checkpoint1/jobs` 每个岗位加 `resume` 字段（`slug`/`name`/`matched`/`reason`/`pdf_state`），复用 `services/resume_matcher.pick_resume`（不新写匹配逻辑；`ResumeStore.list()`/`pdf_status()` 各调一次、循环内只调 `pick_resume`，避免按岗位数重复读 index）。前端 `CrossSiteApplications.tsx` 的 `JobRow` 新增简历行：简历名 + `matched=false` 时橙色"兜底"徽章 + `ResumePdfPill` 三态（ready 绿/stale 橙/missing 红，missing 故意比 `Resume.tsx` 管理页更显眼，因为这里直接决定 m2 会不会被闸门拒）；`slug` 为空时显示"没有可发的简历"而不是空白。
   - 后端新增 `TestCheckpoint1Resume`（6 例），含一条**防分叉守门测试**——断言端点结果与直接调 `pick_for_job` 一致；前端新增 4 个组件测试。

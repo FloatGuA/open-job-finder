@@ -715,8 +715,15 @@ await close_page(pageIdx=idx)
 
 ## 闭集枚举里混进「声明了但会炸」的取值，一定会被写进 prompt
 
-`row_split` 的闭集含 `container_per_row`，`from_dict` 接受它，但执行器一碰就
-`NotImplementedError`。
+**（2026-08-20 更新：下面举的 `container_per_row` 例子已经补上执行器、加进
+`IMPLEMENTED_ROW_SPLITS`——真机在 bambulab 上撞上了这个缺口，见 DECISION.md。
+这条 pitfall 记录的是当时的机制性教训，机制本身没变：`ROW_SPLITS`/
+`IMPLEMENTED_ROW_SPLITS` 分离这套防线还在，下一个还没执行器的 row_split
+取值撞上时同样适用。）**
+
+`row_split` 的闭集当时含 `container_per_row`，若 `from_dict` 直接接受它，执行器
+一碰就会 `NotImplementedError`（这正是引入 `IMPLEMENTED_ROW_SPLITS` 分离防线要挡住的
+那种情形）。
 
 **为什么危险**：让 LLM 填结构化字段时，prompt 几乎一定会把**枚举的全部取值**列给它挑。
 挑中未实现的那个 = 运行中途崩溃，而且绕开了「所有执行器都不匹配 → 诚实报搞不定」

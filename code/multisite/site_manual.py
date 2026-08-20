@@ -27,7 +27,7 @@ ROW_SPLITS = ("container_per_row", "anchor_text")
 # IMPLEMENTED_ROW_SPLITS 不允许的那部分值上面。**新实现一个 row_split 执行器时，
 # 记得同步把它加进这里**（另见 `executors.split_rows` 里 `container_per_row` 分支的
 # 注释，两处互相指向）。
-IMPLEMENTED_ROW_SPLITS = ("anchor_text",)
+IMPLEMENTED_ROW_SPLITS = ("anchor_text", "container_per_row")
 
 _ENUMS = {
     "job_url_source": JOB_URL_SOURCES,
@@ -46,6 +46,11 @@ class SiteManual:
     filters_survive_reload: bool = False
     url_template: str = ""
     total_count_locator: str = ""
+    # `row_anchor` 的含义由 `row_split` 决定，两种 row_split 各自要求它非空：
+    #   row_split=anchor_text        → 每个岗位行里必现且仅现一次的**文本**（节点 name）
+    #   row_split=container_per_row  → 岗位容器节点 **url 属性**必须包含的子串
+    #                                   （如 bambulab 的 "/position/"，用来把岗位
+    #                                   link 和导航 link 分开）
     row_anchor: str = ""
     dimensions: list = field(default_factory=list)
     important_notes: str = ""
@@ -61,8 +66,9 @@ class SiteManual:
                 f"row_split={d['row_split']!r} 还没有对应的执行器（已实现："
                 f"{IMPLEMENTED_ROW_SPLITS}）；遇到这种站请报搞不定，或先在 "
                 "executors.split_rows 里加一个执行器再放开这个取值")
-        if d["row_split"] == "anchor_text" and not (d.get("row_anchor") or "").strip():
-            raise ManualError("row_split=anchor_text 时 row_anchor 不能为空")
+        if d["row_split"] in ("anchor_text", "container_per_row") \
+                and not (d.get("row_anchor") or "").strip():
+            raise ManualError(f"row_split={d['row_split']!r} 时 row_anchor 不能为空")
         if d["job_url_source"] == "id_template":
             template = (d.get("url_template") or "").strip()
             if not template:

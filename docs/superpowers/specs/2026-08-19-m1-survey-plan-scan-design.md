@@ -100,8 +100,8 @@ write_pending_jobs  代码       落库（不变）
 | `filter_interaction` | `direct_click` / `expand_group_then_click` | 筛选选项要不要先展开分组 |
 | `filters_survive_reload` | bool | 重新导航能不能重置筛选（见 §7） |
 | `total_count_locator` | 字符串，可空 | 计数文本的**正则**，须含一个数字捕获组（如 `共(\d+)个岗位`）。空＝这个站没有计数，则 §3.3 的试探判定退化为「对比列表行数」，可靠性下降，手册需在 `notes` 里注明 |
-| `row_split` | `anchor_text`（已实现）/ `container_per_row`（**声明未实现**）| 列表怎么切成一行一行，见 §3.7。未实现的取值由 `from_dict` 拒绝——闭集的意义是「过了校验就代表代码能执行」，否则它会被写进 survey prompt、然后在运行中途崩溃，绕开 §7 那个「所有执行器都不匹配就诚实报搞不定」的出口 |
-| `row_anchor` | 字符串 | 仅 `anchor_text` 用：每个岗位行里必现且仅现一次的文本 |
+| `row_split` | `anchor_text`（已实现）/ `container_per_row`（**已实现，2026-08-20**）| 列表怎么切成一行一行，见 §3.7。未实现的取值由 `from_dict` 拒绝——闭集的意义是「过了校验就代表代码能执行」，否则它会被写进 survey prompt、然后在运行中途崩溃，绕开 §7 那个「所有执行器都不匹配就诚实报搞不定」的出口 |
+| `row_anchor` | 字符串 | 含义由 `row_split` 决定：`anchor_text` 用时是每个岗位行里必现且仅现一次的**文本**（节点 name）；`container_per_row` 用时是岗位容器节点 **url 属性**必须包含的子串（如 bambulab 的 `/position/`，见 §3.7） |
 | `dimensions` | 列表 | 每个筛选维度：`name` / `options[]` / `multi_select`(bool) |
 | `important_notes` | 自由文本 | **超出手册设计预期的一切**。留空是常态，见 §3.6 |
 
@@ -149,6 +149,30 @@ join.qq.com 上是 `工作地点：`，列表区里恰好出现 10 次，对应 
 
 避开的坑：列表区开头往往夹着推广文案（本站是「不确定适合哪个岗位？…」三条），
 按"第一个文本节点即标题"会直接抓错。
+
+#### `container_per_row`：容器本身就是那一行（2026-08-20 实现，bambulab 真机验证）
+
+**问题**：有的站反过来——每个岗位卡片**恰好是一个 link 节点**，没有平铺的
+`StaticText`，也没有可用的"必现且仅现一次的锚点文本"（bambulab 的岗位标题、
+地点、部门每行都不一样，`anchor_text` 无从下手）。
+
+**解法**：这个站同一页有 15 个 link，10 个是岗位、5 个是导航（"职位"/
+"产品官网"/"招聘官网首页"/"社会招聘"/"校招FAQ"）。标题、role、缩进层级三者
+岗位和导航长得一样，唯独 **url** 不同——岗位详情页 url 都带 `/position/`，
+导航链接不带。`row_anchor` 在这个模式下复用为"容器 url 必须包含的子串"：
+遍历所有带 `url="..."` 属性的节点，url 命中子串的就是一行，`JobRow.text`
+直接取该节点的 accessible name（标题+地点+部门+JD 全在里面，分类 LLM 本来
+就要整段读）。
+
+`job_url_source=link_in_row` 配合这个 row_split 时，**行本身就是那个 link**：
+`job_url_offline` 直接按 `row.anchor_uid` 取该节点自己的 url，不走 anchor_text
+那套"窗口内搜索"（那套窗口算法是为"锚点只是行内一个节点、标题在别处"设计的，
+容器模式下没有"别处"）。
+
+**没有硬编码 `role == "link"`**——判据只看"有没有 url 属性、且 url 命中子串"，
+天然只命中带 url 的节点。真实数据只见过"容器＝link"这一种形状；如果某站的
+容器根本没有 url 属性（标题和链接分离到两个子节点），那是另一种几何，需要
+新的 row_split 执行器，不是往这里加分支。
 
 
 ### 3.3 多选还是互斥，只能靠试探
