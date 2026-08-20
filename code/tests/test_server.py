@@ -1512,6 +1512,54 @@ class TestCheckpoint1Review:
                            json={"is_golden": True}).status_code == 404
 
 
+class TestCheckpoint1SiteManual:
+    """站点操作手册要跟着站点信息一起返回，`important_notes` 尤其不能只存不看。
+
+    **`important_notes` 是 agent 唯一的逃生舱**：手册的字段都是闭集，agent 遇到
+    设计没覆盖的情况时只能写进这里。它此前**写进库了但零消费方**——没有端点、
+    没有 UI，agent 每次填了都没人看得到，等于这个逃生舱通向一堵墙。
+    （同一种形状在最终评审里抓到过一次：`render_golden_examples` 零调用方，
+    人工标的 `is_golden` 教不到任何东西，而端点还在写它。）
+    """
+
+    def _manual(self, **over):
+        from multisite.site_manual import SiteManual
+        d = {"job_url_source": "link_in_row", "url_template": "", "pagination": "none",
+             "filter_interaction": "direct_click", "filters_survive_reload": False,
+             "total_count_locator": "", "row_split": "container_per_row",
+             "row_anchor": "Apply", "dimensions": [], "important_notes": ""}
+        d.update(over)
+        return SiteManual.from_dict(d)
+
+    def test_site_without_a_manual_says_none(self, client):
+        """没探过的站是 `None`，不是一份空手册——前端要能区分"还没探"和"探了但字段是空"。"""
+        _add_job()
+        info = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]
+        assert info["manual"] is None
+
+    def test_returns_the_recorded_manual(self, client):
+        _add_job()
+        app.state.tracker.upsert_site_manual("bambulab", self._manual())
+        info = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]
+        assert info["manual"]["row_split"] == "container_per_row"
+        assert info["manual"]["job_url_source"] == "link_in_row"
+
+    def test_important_notes_reach_the_client(self, client):
+        note = "筛选器要先展开分组才点得到，展开动作没有可见反馈"
+        _add_job()
+        app.state.tracker.upsert_site_manual("bambulab", self._manual(important_notes=note))
+        info = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]
+        assert info["manual"]["important_notes"] == note
+
+    def test_manual_carries_when_it_was_recorded(self, client):
+        """手册会过期（站点改版）。没有时间戳的话，人看到一份手册也判断不了它是
+        今天探的还是三个月前的。"""
+        _add_job()
+        app.state.tracker.upsert_site_manual("bambulab", self._manual())
+        info = client.get("/api/checkpoint1/jobs").json()["sites"]["bambulab"]
+        assert info["manual"]["updated_at"], "手册没带记录时间"
+
+
 class TestCheckpoint1Sites:
     """站点信息（投递上限 + 现场笔记）。
 

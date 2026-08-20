@@ -44,6 +44,7 @@ const SITES = {
     fill_pending: 0,
     limits: [],
     brief: null,
+    manual: null,
   },
 }
 

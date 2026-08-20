@@ -200,6 +200,24 @@ export interface SiteInfo {
   fill_pending: number
   limits: SiteLimitInfo[] // 可能有好几条（按招聘项目分），空数组 = 什么都没记到
   brief: SiteBriefInfo | null
+  // 站点操作手册（survey_structure 探出来的）。null = 还没探过，不是一份空手册。
+  manual: SiteManualInfo | null
+}
+
+export interface SiteManualInfo {
+  job_url_source: string
+  url_template: string
+  pagination: string
+  filter_interaction: string
+  filters_survive_reload: boolean
+  total_count_locator: string
+  row_split: string
+  row_anchor: string
+  dimensions: { name: string; options: string[]; multi_select: boolean }[]
+  // agent 唯一的逃生舱：手册字段都是闭集，遇到设计没覆盖的情况只能写进这里。
+  // 非空就是“系统该补一块了”的强提醒，不能只存不看。
+  important_notes: string
+  updated_at: string
 }
 
 // ── 信息池变更提案 ──

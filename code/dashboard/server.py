@@ -1849,6 +1849,13 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
             "fill_pending": len(_jobs_awaiting_fill(site)),
             "limits": [vars(l) for l in limits],
             "brief": vars(brief) if brief else None,
+            # 站点操作手册。**`important_notes` 是 agent 唯一的逃生舱**——手册字段
+            # 都是闭集，遇到设计没覆盖的情况只能写进这里，而它此前写进库了但零消费方
+            # （没有端点、没有 UI），等于这个逃生舱通向一堵墙。
+            # 带上 `updated_at`：手册会随站点改版过期，人看到一份手册得能判断它是
+            # 今天探的还是三个月前的。没探过的站是 None，不是一份空手册——"还没探"
+            # 和"探了但字段是空"是两件事。
+            "manual": _site_manual_payload(tracker, site),
         }
     return JSONResponse({
         "jobs": [{**vars(j), "resume": _resume_choice(j)} for j in items],
@@ -1856,6 +1863,15 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
         "categories": categories,
         "sites": site_info,
     })
+
+
+def _site_manual_payload(tracker, site_name: str) -> dict | None:
+    """站点手册 + 它是什么时候记的，没有就 None。"""
+    got = tracker.get_site_manual(site_name)
+    if not got:
+        return None
+    manual, updated_at = got
+    return {**manual.to_dict(), "updated_at": updated_at}
 
 
 def _jobs_awaiting_fill(site_name: str) -> list:

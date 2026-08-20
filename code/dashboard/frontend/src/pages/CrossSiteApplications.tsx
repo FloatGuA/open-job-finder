@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   API,
   type PendingApplication,
@@ -8,6 +8,7 @@ import {
   type PendingJob,
   type SiteInfo,
   type SiteLimitInfo,
+  type SiteManualInfo,
 } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
 
@@ -44,6 +45,9 @@ const T_C1_BATCH_REJECT = '\u9a73\u56de'
 const T_C1_CORRECTED = 'agent \u5f52\u4e3a'
 const T_C1_OPEN = '\u6253\u5f00\u5c97\u4f4d\u9875'
 const T_C1_JD = '\u5c97\u4f4d\u539f\u6587'
+const T_SITE_MANUAL = '\u7ad9\u70b9\u624b\u518c'
+const T_MANUAL_NOTE = '\u73b0\u573a\u53d1\u73b0'
+const T_MANUAL_SURVEYED = '\u63a2\u4e8e'
 const T_C1_UNIT = '\u4e2a'
 const T_C1_MAKE_GOLDEN = '\u786e\u8ba4\uff0c\u6559\u7ed9 agent'
 const T_C1_IS_GOLDEN = '\u5df2\u5f55\u5165\u6837\u4f8b\u5e93'
@@ -434,6 +438,8 @@ function SiteBar({
           )}
         </div>
       )}
+
+      {info?.manual && <SiteManualBlock manual={info.manual} />}
     </div>
   )
 }
@@ -441,6 +447,66 @@ function SiteBar({
 // \u4eba\u5de5\u586b\u5199\u4e0a\u9650\u3002agent \u62ff\u4e0d\u5230\u8fd9\u6761\u4fe1\u606f\u662f\u5e38\u6001\uff08\u5b83\u53ea\u80fd\u987a\u8def\u649e\u89c1\uff0c
 // \u800c\u987b\u77e5\u5e38\u5199\u5728\u7533\u8bf7\u9875\u4e0a\uff0c\u9009\u5c97\u9636\u6bb5\u6839\u672c\u4e0d\u4f1a\u53bb\u90a3\u91cc\uff09\u2014\u2014\u53ea\u505a\u5230\u201c\u4e0d\u649e\u8c0e\u201d\u4e0d\u591f\uff0c
 // \u4eba\u5f97\u80fd\u628a\u81ea\u5df1\u77e5\u9053\u7684\u586b\u8fdb\u53bb\u3002
+// 站点操作手册 + agent 的现场发现。
+//
+// important_notes 是 agent 唯一的逃生舱：手册字段全是闭集，遇到设计没覆盖的情况
+// 只能写进这里。所以它非空时**必须显眼**——那是"系统该补一块了"的信号，
+// 混在手册里折叠起来等于没有。手册本身反过来：默认折叠，平时没人需要看。
+function SiteManualBlock({ manual }: { manual: SiteManualInfo }) {
+  return (
+    <div className="px-4 pb-3">
+      {manual.important_notes && (
+        <div
+          className="mb-2 rounded-xl px-3 py-2 text-[12.5px] leading-relaxed"
+          style={{ background: 'rgba(255,159,10,0.14)', border: '1px solid rgba(255,159,10,0.35)', color: '#ff9f0a' }}
+        >
+          <span className="font-semibold">{T_MANUAL_NOTE}</span>
+          {'\uff1a'}
+          {manual.important_notes}
+        </div>
+      )}
+      <details>
+        <summary className="cursor-pointer select-none text-[12.5px] text-text-3 transition hover:text-text-1">
+          {T_SITE_MANUAL}
+          {'\uff08'}
+          {T_MANUAL_SURVEYED}
+          {' '}
+          {manual.updated_at.slice(0, 16).replace('T', ' ')}
+          {'\uff09'}
+        </summary>
+        <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12.5px] text-text-3">
+          {MANUAL_FIELDS.map(([key, label]) => (
+            <Fragment key={key}>
+              <dt>{label}</dt>
+              <dd className="font-mono text-text-2">{String(manual[key] ?? '') || '\u2014'}</dd>
+            </Fragment>
+          ))}
+          {manual.dimensions.length > 0 && (
+            <>
+              <dt>{T_MANUAL_DIMS}</dt>
+              <dd className="text-text-2">
+                {manual.dimensions
+                  .map((d) => `${d.name}(${d.options.length})`)
+                  .join('\u3001')}
+              </dd>
+            </>
+          )}
+        </dl>
+      </details>
+    </div>
+  )
+}
+
+// 手册里适合平铺展示的闭集字段。dimensions 是列表，单独渲染。
+const MANUAL_FIELDS: [keyof SiteManualInfo, string][] = [
+  ['job_url_source', '\u53d6 URL'],
+  ['row_split', '\u5207\u884c'],
+  ['pagination', '\u7ffb\u9875'],
+  ['filter_interaction', '\u7b5b\u9009\u5668'],
+  ['row_anchor', '\u884c\u951a\u70b9'],
+]
+const T_MANUAL_DIMS = '\u7b5b\u9009\u7ef4\u5ea6'
+
 function LimitEditor({ site, current, onDone }: { site: string; current: SiteLimitInfo | null; onDone: () => void }) {
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState(String(current?.max_applications ?? ''))
