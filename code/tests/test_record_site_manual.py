@@ -4,6 +4,7 @@
 轮次（预算 60，没耗尽），全程在做正事（用页面岗位计数验证筛选器多选/互斥：
 152 -> 60 -> 64），最后一条却是纯文本总结、零工具调用——`record_site_manual`
 当时要求 `job_url_source`/`pagination`/`filter_interaction`/`row_split` 四个
+（`filter_interaction` 已于 2026-08-21 删除，现在是三个）
 必填参数一次性齐全才能调用一次，agent 从没能凑齐去调用它。这是 PITFALLS
 「答案必须最后一次性给出」那条记的第三次同类事故，`record_job` 是第一次治好
 的样子——这组测试守的就是修复后的形状：参数全部可选、探到一点报一点、每次
@@ -33,7 +34,7 @@ class TestRecordSiteManualToolIsIncremental:
         # 不是"记录失败"——只报一部分是合法操作，不是错误。
         assert "完整" not in result
         assert "pagination" in result
-        assert "filter_interaction" in result
+        assert "row_split" in result
         assert "row_split" in result
         assert sink.get("manual") is None
         # 已经报的那部分确实落袋了，不是被丢弃。
@@ -60,7 +61,7 @@ class TestRecordSiteManualToolIsIncremental:
         assert isinstance(manual, SiteManual)
         assert manual.job_url_source == "link_in_row"
         assert manual.pagination == "next_button"
-        assert manual.filter_interaction == "direct_click"
+        assert manual.pagination == "next_button"
         assert manual.row_split == "anchor_text"
         assert manual.row_anchor == "工作地点："
 
@@ -166,7 +167,7 @@ class TestSurveyStructureNodeUsesAccumulatedFields:
         message = str(exc_info.value)
         # 不是笼统的"没调用工具"——要能看出具体还差哪几项。
         assert "pagination" in message
-        assert "filter_interaction" in message
+        assert "row_split" in message
         assert "row_split" in message
 
     def test_two_partial_calls_across_the_loop_still_produce_a_manual(self, monkeypatch):

@@ -460,7 +460,7 @@ async def validate_manual(snapshot_text: str, tools, manual: SiteManual) -> tupl
     """旧手册还成不成立。返回 `(过了没有, 人看得懂的原因)`。
 
     只验三条（spec §3.5），约 3–5 步，远低于全量重探。**任一条不过整份作废**——
-    不做部分沿用：手册字段之间有耦合（`filter_interaction` 变了往往意味着筛选区重写，
+    不做部分沿用：手册字段之间有耦合（`row_split` 变了往往意味着列表区重写，
     `dimensions` 也不可信），逐格判断"哪格还能用"的成本接近重探，而判错的产物是
     半对的手册，最难查。
 

@@ -17,7 +17,7 @@ def tracker(tmp_path):
 def _manual(anchor="工作地点：") -> SiteManual:
     return SiteManual.from_dict({
         "job_url_source": "new_tab_on_click", "url_template": "", "pagination": "next_button",
-        "filter_interaction": "expand_group_then_click", "filters_survive_reload": False,
+        "filters_survive_reload": False,
         "total_count_locator": r"共(\d+)个岗位", "row_split": "anchor_text",
         "row_anchor": anchor, "dimensions": [{"name": "工作城市", "options": ["深圳"],
                                               "multi_select": True}],

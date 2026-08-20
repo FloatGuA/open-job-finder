@@ -19,7 +19,6 @@ class ManualError(ValueError):
 
 JOB_URL_SOURCES = ("link_in_row", "new_tab_on_click", "id_template")
 PAGINATIONS = ("next_button", "url_param", "infinite_scroll", "none")
-FILTER_INTERACTIONS = ("direct_click", "expand_group_then_click")
 ROW_SPLITS = ("container_per_row", "anchor_text")
 
 # ROW_SPLITS 记录的是设计空间（手册字段"应该"能取的值），IMPLEMENTED_ROW_SPLITS 记录
@@ -29,10 +28,17 @@ ROW_SPLITS = ("container_per_row", "anchor_text")
 # 注释，两处互相指向）。
 IMPLEMENTED_ROW_SPLITS = ("anchor_text", "container_per_row")
 
+# 曾经有过 `filter_interaction`（direct_click / expand_group_then_click），2026-08-21 删除。
+# **它没有任何执行器消费方**——唯一的读者是扫桶 prompt 里那句"按它指定的方式点筛选器"，
+# 而 `executors.set_filter_option` 现在会在运行时给出永远正确的指引（"找不到→先展开分组"）。
+# 同一个决定有两套机制、其中一套还可能是错的，就是该删的那套。
+# 而且单值字段结构上表达不了混合形态：join.qq.com 的「应聘项目」直接可点、
+# 「工作城市」要展开两层——旧 prompt 教 agent"没报错就是 direct_click"，
+# 它测了直接可点的那个维度就把整站判错了。
+# **老手册里还带着这个 key，`from_dict` 显式构造、多余的 key 直接忽略，照样加载得动。**
 _ENUMS = {
     "job_url_source": JOB_URL_SOURCES,
     "pagination": PAGINATIONS,
-    "filter_interaction": FILTER_INTERACTIONS,
     "row_split": ROW_SPLITS,
 }
 
@@ -41,7 +47,6 @@ _ENUMS = {
 class SiteManual:
     job_url_source: str
     pagination: str
-    filter_interaction: str
     row_split: str
     filters_survive_reload: bool = False
     url_template: str = ""
@@ -113,7 +118,6 @@ class SiteManual:
         return cls(
             job_url_source=d["job_url_source"],
             pagination=d["pagination"],
-            filter_interaction=d["filter_interaction"],
             row_split=d["row_split"],
             filters_survive_reload=raw_reload,
             url_template=d.get("url_template", ""),
@@ -131,7 +135,6 @@ class SiteManual:
             "job_url_source": self.job_url_source,
             "url_template": self.url_template,
             "pagination": self.pagination,
-            "filter_interaction": self.filter_interaction,
             "filters_survive_reload": self.filters_survive_reload,
             "total_count_locator": self.total_count_locator,
             "row_split": self.row_split,

@@ -115,8 +115,7 @@ class TestUnknownJobUrlSourceRaises:
         """`from_dict` 的闭集校验让未知的 `job_url_source` 理论上不可达，但"不可达"
         是靠**另一个函数**保证的——直接构造 dataclass（本测试就是这么做的）能绕过它。
         `job_url_offline` 自己也要显式拒绝，不能隐式落进 `id_template` 分支。"""
-        manual = SiteManual(job_url_source="scrape_the_api", pagination="none",
-                            filter_interaction="direct_click", row_split="anchor_text",
+        manual = SiteManual(job_url_source="scrape_the_api", pagination="none", row_split="anchor_text",
                             row_anchor="地点")
         row = JobRow(anchor_uid="1_6", text="x")
         with pytest.raises(ValueError, match="scrape_the_api"):

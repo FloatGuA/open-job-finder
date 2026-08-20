@@ -815,11 +815,11 @@ class _ManualDimensionInput(BaseModel):
 
 # 必填四项——SiteManual.from_dict 的 _ENUMS 就是这四个，这里只是拿它们的名字
 # 给 agent 报进度用，不重复它们的取值校验（校验唯一走 from_dict）。
-_REQUIRED_MANUAL_FIELDS = ("job_url_source", "pagination", "filter_interaction", "row_split")
+_REQUIRED_MANUAL_FIELDS = ("job_url_source", "pagination", "row_split")
 
 # 展示顺序：跟工具签名/docstring 里介绍字段的顺序保持一致，方便 agent 对照着看。
 _ALL_MANUAL_FIELDS = (
-    "job_url_source", "pagination", "filter_interaction", "row_split",
+    "job_url_source", "pagination", "row_split",
     "filters_survive_reload", "url_template", "total_count_locator", "row_anchor",
     "dimensions", "important_notes",
 )
@@ -868,7 +868,7 @@ def make_record_site_manual_tool(sink: dict) -> "object":
 
     **这是本项目第三次撞上"全有或全无"逼 agent 不收尾的坑**（PITFALLS 有整条记录，
     `record_job` 是第一次治好的样子）：早先这里要求 `job_url_source` /
-    `pagination` / `filter_interaction` / `row_split` 四个必填参数一次性齐全才能
+    `pagination` / `row_split` 三个必填参数一次性齐全才能
     调用一次，真机 19 轮全在做正事却因为凑不齐全部字段而从没成功调用，最后只交了
     一段总结文本、零工具调用。现在全部参数可选、探到一点报一点，`sink["fields"]`
     跨调用累积（非空字段合并，空值不覆盖已有值，见 `_merge_manual_fields`）；每次
@@ -885,7 +885,6 @@ def make_record_site_manual_tool(sink: dict) -> "object":
     async def record_site_manual(
         job_url_source: str = "",
         pagination: str = "",
-        filter_interaction: str = "",
         row_split: str = "",
         filters_survive_reload: Optional[bool] = None,
         url_template: str = "",
@@ -899,7 +898,6 @@ def make_record_site_manual_tool(sink: dict) -> "object":
             fields,
             job_url_source=job_url_source,
             pagination=pagination,
-            filter_interaction=filter_interaction,
             row_split=row_split,
             filters_survive_reload=filters_survive_reload,
             url_template=url_template,
@@ -928,8 +926,6 @@ def make_record_site_manual_tool(sink: dict) -> "object":
             "new_tab_on_click（点了在新标签页打开，需配合 list_pages/select_page 确认）/ "
             "id_template（URL 靠一个数字 ID 拼出来，配合 url_template 用，须含 {id} 占位符）。\n"
             "pagination：next_button / url_param / infinite_scroll / none。\n"
-            "filter_interaction：direct_click（选项直接可点） / expand_group_then_click"
-            "（要先点开分组才能点选项）。\n"
             "row_split：目前只支持 anchor_text——给 row_anchor 填一段每个岗位行里必现"
             "且仅现一次的文字。真的找不到规律就不要硬填，可以只报你确定的其他字段"
             "并在 important_notes 里说明卡在哪，不要为了凑齐而编。\n"

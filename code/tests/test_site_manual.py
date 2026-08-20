@@ -14,7 +14,6 @@ def _valid() -> dict:
         "job_url_source": "new_tab_on_click",
         "url_template": "",
         "pagination": "next_button",
-        "filter_interaction": "expand_group_then_click",
         "filters_survive_reload": False,
         "total_count_locator": r"共(\d+)个岗位",
         "row_split": "anchor_text",
@@ -28,7 +27,6 @@ class TestEnumsAreClosed:
     @pytest.mark.parametrize("field,bad", [
         ("job_url_source", "scrape_the_api"),
         ("pagination", "magic"),
-        ("filter_interaction", "just_click_harder"),
         ("row_split", "vibes"),
     ])
     def test_unknown_enum_value_raises(self, field, bad):
