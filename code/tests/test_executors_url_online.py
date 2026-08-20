@@ -9,6 +9,7 @@ import asyncio
 import pytest
 from langchain_core.tools import StructuredTool
 
+from multisite import executors
 from multisite.executors import JobRow, job_url_offline, job_url_online
 from multisite.site_manual import SiteManual
 
@@ -44,6 +45,10 @@ def _tools(pages_after_click=PAGES_TWO):
         calls.append(("select_page", pageId))
         return f"Selected page {pageId}"
 
+    async def navigate_page(url: str):
+        calls.append(("navigate_page", url))
+        return "Navigated"
+
     async def take_snapshot():
         calls.append(("take_snapshot", None))
         return "DETAIL-SNAPSHOT: 岗位详情正文"
@@ -55,7 +60,8 @@ def _tools(pages_after_click=PAGES_TWO):
 
     return [StructuredTool.from_function(coroutine=f, name=n, description=n)
             for f, n in ((click, "click"), (list_pages, "list_pages"),
-                         (select_page, "select_page"), (take_snapshot, "take_snapshot"),
+                         (select_page, "select_page"), (navigate_page, "navigate_page"),
+                         (take_snapshot, "take_snapshot"),
                          (close_page, "close_page"))], calls
 
 
@@ -212,6 +218,10 @@ class TestJobUrlOnlineReselectsListPageAfterClose:
             calls.append(("select_page", pageId))
             return f"Selected page {pageId}"
 
+        async def navigate_page(url: str):
+            calls.append(("navigate_page", url))
+            return "Navigated"
+
         async def take_snapshot():
             calls.append(("take_snapshot", None))
             return "DETAIL-SNAPSHOT: 岗位详情正文"
@@ -223,7 +233,8 @@ class TestJobUrlOnlineReselectsListPageAfterClose:
 
         return [StructuredTool.from_function(coroutine=f, name=n, description=n)
                 for f, n in ((click, "click"), (list_pages, "list_pages"),
-                             (select_page, "select_page"), (take_snapshot, "take_snapshot"),
+                             (select_page, "select_page"), (navigate_page, "navigate_page"),
+                             (take_snapshot, "take_snapshot"),
                              (close_page, "close_page"))], calls
 
     def test_reselects_the_page_that_was_selected_before_the_click(self):
@@ -281,6 +292,10 @@ class TestJobUrlOnlineSurvivesConsecutiveCallsAfterClose:
             assert pageId in state["pages"], f"select_page 到一个不存在的页 {pageId}"
             state["selected"] = pageId
 
+        async def navigate_page(url: str):
+            calls.append(("navigate_page", url))
+            return "Navigated"
+
         async def take_snapshot():
             calls.append(("take_snapshot", None))
             return "DETAIL-SNAPSHOT: 岗位详情正文"
@@ -293,7 +308,8 @@ class TestJobUrlOnlineSurvivesConsecutiveCallsAfterClose:
 
         return [StructuredTool.from_function(coroutine=f, name=n, description=n)
                 for f, n in ((click, "click"), (list_pages, "list_pages"),
-                             (select_page, "select_page"), (take_snapshot, "take_snapshot"),
+                             (select_page, "select_page"), (navigate_page, "navigate_page"),
+                             (take_snapshot, "take_snapshot"),
                              (close_page, "close_page"))], calls
 
     def test_second_call_still_succeeds_after_first_call_closed_the_selected_page(self):
@@ -330,3 +346,103 @@ class TestJobUrlOfflineUnaffectedByReselectFix:
                     'uid=1_6 StaticText "地点"\n')
         row = JobRow(anchor_uid="1_6", text="x")
         assert job_url_offline(row, snapshot, manual) == "https://example.com/job/12345"
+
+
+class TestJobUrlOnlineWaitsForTheDetailPageToRender:
+    """`select_page` 切过去之后必须**等正文渲染出来**再截图。
+
+    **真机根因（2026-08-21，joinqq）**：`navigate_page` 会等页面加载完，
+    **`select_page` 不会**。点击开出来的新标签页在被选中的那一刻只有导航栏和页脚，
+    正文（岗位描述/岗位要求）还没渲染。实测同一批详情页 4/4 一致：
+
+    | | 字符数 | 岗位关键词 |
+    |---|---|---|
+    | `select_page` 之后立刻截 | 1514–1519 | **0** |
+    | 再 `navigate_page(url)` 之后截 | 2858–3076 | 6–9 |
+
+    **这个错不会报错、不会崩溃、也不会让 JD 变空**：拿到的是一份长度正常、
+    每条还各不相同（页脚里嵌着各自的 URL）的导航外壳，肉眼看完全正常。
+    52 条落库记录里 47 条是这样，靠关键词计数才拆穿。
+
+    **为什么不是"连截几张等它稳定"**：那个判据本身有洞——**两张连续的外壳快照
+    彼此相等，会被判成"已稳定"**，直接返回外壳。第一版就是这么写的，真机 52 条里
+    修好了 5 条，剩下 47 条照旧，因为它们的外壳在采样间隔内没变。
+    **"不再变化"不等于"渲染完了"。**
+
+    **也不用快照里的 `busy` 标志位**：实测那张纯外壳快照 `busy=False`，而更早一批
+    落库的外壳 `busy=True`——同一种失败在两次观察里给出相反的标志位。
+    """
+
+    SHELL = ('## Latest page snapshot\n'
+             'uid=1_0 RootWebArea "岗位详情" url="https://join.qq.com/post_detail.html?postid=999"\n'
+             'uid=1_1 link "首页"\n'
+             'uid=1_2 StaticText "Copyright Tencent"\n')
+    FULL = ('## Latest page snapshot\n'
+            'uid=2_0 RootWebArea "岗位详情" url="https://join.qq.com/post_detail.html?postid=999"\n'
+            'uid=2_1 StaticText "岗位描述"\n'
+            'uid=2_2 StaticText "负责全栈开发，参与需求分析"\n'
+            'uid=2_3 StaticText "岗位要求"\n'
+            'uid=2_4 StaticText "熟练掌握主流前后端技术栈"\n')
+
+    def _tools(self):
+        """忠实模拟真机：`select_page` 之后截到的是外壳，**只有 `navigate_page`
+        （它会等加载完）之后**才截得到正文。"""
+        calls = []
+        state = {"pages": PAGES_ONE, "navigated": False}
+
+        async def click(uid: str):
+            state["pages"] = PAGES_TWO
+            return "Successfully clicked on the element"
+
+        async def list_pages():
+            return state["pages"]
+
+        async def select_page(pageId: int):
+            calls.append(("select_page", pageId))
+            return f"Selected page {pageId}"
+
+        async def navigate_page(url: str):
+            calls.append(("navigate_page", url))
+            state["navigated"] = True
+            return "Navigated"
+
+        async def take_snapshot():
+            calls.append(("take_snapshot", None))
+            return self.FULL if state["navigated"] else self.SHELL
+
+        async def close_page(pageId: int):
+            calls.append(("close_page", pageId))
+            state["pages"] = PAGES_ONE
+            return "closed"
+
+        tools = [StructuredTool.from_function(coroutine=f, name=n, description=n)
+                 for f, n in ((click, "click"), (list_pages, "list_pages"),
+                              (select_page, "select_page"), (navigate_page, "navigate_page"),
+                              (take_snapshot, "take_snapshot"), (close_page, "close_page"))]
+        return tools, calls
+
+    def test_returns_the_rendered_body_not_the_shell(self):
+        tools, _ = self._tools()
+        got = _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
+        assert got is not None
+        _url, detail = got
+        assert "岗位要求" in detail, "拿到的是没渲染完的外壳，不是岗位正文"
+
+    def test_navigates_to_the_detail_url_before_snapshotting(self):
+        """必须 navigate 到**刚拿到的那个岗位 URL**——navigate 错地方就等于换了个
+        岗位的 JD，而 URL 字段仍然是对的，库里躺着一批 URL 与 JD 对不上的记录。"""
+        tools, calls = self._tools()
+        _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
+        names = [c[0] for c in calls]
+        assert ("navigate_page", "https://join.qq.com/post_detail.html?postid=999") in calls
+        assert names.index("select_page") < names.index("navigate_page") < names.index("take_snapshot")
+
+    def test_does_not_navigate_the_list_page(self):
+        """navigate 必须发生在**切到详情页之后**。切之前 navigate 会把列表页本身
+        导航走，筛选器状态全丢，后面每一页都抓不到东西。"""
+        tools, calls = self._tools()
+        _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
+        first_nav = [i for i, c in enumerate(calls) if c[0] == "navigate_page"][0]
+        selects_before = [c for c in calls[:first_nav] if c[0] == "select_page"]
+        assert selects_before, "navigate 之前没有切到详情页"
+        assert selects_before[-1][1] == 1, "navigate 之前选中的不是新开的详情页"

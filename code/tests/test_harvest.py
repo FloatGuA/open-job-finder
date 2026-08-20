@@ -47,6 +47,9 @@ def _tools(fail_uids=()):
         calls.append(("select_page", pageId))
         return "ok"
 
+    async def navigate_page(url: str):
+        return "Navigated"
+
     async def take_snapshot():
         return f"## Latest page snapshot\nJD-{state['n']}"
 
@@ -56,7 +59,7 @@ def _tools(fail_uids=()):
         return "closed"
 
     fns = ((click, "click"), (list_pages, "list_pages"), (select_page, "select_page"),
-           (take_snapshot, "take_snapshot"), (close_page, "close_page"))
+           (navigate_page, "navigate_page"), (take_snapshot, "take_snapshot"), (close_page, "close_page"))
     return [StructuredTool.from_function(coroutine=f, name=n, description=n) for f, n in fns], calls
 
 
@@ -196,6 +199,9 @@ class TestHarvestPageTruncatesOversizedJd:
         async def select_page(pageId: int):
             return "ok"
 
+        async def navigate_page(url: str):
+            return "Navigated"
+
         async def take_snapshot():
             return "JD" * jd_len  # 远超任何合理截断上限的超长详情页快照
 
@@ -204,7 +210,7 @@ class TestHarvestPageTruncatesOversizedJd:
             return "closed"
 
         fns = ((click, "click"), (list_pages, "list_pages"), (select_page, "select_page"),
-               (take_snapshot, "take_snapshot"), (close_page, "close_page"))
+               (navigate_page, "navigate_page"), (take_snapshot, "take_snapshot"), (close_page, "close_page"))
         return [StructuredTool.from_function(coroutine=f, name=n, description=n) for f, n in fns]
 
     def test_jd_over_the_cap_is_truncated(self):

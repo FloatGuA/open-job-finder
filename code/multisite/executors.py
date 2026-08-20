@@ -16,7 +16,6 @@ from multisite.site_manual import SiteManual
 # 如果哪天两边的正则需要一起改，那才是该提到更底层共享模块的信号，不是现在。
 _NODE_RE = re.compile(r'uid=(?P<uid>\S+)\s+(?P<role>\w+)(?:\s+"(?P<name>[^"]*)")?')
 
-
 @dataclass
 class JobRow:
     anchor_uid: str   # 取 URL 时点它；真机验证事件会冒泡到整张卡片
@@ -321,6 +320,19 @@ async def job_url_online(row: JobRow, tools, manual: SiteManual) -> tuple[str, s
     # 缺少必填参数而报错。已核对 chrome-devtools-mcp/build/src/tools/pages.js
     # 的 select_page/close_page schema：两者都是 `pageId: zod.number()`。
     await get_tool(tools, "select_page").ainvoke({"pageId": idx})
+    # **切过去不等于渲染完了**：`navigate_page` 会等页面加载完，`select_page` 不会。
+    # 刚点开的标签页在被选中的那一刻只有导航栏和页脚，正文还没渲染——直接截图会拿到
+    # 一份长度正常、每条还各不相同（页脚里嵌着各自的 URL）的**导航外壳**，
+    # 不报错、不崩溃、JD 也不为空，分类会照着标题猜。2026-08-21 真机 52 条落库记录
+    # 里 47 条是这样，靠关键词计数（「职责」「要求」全 0 次）才拆穿。
+    # 所以对刚拿到的这个 URL **再 navigate 一次**，借它的"等加载完"语义。实测 4/4：
+    # 切过去立刻截 1514–1519 字 / 关键词 0 次，navigate 之后 2858–3076 字 /
+    # 关键词 6–9 次，代价 +0.4 秒。
+    # **不用"连截几张等它稳定"**：两张连续的外壳快照彼此相等，会被判成"已稳定"
+    # 直接返回外壳——"不再变化"不等于"渲染完了"。也**不用快照里的 `busy` 标志位**：
+    # 实测纯外壳快照 `busy=False`，而更早一批落库的外壳 `busy=True`，同一种失败
+    # 给出相反的标志位。
+    await get_tool(tools, "navigate_page").ainvoke({"url": url})
     detail = _flat(await get_tool(tools, "take_snapshot").ainvoke({}))
     await get_tool(tools, "close_page").ainvoke({"pageId": idx})
     # **必须显式重选回列表页**——真机观察到的行为（2026-08-20 run

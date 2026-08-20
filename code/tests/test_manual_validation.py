@@ -45,6 +45,9 @@ def _tools(url="https://join.qq.com/post_detail.html?postid=999"):
     async def select_page(pageId: int):
         return f"Selected page {pageId}"
 
+    async def navigate_page(url: str):
+        return "Navigated"
+
     async def take_snapshot():
         return "DETAIL-SNAPSHOT: 岗位详情正文"
 
@@ -54,7 +57,7 @@ def _tools(url="https://join.qq.com/post_detail.html?postid=999"):
 
     return [StructuredTool.from_function(coroutine=f, name=n, description=n)
             for f, n in ((click, "click"), (list_pages, "list_pages"),
-                         (select_page, "select_page"), (take_snapshot, "take_snapshot"),
+                         (select_page, "select_page"), (navigate_page, "navigate_page"), (take_snapshot, "take_snapshot"),
                          (close_page, "close_page"))]
 
 
