@@ -812,58 +812,117 @@ class _ManualDimensionInput(BaseModel):
     multi_select: bool = Field(default=False, description="这个维度能不能同时勾多个（多选）；不确定就填 false")
 
 
+# 必填四项——SiteManual.from_dict 的 _ENUMS 就是这四个，这里只是拿它们的名字
+# 给 agent 报进度用，不重复它们的取值校验（校验唯一走 from_dict）。
+_REQUIRED_MANUAL_FIELDS = ("job_url_source", "pagination", "filter_interaction", "row_split")
+
+# 展示顺序：跟工具签名/docstring 里介绍字段的顺序保持一致，方便 agent 对照着看。
+_ALL_MANUAL_FIELDS = (
+    "job_url_source", "pagination", "filter_interaction", "row_split",
+    "filters_survive_reload", "url_template", "total_count_locator", "row_anchor",
+    "dimensions", "important_notes",
+)
+
+
+def _merge_manual_fields(fields: dict, **updates) -> None:
+    """把这次调用里**非空**的字段并入累积的 `fields`（就地修改）。
+
+    空值（None / 空串 / 空列表）一律跳过，**绝不覆盖已经确定的值**——agent 是
+    分好几次报的，一次只报自己这次弄清楚的那部分，没提到的字段不代表"改成空"，
+    只是这次没有新信息。`filters_survive_reload` 是唯一的例外：它的两个合法取值
+    `True`/`False` 都不是"空"，用 `None`（工具签名的默认值）表示"没提供"。
+    """
+    for key, value in updates.items():
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, list) and not value:
+            continue
+        fields[key] = value
+
+
+def _manual_progress_text(fields: dict, exc: Optional[ManualError]) -> str:
+    """报给 agent 的进度：已经确定了哪几项、必填还差哪几项、（如果凑齐了必填但
+    组合仍不合法）`SiteManual.from_dict` 抛出的原文。
+
+    **只做"字段是否非空"这种存在性检查，不重新判断字段值合不合法**——合法性
+    校验的唯一实现是 `SiteManual.from_dict`，这里的"必填还差"只是把它必然会
+    因为某个必填字段为空而报错这件事，翻译成 agent 能一眼看懂的清单，不是
+    另一份闭集规则。
+    """
+    confirmed = [k for k in _ALL_MANUAL_FIELDS if fields.get(k) not in (None, "", [])]
+    missing = [k for k in _REQUIRED_MANUAL_FIELDS if not fields.get(k)]
+    parts = [f"已确认：{', '.join(confirmed) if confirmed else '（无）'}"]
+    if missing:
+        parts.append(f"必填还差：{', '.join(missing)}")
+    if exc is not None:
+        parts.append(f"校验未通过：{exc}")
+    return "\n".join(parts)
+
+
 def make_record_site_manual_tool(sink: dict) -> "object":
-    """让勘察 agent 把探到的站点操作手册结构化报回来。
+    """让勘察 agent 把探到的站点操作手册结构化报回来——**随时落袋，不是最后一次性
+    交卷**。
 
-    照 `make_record_site_limit_tool` 的样子——**外置结果，不指望 agent 最后一次性
-    输出**：agent 半途没步数了，已经调用过的这一次照样能拿到手册（只要它调用
-    在耗尽步数之前完成）。
+    **这是本项目第三次撞上"全有或全无"逼 agent 不收尾的坑**（PITFALLS 有整条记录，
+    `record_job` 是第一次治好的样子）：早先这里要求 `job_url_source` /
+    `pagination` / `filter_interaction` / `row_split` 四个必填参数一次性齐全才能
+    调用一次，真机 19 轮全在做正事却因为凑不齐全部字段而从没成功调用，最后只交了
+    一段总结文本、零工具调用。现在全部参数可选、探到一点报一点，`sink["fields"]`
+    跨调用累积（非空字段合并，空值不覆盖已有值，见 `_merge_manual_fields`）；每次
+    调用都尝试 `SiteManual.from_dict(fields)`：齐了就告诉 agent"手册已完整、可以
+    结束了"，没齐就把**已确认/还差什么**的进度连同（如果有）`ManualError` 原文一起
+    退回去，进度是 agent 判断"还要不要继续探"的主要信号，不用它自己记账。
 
-    **校验走 `SiteManual.from_dict`，不重新写一遍闭集规则**——那份校验已经是"手册
-    要被代码执行"这条约束的唯一实现，这里重新写一份闭集校验就是同一条规则两份
-    实现，改一处漏一处的经典形状。校验失败把 `ManualError` 的原文回给 agent，
-    让它有机会看着错误信息纠正重报，而不是直接把半成品交出去。
+    **校验只走 `SiteManual.from_dict`，不重新写一遍闭集规则**——那份校验已经是
+    "手册要被代码执行"这条约束的唯一实现，这里重新写一份闭集校验就是同一条规则
+    两份实现，改一处漏一处的经典形状。
     """
     from langchain_core.tools import StructuredTool
 
     async def record_site_manual(
-        job_url_source: str,
-        pagination: str,
-        filter_interaction: str,
-        row_split: str,
-        filters_survive_reload: bool = False,
+        job_url_source: str = "",
+        pagination: str = "",
+        filter_interaction: str = "",
+        row_split: str = "",
+        filters_survive_reload: Optional[bool] = None,
         url_template: str = "",
         total_count_locator: str = "",
         row_anchor: str = "",
         dimensions: Optional[list[_ManualDimensionInput]] = None,
         important_notes: str = "",
     ) -> str:
+        fields = sink.setdefault("fields", {})
+        _merge_manual_fields(
+            fields,
+            job_url_source=job_url_source,
+            pagination=pagination,
+            filter_interaction=filter_interaction,
+            row_split=row_split,
+            filters_survive_reload=filters_survive_reload,
+            url_template=url_template,
+            total_count_locator=total_count_locator,
+            row_anchor=row_anchor,
+            dimensions=([{"name": d.name, "options": d.options, "multi_select": d.multi_select}
+                         for d in dimensions] if dimensions is not None else None),
+            important_notes=important_notes,
+        )
         try:
-            manual = SiteManual.from_dict({
-                "job_url_source": job_url_source,
-                "pagination": pagination,
-                "filter_interaction": filter_interaction,
-                "row_split": row_split,
-                "filters_survive_reload": filters_survive_reload,
-                "url_template": url_template,
-                "total_count_locator": total_count_locator,
-                "row_anchor": row_anchor,
-                "dimensions": [
-                    {"name": d.name, "options": d.options, "multi_select": d.multi_select}
-                    for d in (dimensions or [])
-                ],
-                "important_notes": important_notes,
-            })
+            manual = SiteManual.from_dict(fields)
         except ManualError as exc:
-            return f"记录失败：{exc}"
+            return "尚未记全，继续探。\n" + _manual_progress_text(fields, exc)
         sink["manual"] = manual
-        return "已记录站点手册。探完了就结束，不用再调用任何工具。"
+        return "手册已完整，可以结束了，不用再调用任何工具。\n" + _manual_progress_text(fields, None)
 
     return StructuredTool.from_function(
         coroutine=record_site_manual,
         name="record_site_manual",
         description=(
-            "把探到的站点结构记下来，这是你这一步唯一的产出。字段解释：\n"
+            "把探到的站点结构**边探边报**，探到哪项就调用一次报哪项，不用等全部搞清楚"
+            "才第一次调用——多次调用会自动累积，已经报过的字段不用重复报，"
+            "返回值会告诉你已确认什么、还差什么，照它决定下一步，不用自己记账。"
+            "字段解释：\n"
             "job_url_source：怎么拿到岗位详情页 URL —— link_in_row（卡片本身就是带 url 的链接）/ "
             "new_tab_on_click（点了在新标签页打开，需配合 list_pages/select_page 确认）/ "
             "id_template（URL 靠一个数字 ID 拼出来，配合 url_template 用，须含 {id} 占位符）。\n"
@@ -871,7 +930,8 @@ def make_record_site_manual_tool(sink: dict) -> "object":
             "filter_interaction：direct_click（选项直接可点） / expand_group_then_click"
             "（要先点开分组才能点选项）。\n"
             "row_split：目前只支持 anchor_text——给 row_anchor 填一段每个岗位行里必现"
-            "且仅现一次的文字。真的找不到规律就不要硬填，直接说明搞不定，不要调用本工具。\n"
+            "且仅现一次的文字。真的找不到规律就不要硬填，可以只报你确定的其他字段"
+            "并在 important_notes 里说明卡在哪，不要为了凑齐而编。\n"
             "total_count_locator：读「共 N 个岗位」这类计数文本的正则，须带一个数字捕获组"
             "（如 `共(\\d+)个岗位`）；没有这类计数就留空。\n"
             "dimensions：筛选维度列表，每项给 name/options/multi_select；multi_select 只能"
@@ -1267,8 +1327,10 @@ def _make_nodes(
                 "max_filter_clicks": str(max_filter_clicks),
             },
         )
-        # 手册经 record_site_manual 落到这个 sink 里，跟 record_job 同一个套路——
-        # agent 半途没步数了，只要那次调用已经完成，手册照样拿得到。
+        # 手册经 record_site_manual 累积到这个 sink["fields"] 里，跟 record_job
+        # 同一个套路——agent 半途没步数了，只要已经调用过至少一次，探到的字段
+        # 照样拿得到；不要求最后一次调用就凑齐全部必填项（那正是这个节点第一次
+        # 真机跑不收敛的根因，见 PITFALLS「答案必须最后一次性给出」那条）。
         sink: dict = {}
         tools_for_agent = [
             *_agent_tools(_PASSTHROUGH_FIND_JOBS),
@@ -1291,12 +1353,20 @@ def _make_nodes(
         await navigate.ainvoke({"type": "url", "url": entry})
         reset_snapshot = await _snapshot_and_cache()
 
-        manual = sink.get("manual")
-        if manual is None:
+        # agent 可能分好几次调用 record_site_manual，每次只报一部分字段——用累积
+        # 到的 fields 在这里重新跑一次唯一的校验实现，而不是只信任 sink["manual"]
+        # 是否曾经被某一次调用设置过（那要求"凑齐的那一刻恰好是最后一次调用"，
+        # 没有必要的额外假设）。
+        fields = sink.get("fields", {})
+        try:
+            manual = SiteManual.from_dict(fields)
+        except ManualError as exc:
             _dump_debug_snapshot("survey_structure_no_manual", reset_snapshot)
+            missing = [name for name in _REQUIRED_MANUAL_FIELDS if not fields.get(name)]
+            reason = f"还差：{', '.join(missing)}" if missing else f"校验未通过：{exc}"
             raise RuntimeError(
-                f"survey_structure 没能产出站点手册（{site_name}）：agent 没有成功调用 "
-                f"record_site_manual。最后一句：{agent_runtime.last_text(result)[:300]}"
+                f"survey_structure 没能产出可用的站点手册（{site_name}）：{reason}。"
+                f"最后一句：{agent_runtime.last_text(result)[:300]}"
             )
 
         tracker.upsert_site_manual(site_name, manual)
