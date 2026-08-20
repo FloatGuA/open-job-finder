@@ -1,15 +1,21 @@
 """Layer 1（识别/判断）agent —— docs/multi-site-expansion-design.md 四层架构的第一层。
 
 **自主度按层拆分，不是全链路统一**（v2.22.0 与用户重新对齐后的形态，取舍见
-DECISION.md「Layer 1 的导航/找入口/选岗交给 agent 自主决策」）：
+DECISION.md「Layer 1 的导航/找入口/选岗交给 agent 自主决策」）。
 
-| 环节 | 谁来决策 | 为什么 |
-|------|---------|--------|
-| 找岗位、翻页、判断岗位符不符合偏好 | **agent** | 每个站点长得都不一样，写死选择器就退化成"每站一个适配器"——正是设计文档否掉的路线 |
-| 找投递入口、上传简历 | **agent** | 同上；入口按钮的叫法/位置各站不同 |
-| 解析快照里哪些是空字段 | 代码 | 结构化解析，没有判断成分 |
-| 字段分类（人口学/开放题/证件） | LLM 单次调用 | 需要语义判断，但不需要多轮自主 |
-| 取 personal_info 的值、写库 | 代码 | 确定性映射 |
+**三节点重构（m1-three-nodes）之后，"选岗"本身又拆成了三段，ReAct 只留在真正
+需要"看一眼再决定下一步"的地方**——这是这次重构的核心决定，不是随手拆分：
+
+| 环节 | 节点 | 谁来决策 | 为什么 |
+|------|------|---------|--------|
+| 这个站怎么分桶（勘察结构、试探筛选器） | `survey_structure` | **agent（ReAct）** | 要勾选筛选器、回读总数、边看边决定下一步试探什么，纯脚本判断不出多选/互斥这类信息 |
+| 打哪几个桶 | `plan_buckets` | 普通 LLM 单次调用（**非 ReAct**） | 手册已经探到手，这一步是对着已知结构和求职条件做判断，不需要多轮自主——做成单次调用换来可单测、可 eval（spec §2.1） |
+| 去哪个桶、还要不要翻页 | `scan_buckets` | **agent（ReAct）** | 桶内列表页长什么样、还有没有下一页因站而异，agent 只决定"去哪、翻不翻"，抓取和分类不占它的轮次 |
+| 这个岗位算哪一类 | `classify_jobs` | 普通 LLM 调用（批量，**非 ReAct**） | 对已抓到的岗位批量判断类别，不碰浏览器、不需要多轮 |
+| 找投递入口、上传简历（m2） | `open_application` | **agent（ReAct）** | 入口按钮的叫法/位置各站不同 |
+| 解析快照里哪些是空字段 | `scan_and_classify_fields` | 代码 | 结构化解析，没有判断成分 |
+| 字段分类（人口学/开放题/证件） | `scan_and_classify_fields` | LLM 单次调用 | 需要语义判断，但不需要多轮自主 |
+| 取 personal_info 的值、写库 | `record_application` 等 | 代码 | 确定性映射 |
 
 **硬边界**（代码强制，不是 prompt 叮嘱）：
 1. **提交类点击被 `safe_tools.make_guarded_click` 拒绝。** 旧版靠"工具集里没有
@@ -576,94 +582,6 @@ def _looks_blank(snapshot_text: str) -> bool:
 def _looks_logged_out(snapshot_text: str) -> bool:
     lowered = snapshot_text.lower()
     return "登录" in snapshot_text or "login" in lowered or "sign in" in lowered
-
-
-def remaining_quota(quotas: dict, sink: list) -> dict:
-    """各类别还差几个。纯函数，单独抽出来是为了能单测配额算术。"""
-    counts = Counter(j.category for j in sink)
-    return {name: cap - counts.get(name, 0) for name, cap in quotas.items()}
-
-
-def describe_progress(quotas: dict, sink: list) -> str:
-    """给 agent 看的进度播报：各类 已记/上限，以及还差哪些。
-
-    **这段文字是选岗 agent 的主要导航信号**，不是日志。它同时回答了 agent 每一步
-    都在问的两个问题："我还要不要继续"和"该找什么"。
-    """
-    counts = Counter(j.category for j in sink)
-    done = "、".join(f"{name} {counts.get(name, 0)}/{cap}" for name, cap in quotas.items())
-    missing = [f"{name} {n} 个" for name, n in remaining_quota(quotas, sink).items() if n > 0]
-    if not missing:
-        return f"当前进度：{done}。**所有名额已满，立刻停止翻页并给出最终结论。**"
-    return f"当前进度：{done}。还差：{('、'.join(missing))}。"
-
-
-def make_record_job_tool(sink: list, quotas: dict, known_urls: Optional[set] = None) -> "object":
-    """一个让 agent **随时把找到的岗位落袋**的工具，而不是憋到最后一次性输出。
-
-    **这是选岗 agent 能不能收敛的关键**，不是锦上添花。前两次真机跑都死在同一个
-    模式上：agent 每翻一页都说"让我分析当前页面的岗位"，然后又去点下一页，从不
-    产出结论，一路撞到 recursion limit。第一次是在筛选器上打转，加了点击预算后
-    换成在翻页上打转——**换个地方犯同一个错，说明不是预算不够，是"答案必须最后
-    一次性给出"这个结构本身在逼它继续探索**（它永远觉得还没看够）。
-
-    改成随时记录之后有三个好处：
-    1. agent 每记一条就拿到一次正反馈，探索有了明确的进展信号；
-    2. 即使最后超时/超限，已经记下的岗位仍然拿得到（部分结果不再全丢）；
-    3. 不需要它把所有候选一直记在上下文里——这本来就是 DeepSeek 64k 上下文
-       最吃不消的用法。
-
-    **配额（v2.23.0 新增）解决的是另一个问题：偏斜。** 上一版只有一个总数上限，
-    真机跑回来 5 个名额全被"运营"占满，产品/开发/日常实习一个都没有——而且这种
-    失败在结果里完全看不出来，因为每一条单看都符合条件。按类别分名额之后，
-    "还差什么"变成每次调用都会收到的显式信号，终止条件也从"翻够 N 页"变成
-    "名额全满"（更准确，且不再依赖翻页数这个跟目标无关的代理指标）。
-
-    `category` 走枚举校验而不是自由文本：不然 agent 报一个新类别名就绕过了配额。
-
-    **`known_urls`（库里已在待审批/已处理的岗位）不吃配额**（v2.23.0 真机第三次跑
-    暴露的）：agent 跨 run 没有记忆，重跑同一个站必然重新找到上次那批岗位。之前它们
-    照样占名额，结果那一轮找回 10 个、5 个是旧的，「开发 5/5」里 3 个名额花在已经
-    躺在审批队列里的岗位上，真正的新岗位反而被配额挡在门外——**等于每跑一次，能
-    发现的新东西就少一截**。现在命中 known_urls 直接告诉它跳过、不计数。
-    """
-    from langchain_core.tools import StructuredTool
-
-    known = known_urls or set()
-
-    async def record_job(url: str, category: str, title: str = "", company: str = "",
-                         why: str = "", bucket: str = "") -> str:
-        if not url or not url.startswith("http"):
-            return "记录失败：url 必须是完整的 http(s) 链接。请从快照里那一行的 url=\"...\" 取。"
-        category = (category or "").strip()
-        if category not in quotas:
-            return (f"记录失败：「{category}」不是有效类别。只能从这些里选："
-                    f"{('、'.join(quotas))}。如果这个岗位不属于任何一类，就不要记它。")
-        if url in known:
-            # 不计入配额：它已经在待审批队列里了，再占一个名额没有任何收益。
-            # 措辞要写清"不占名额"——第四次真机跑时 agent 看到「已收录」而进度还是
-            # 0/3，愣了一下（"Wait, that's confusing"）。它没算错，是这句话有歧义。
-            return (f"这个岗位**上一次已经收录过了，不占名额**（所以下面的进度不会变）。"
-                    f"跳过它，继续找还没收录过的。{describe_progress(quotas, sink)}")
-        if any(j.url == url for j in sink):
-            return f"这个岗位已经记过了。{describe_progress(quotas, sink)}"
-        if remaining_quota(quotas, sink)[category] <= 0:
-            return (f"记录失败：{category} 的 {quotas[category]} 个名额已经满了，不要再记这一类。"
-                    f"{describe_progress(quotas, sink)}")
-        sink.append(FoundJob(url=url, title=title, company=company, why=why,
-                             category=category, bucket=(bucket or "").strip()[:80]))
-        return f"已记录：{title or url}（{category}）。{describe_progress(quotas, sink)}"
-
-    return StructuredTool.from_function(
-        coroutine=record_job,
-        name="record_job",
-        description=(
-            "记录一个符合求职条件的岗位。每找到一个就立刻调用一次，不要攒到最后。"
-            "url 必须是完整链接（从快照里 link 行的 url=\"...\" 取）；"
-            f"category 必须从这些里选：{('、'.join(quotas)) or '(未配置)'}；"
-            "bucket 填你当前所在的那个招聘项目/顶层分类的名字（投递次数上限常常是按它算的）。"
-        ),
-    )
 
 
 # ── MCP 原生工具白名单，按节点分开 ────────────────────────────────────────────
