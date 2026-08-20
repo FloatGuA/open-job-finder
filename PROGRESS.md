@@ -46,8 +46,30 @@ spec：`docs/superpowers/specs/2026-08-19-m1-survey-plan-scan-design.md`
 5. **`_ID_RE = r"\b(\d{4,})\b"` 会把年份当岗位 ID**（"2027校园招聘" → 2027）。当前无站点走
    `id_template` 故不可达；启用前必须收紧，否则**错的是 URL 本身**、库里躺着指错地方的记录。
 6. 判据②只检测选项消失、检测不到新增（见 DECISION，含三条可行路径）。
-7. 其余 11 条 deferred minor 与全部 11 条裁决在过程账本
-   `.superpowers/sdd/2026-08-19-m1-manual-foundation/progress.md`（gitignore，**收尾会删**）。
+7. **其余存活的 minor**（过程账本已删，这里是全量；11 条里 3 条已被最终修复波消化：
+   fixture 体量断言已补、同 URL 标签页与 `_PAGE_LINE_RE` 随索引差集一起降级）：
+   - `filters_survive_reload` 用 `bool(d.get(...))` 隐式强转——**手册是 LLM 产的 JSON**，
+     给字符串 `"false"` 会被静默转成 `True`。与本模块"不许兜底"的精神相反，
+     且 `survey_structure` 上线后就有真实上游了。**两行的事，计划 B 顺手收掉。**
+   - `dimensions` 只浅拷贝外层 list，内部 dict 与输入共享引用。当前无消费方依赖同一性。
+   - fixture 里 uid `1_7` 出现两次（第 9 行与第 170 行）——**真实 a11y 快照的 uid 不保证唯一**。
+     当前无影响（该行 name 为空，不会被当锚点），但凡是按 uid 查找的代码都要留意。
+   - `split_rows` 的 `span` 回退值 `15` 是魔数，只在锚点少于 2 个时触发；
+     测试覆盖了 0 个和 10 个两端，未覆盖"恰好 1 个锚点"。
+   - `job_url_offline` 里未知 `job_url_source` 会隐式落到 `id_template` 分支。
+     实际不可达（`from_dict` 闭集校验挡死），非真缺陷。
+   - `tracker.upsert_site_manual` 用局部 import + 前向引用 `manual: "SiteManual"`
+     （模块级无 import，`get_type_hints` 会炸）；`get_site_manual` 返回注解是宽松的
+     `Optional[tuple]`。可能是刻意避免 tracker 对上层 `multisite` 包的模块级耦合。
+   - `validate_manual` 的 docstring 没转述 `job_url_online` 那条"抛异常时可能残留标签页"，
+     只读它的人会以为它总是返回 `(bool, str)`。
+   - `read_total_count` 里的 `except re.error: return None` 现在是**死代码**
+     （`from_dict` 已在入口拦掉不合法正则）。留着无害，但别据此以为运行时还会遇到坏正则。
+
+8. **存量手册读不出来时没有出口**：`get_site_manual` 直接 `SiteManual.from_dict(json)`。
+   将来枚举演进（这个设计明确预期"加执行器"）会让旧行抛 `ManualError`，
+   而调用方拿不到"当作没有手册、重探"这个出口，只能改库。**这是设计明确预期会发生的事**，
+   值得在计划 B 接线时定语义。
 
 ### 🚧 join.qq.com（腾讯校招）：死循环已解，现在卡在「不肯开始记岗位」（2026-08-19）
 
