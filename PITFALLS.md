@@ -983,3 +983,61 @@ agent 侧的 `set_filter_option` 工具是唯一入口，prompt 明确禁止用 
 判据：**同一个操作换了几种方式都失败，而错误信息始终一样** → 不是策略问题，
 是目标选错了。这时候花五分钟用 `evaluate_script` 查一次 DOM，
 比改十遍 prompt 有用。
+
+## 同一个"复选框"有两种 a11y 形态，只处理一种＝另一种必然超时
+
+`set_filter_option` 第一版按"找紧跟 checkbox 之后的同名 `StaticText`（那是可见的
+label），找不到就退回点 checkbox 本身"写。**叶子选项对，分组标题错。**
+
+真机（join.qq.com「岗位类别」展开后）：
+
+```
+uid=2_3 tab "技术" description="软件开发类 技术运营类 …"
+  uid=2_4 button "技术"        ← 点它是**展开分组**，不是勾选
+    uid=2_5 checkbox "技术"    ← 0×0 隐藏 input，a11y 树里没有可点的同名节点
+```
+
+祖先链跟叶子选项同构（`LABEL.el-checkbox` 可点），但**没有同名 `StaticText` 兄弟**
+——于是退回去点那个 0×0 的 checkbox，必然超时。真机 `filter_failures` 里
+「技术」就是这么失败的，整轮 `found: 0`。
+
+**修法：用 `evaluate_script` 点 `closest('label')`**，两种形态同一条路径；
+没有 `<label>` 祖先的普通 `<input type=checkbox>` 就点元素自己
+（**同一段脚本里的一个 `??`，不是第二条代码路径**）。
+实测：分组标题「技术」943→152、叶子「深圳」152→99，两个都 `checked=True`。
+
+**判据**：给外部结构写"主路径 + 退路"时，问一句**退路是不是真的能工作**。
+这里的退路（点 checkbox 本身）是**已知必然失败**的操作——它不是兜底，
+是把失败推迟到运行时。
+
+---
+
+## 假工具的参数名被 pydantic 改写：`args` → `v__args`
+
+`StructuredTool.from_function` 从函数签名推断 schema 时，pydantic 会把名为 `args`
+的字段改写成 `v__args`。而 chrome-devtools-mcp 的 `evaluate_script` 真实参数名就是
+`args`（已 dump 核对：`['args', 'dialogAction', 'filePath', 'function']`）。
+
+照签名推断写出来的假工具**接受的是 `v__args`**，生产代码传 `args` 就报
+`unexpected keyword argument`。这次是**测试先炸**，运气好；换个方向
+（假工具和生产代码都用被改写的名字）就又是一次 `pageIdx` ——两边互相印证、
+只有真实世界不同意。
+
+**修法**：给假工具**显式指定 `args_schema`**（一个 pydantic 模型），跳过签名推断。
+**并且去 dump 一次真实工具的 schema 核对**，别靠记忆。
+
+---
+
+## 脚本在浏览器里执行时，单测结构上观测不到它的行为
+
+`_CLICK_LABEL_JS` 的正确性**单测覆盖不到**：把 `closest('label')` 换成 `null`，
+整个测试文件一条都不红——脚本是在页面里跑的，假工具只能记下"调了 evaluate_script、
+传了哪个 uid"。
+
+**这不是测试写得不好，是结构性的观测边界。** 处理办法有两条，都要做：
+
+1. **行为由真机探针验证**，并把证据写进测试的 docstring（这里是 943→152 / 152→99）
+2. **加一条字符串断言**（`assert "closest('label')" in _CLICK_LABEL_JS`）——它很弱，
+   但把一个"结构上观测不到"的变异变成了观测得到的，防止那段脚本被无声改掉
+
+**别让"测试全绿"暗示这段脚本是对的。** 测试验的是接线，不是脚本体。
