@@ -66,7 +66,7 @@ async def harvest_page(
     # 分类在循环之后一次性批量调用——这是「不占 ReAct 轮次」的关键。
     # 抛异常就让它抛（fail fast），但必须在写 sink 之前：先攒 pending，
     # 分类成功后才 sink.extend(...)，半页结果落袋会让下次去重误判成「已收录」。
-    classified = classify(pending) if pending else []
+    classified = await classify(pending) if pending else []
     sink.extend(classified)
 
     return {

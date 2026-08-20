@@ -9,8 +9,15 @@
 按 index 对齐是硬要求，见下）。套用不了，所以照它的三层思路（围栏提取 →
 json.loads → json_repair 兜底）单独写了一份只服务数组场景的最小实现，
 详见本文件底部的 `_extract_json_array` / `_parse_response`。
+
+**`classify_jobs` 是 `async def`**（修复轮 1）：调用方 `multisite/harvest.py` 的
+`harvest_page` 本身是 `async def`，且跑在 LangGraph 已有的事件循环里；这里如果
+用 `asyncio.run()` 自己另起一个循环，会在集成时直接炸
+`RuntimeError: asyncio.run() cannot be called from a running event loop`。
+multisite 这一层从浏览器工具到 `run_agent` 全是 async，分类是网络调用，跟着
+统一成 async 而不是靠 `model.invoke()` 同步接口绕过——后者会在 async 管线里
+插一个阻塞调用，只是「眼下没有并发」才不出问题，是把正确性寄托在环境假设上。
 """
-import asyncio
 import json
 import re
 from pathlib import Path
@@ -28,7 +35,7 @@ _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 _NO_GOLDEN_EXAMPLES = "（本次未提供历史纠正样例）"
 
 
-def classify_jobs(
+async def classify_jobs(
     items: list[dict],
     quotas: dict,
     *,
@@ -51,7 +58,7 @@ def classify_jobs(
 
     prompt = _render_prompt(prompt_text, items, quotas)
 
-    response = asyncio.run(model.ainvoke(prompt))
+    response = await model.ainvoke(prompt)
     raw_results = _parse_response(response.content)
 
     by_index: dict[int, dict] = {}

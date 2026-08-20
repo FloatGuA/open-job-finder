@@ -59,7 +59,7 @@ def _tools(fail_uids=()):
     return [StructuredTool.from_function(coroutine=f, name=n, description=n) for f, n in fns], calls
 
 
-def _classify_all(items):
+async def _classify_all(items):
     """假分类器：每条都归「开发」。"""
     return [{**it, "category": "开发", "why": "测试"} for it in items]
 
@@ -141,7 +141,7 @@ class TestHarvestPage:
 
     def test_classify_failure_drops_the_whole_page_without_writing(self):
         """分类挂了整页回退、**不落袋**。半页结果落袋会让下次去重误判成"已收录"。"""
-        def boom(items):
+        async def boom(items):
             raise RuntimeError("LLM down")
 
         tools, _ = _tools()
