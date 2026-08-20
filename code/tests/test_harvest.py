@@ -14,6 +14,7 @@ from multisite.harvest import harvest_page
 from multisite.site_manual import SiteManual
 
 SNAPSHOT = (Path(__file__).parent / "fixtures" / "joinqq_post_list.txt").read_text(encoding="utf-8")
+BAMBULAB_SNAPSHOT = (Path(__file__).parent / "fixtures" / "bambulab_job_list.txt").read_text(encoding="utf-8")
 
 
 def _manual(**over) -> SiteManual:
@@ -66,6 +67,18 @@ async def _classify_all(items):
 
 def _run(c):
     return asyncio.run(c)
+
+
+def _bambulab_manual(**over) -> SiteManual:
+    """`link_in_row` + `container_per_row`：bambulab 这类站，行本身就是那个 link
+    节点，url 属性里带 `/position/`，节点 name 里标题/地点/类型/JD 摘要全挤在一起。
+    见 `executors._split_rows_container_per_row` 的 docstring。"""
+    d = {"job_url_source": "link_in_row", "url_template": "", "pagination": "none",
+         "filter_interaction": "direct_click", "filters_survive_reload": False,
+         "total_count_locator": "", "row_split": "container_per_row",
+         "row_anchor": "/position/", "dimensions": [], "important_notes": ""}
+    d.update(over)
+    return SiteManual.from_dict(d)
 
 
 class TestHarvestPage:
@@ -208,5 +221,63 @@ class TestHarvestPageTruncatesOversizedJd:
         tools = self._tools_with_long_jd(jd_len=10)  # "JD" * 10 = 20 字符，远低于上限
         sink = []
         _run(harvest_page(SNAPSHOT, tools, _manual(), bucket="技术",
+                          classify=_classify_all, sink=sink, known_urls=set(), limit=1))
+        assert sink[0]["jd"] == "JD" * 10
+
+
+class TestHarvestPageOfflineJd:
+    """`job_url_offline` 这条路（`link_in_row` 类站点，真机是 bambulab）以前 `jd`
+    恒为空串——`row.text` 已经被当成分类 prompt 的 `title` 用了，但没人把它也
+    当 `jd` 用，导致落库的 `jd` 长度为 0，分类规则「职责里出现 xx 就归 xx 类」
+    完全没有 jd 可读（哪怕分类当时靠 title 里混进的同一段文本蒙对了）。修复：
+    拿不到详情页快照时，`row.text` 本身就是这个站手边能拿到的最好的 JD 替代
+    ——见 `_split_rows_container_per_row` 的 docstring：容器模式下这一行的
+    accessible name 里标题/地点/类型/JD 摘要全挤在一起。用**真实 fixture**
+    （不是玩具快照），因为这正是"看起来完全正常"的错误形态：10 条全部落进同一段
+    文本或全部落空，测试用小快照测不出来。"""
+
+    def test_jd_is_not_empty_for_every_row(self):
+        sink = []
+        out = _run(harvest_page(BAMBULAB_SNAPSHOT, None, _bambulab_manual(), bucket="技术",
+                                classify=_classify_all, sink=sink, known_urls=set(), limit=100))
+        assert out["collected"] == 10
+        assert all(j["jd"] for j in sink), "有岗位的 jd 仍是空串"
+
+    def test_each_row_s_jd_is_its_own_not_shared(self):
+        """10 条岗位必须拿到 10 段不同的 jd——全部相同的话分类会按同一段文本给
+        所有岗位打分，而那看起来完全正常（不报错、不崩溃）。"""
+        sink = []
+        _run(harvest_page(BAMBULAB_SNAPSHOT, None, _bambulab_manual(), bucket="技术",
+                          classify=_classify_all, sink=sink, known_urls=set(), limit=100))
+        assert len({j["jd"] for j in sink}) == len(sink) == 10
+
+
+class TestHarvestPageOfflineJdTruncation:
+    """离线路径的 jd 走**同一个** `_JD_MAX_CHARS` 上限，不另开一个常量——见
+    `harvest.py` 顶部 `_JD_MAX_CHARS` 的注释：截断必须在 harvest 边界做一次，
+    落库和分类 prompt 才不会各自面对一份没截断的原文。"""
+
+    def _long_row_snapshot(self, length: int) -> str:
+        long_text = "JD" * length
+        return (
+            '## Latest page snapshot\n'
+            'uid=6_0 RootWebArea "x" url="https://example.com/"\n'
+            f'  uid=6_1 link "{long_text}" url="https://example.com/position/111/detail"\n'
+        )
+
+    def test_offline_jd_over_the_cap_is_truncated(self):
+        from multisite.harvest import _JD_MAX_CHARS
+
+        snap = self._long_row_snapshot(50_000)
+        sink = []
+        _run(harvest_page(snap, None, _bambulab_manual(), bucket="技术",
+                          classify=_classify_all, sink=sink, known_urls=set(), limit=1))
+        assert len(sink) == 1
+        assert len(sink[0]["jd"]) == _JD_MAX_CHARS
+
+    def test_offline_jd_under_the_cap_is_left_untouched(self):
+        snap = self._long_row_snapshot(10)  # "JD" * 10 = 20 字符，远低于上限
+        sink = []
+        _run(harvest_page(snap, None, _bambulab_manual(), bucket="技术",
                           classify=_classify_all, sink=sink, known_urls=set(), limit=1))
         assert sink[0]["jd"] == "JD" * 10

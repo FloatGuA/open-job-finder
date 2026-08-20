@@ -71,7 +71,18 @@ async def harvest_page(
             if url is None:
                 url_failed += 1
                 continue
-            jd = ""
+            # 这条路取不到详情页快照（`link_in_row` 类站点，真机是 bambulab）。
+            # `row.text` 已经是这个站手边能拿到的最好的 JD 替代——容器模式下
+            # 整个卡片就是一个 link 节点，标题/地点/类型/JD 摘要全挤在它的
+            # accessible name 里（见 `_split_rows_container_per_row` 的
+            # docstring），而这段文本此刻已经在被当成分类 prompt 的 `title`
+            # 用（layer1_agent 把 `text` 映射成 `title`）——过去只用了一半，
+            # `jd` 被留成空串，落库和 Checkpoint 1 审批页看到的都是"这个岗位
+            # 没有 JD"，而分类规则「职责里出现 xx 就归类」压根没有 jd 可读。
+            # 同一个 `_JD_MAX_CHARS` 上限，不另开一个：见文件顶部的注释——
+            # 截断必须在 harvest 边界做一次，落库和分类 prompt 才不会各自
+            # 面对一份没截断的原文。
+            jd = row.text[:_JD_MAX_CHARS]
 
         # 只有取回 URL 之后才知道是不是已收录过——判断顺序必须在取 URL 之后。
         if url in known_urls:
