@@ -137,6 +137,12 @@ const RESUME_PDF_STATE_STYLE: Record<string, { label: string; hint: string; colo
   missing: { label: T_PDF_MISSING, hint: T_PDF_MISSING_HINT, color: '#ff453a', bg: 'rgba(255,69,58,0.15)' },
 }
 
+// PDF 三态的第二份视觉映射（第一份是 Resume.tsx 的 `PdfStatePill`）。
+// **刻意不复用**：这里 missing/stale 要比简历页更刺眼（在这一页看漏了，人会批准一个
+// 注定被闸门拒绝的岗位），而简历页那份是密集列表里的小标记，抢眼反而碍事。
+// 共享的只是**状态词汇** ready/stale/missing——它来自后端 `ResumeStore.pdf_status()`。
+// 后端要是加了第四种状态或改了 stale 的语义，**两处都要改**；漏改一处的后果是
+// 这里回落到 missing 样式（见下面的 `?? RESUME_PDF_STATE_STYLE.missing`），不会崩。
 function ResumePdfPill({ state }: { state: string }) {
   const s = RESUME_PDF_STATE_STYLE[state] ?? RESUME_PDF_STATE_STYLE.missing
   return (

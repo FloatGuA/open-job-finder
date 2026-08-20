@@ -230,6 +230,10 @@ const PDF_STATE_META: Record<string, { label: string; hint: string; fg: string; 
 
 /** 「能不能发出去」的小徽章。没有它，简历列表和导出存档是两个互不相干的列表，
  *  人无从知道某一份到底能不能用——那正是 m2 传出一份过期 PDF 而无人察觉的原因。 */
+// PDF 三态在本仓库有两份视觉映射：这一份（简历页的密集列表，小而克制）和
+// `CrossSiteApplications.tsx` 的 `ResumePdfPill`（选岗审批页，missing/stale 要刺眼）。
+// 视觉是刻意分开的，但**状态词汇 ready/stale/missing 是同一份契约**（后端
+// `ResumeStore.pdf_status()`）。改词汇语义或加状态时两处都要动。
 function PdfStatePill({ state, exportedAt }: { state?: string; exportedAt?: string }) {
   const meta = PDF_STATE_META[state || 'missing'] ?? PDF_STATE_META.missing
   return (
