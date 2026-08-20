@@ -96,3 +96,27 @@ def test_resume_prompts_editable_and_render(tmp_path):
     default = pm.get_default("resume_build")
     with pytest.raises(ValueError):
         pm.save_override("resume_build", default.replace("{{self_desc}}", "（略）"))
+
+
+class TestLayer1PromptsAreEditable:
+    """用户要亲自调 ReAct，那这几段 prompt 就必须能在设置页改，
+    而不是只能改文件。加名字即接线：端点遍历 EDITABLE_PROMPTS，前端自动列出。"""
+
+    @pytest.mark.parametrize("name", [
+        "layer1_survey_structure", "layer1_plan_buckets",
+        "layer1_scan_buckets", "layer1_classify_jobs",
+        "layer1_open_application",
+    ])
+    def test_is_in_the_editable_list(self, name):
+        from services.prompt_manager import EDITABLE_PROMPTS
+        assert name in EDITABLE_PROMPTS
+
+    @pytest.mark.parametrize("name", [
+        "layer1_survey_structure", "layer1_plan_buckets",
+        "layer1_scan_buckets", "layer1_classify_jobs",
+        "layer1_open_application",
+    ])
+    def test_the_file_actually_exists(self, name):
+        """在清单里但文件不存在 = 设置页打开就 500。"""
+        from services.prompt_manager import PromptManager
+        assert PromptManager().get_default(name)

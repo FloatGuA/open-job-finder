@@ -11,14 +11,19 @@ _TASK_INJECTION_NAMES = frozenset({
     "resume_parse", "resume_build", "resume_tailor", "resume_greeting", "resume_compose",
 })
 
-# 用户可在前端编辑的 prompt 模板（system 全局角色 + 3 个工作任务模板 + 3 个简历生成模板）。
+# 用户可在前端编辑的 prompt 模板（system 全局角色 + 3 个工作任务模板 + 3 个简历生成模板
+# + m1/m2 multisite 的 5 个 layer1 模板）。
 # 白名单：save/reset 只认这些名字，杜绝路径穿越。
 # resume_* 三个是简历功能的 LLM 步骤（块库整理 / 岗位特化 / 招呼语），可编辑，
 # 也各自吃 prompt 注入（同名 task 注入 + global）——简历端点用带 injection 的 PromptManager。
+# layer1_* 五个是 multisite m1/m2 的站点探测/分桶/扫描/分类/投递环节，用户要亲自调 ReAct，
+# 加名字即接线（/api/prompts 遍历本清单，Settings 页自动列出，前端零改动）。
 EDITABLE_PROMPTS = (
     "system", "score_job", "analyze_intent", "generate_reply",
     "resume_parse", "resume_parse_vision", "resume_build", "resume_compose",
     "resume_tailor", "resume_greeting",
+    "layer1_survey_structure", "layer1_plan_buckets", "layer1_scan_buckets",
+    "layer1_classify_jobs", "layer1_open_application",
 )
 
 
