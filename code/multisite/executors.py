@@ -48,13 +48,6 @@ def _matched_nodes(snapshot_text: str) -> list[_MatchedNode]:
     return out
 
 
-def _nodes(snapshot_text: str) -> list[tuple[str, str, str]]:
-    """`(uid, role, name)` 视图，供不需要原始行文本、只需要节点身份的调用方用
-    （`validate_manual` 判据②）。带上 role 是因为 `_NODE_RE` 本来就解析了它——
-    丢掉再让消费方自己重新判定，会在这份文件里制造出两条节点解析路径。"""
-    return [(n.uid, n.role, n.name) for n in _matched_nodes(snapshot_text)]
-
-
 # `spans` 只有在锚点数量 >= 2 时才非空（`zip(positions, positions[1:])` 至少要
 # 两个点才能求出一个间距）；`_anchor_row_windows` 已经把 0 个锚点的情况提前
 # return 掉了，所以这个回退值只在**恰好 1 个锚点**时触发。没有真实数据支持这个
@@ -306,7 +299,9 @@ async def validate_manual(snapshot_text: str, tools, manual: SiteManual) -> tupl
     # ② 第一个维度的选项集合没变（可选：手册没配 dimensions 就跳过）
     if manual.dimensions:
         want = set(manual.dimensions[0].get("options") or [])
-        have = {name for _, _, name in _nodes(snapshot_text) if name}
+        # 直接用 `_matched_nodes()`——判据②只要节点名。将来要把比对限定到
+        # checkbox/radio（spec §3.5 列的出路②），`n.role` 就在手边。
+        have = {n.name for n in _matched_nodes(snapshot_text) if n.name}
         missing = want - have
         if missing:
             return False, f"筛选维度「{manual.dimensions[0].get('name')}」的选项变了，快照里找不到：{sorted(missing)}"
