@@ -55,6 +55,26 @@ router 要经过**六道逐个枚举的关键字参数**（编排层 → `run_la
 而真实 `app.state` 只有一个——假替身与现实不符，让"这个对象一路传到底"这类断言
 无从写起。
 
+#### 真机验证通过（run `m1_20260820_1913`）
+
+四个 LLM 调用点这一跑全部走过真机：
+
+```
+plan_buckets    ✅ 10 个桶     ← ModelRouter balanced 链（新）
+scan_buckets    ✅ found 5     ← ReAct 走 multisite.model（新）
+                   跨 3 类别   ← classify_jobs 走 ModelRouter（新）
+write_pending   ✅ new 5
+run_end         partial        ← 步数耗尽，诚实上报
+```
+
+joinqq 现有 10 条，JD 全部是可读正文（737–1007 字，零 markup）。分类理由逐条
+对应 JD 实际内容，最能说明问题的一条：「属于售前咨询/客户成功方向，**并非技术
+研发**」——这种否定判断只有真读了 JD 才做得出来。
+
+另有针对性探针（不碰浏览器）单独验过 `classify_jobs` / `plan_buckets` 走真
+`ModelRouter` + 真 DeepSeek 的返回形状。
+
+
 ### ✅ 按站点清候选池（2026-08-21，v2.29.5）
 
 多站点候选池此前**只有一条清理路径**：`scripts/reset_multisite.py`，而它是**全站清空**
