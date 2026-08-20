@@ -2001,6 +2001,26 @@ async def reject_checkpoint1_job(job_id: int, body: dict | None = None) -> JSONR
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/checkpoint1/jobs/{job_id}/undo")
+async def undo_checkpoint1_job(job_id: int) -> JSONResponse:
+    """撤销一次批准/拒绝，改回 pending。
+
+    2026-08-20 真机事故：误批了两个岗位，approved 之后没有任何撤销入口，只能由
+    维护者直接跑 SQL 改库；而批准之后另一个按钮会把简历传进企业申请表，不可撤销。
+
+    **不需要区分"填过表没有"**：`_jobs_awaiting_fill` 已经按
+    `pending_applications.source_job_id` 排除填过表的岗位，撤销不碰那份记录，
+    重新批准也不会让它二次回到待填池子——细节见 `tracker.undo_pending_job_decision`
+    的说明。
+    """
+    _initialize_state()
+    tracker = app.state.tracker
+    if tracker.get_pending_job(job_id) is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    tracker.undo_pending_job_decision(job_id)
+    return JSONResponse({"ok": True, "job": vars(tracker.get_pending_job(job_id))})
+
+
 @app.post("/api/checkpoint1/batch")
 async def decide_checkpoint1_batch(body: dict) -> JSONResponse:
     """批量审批。一次选岗能出十几个候选，逐个点太费事。

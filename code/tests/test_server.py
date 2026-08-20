@@ -1274,6 +1274,40 @@ class TestCheckpoint1Jobs:
         assert client.post(f"/api/checkpoint1/jobs/{job_id}/reject", json={}).status_code == 409
 
 
+class TestCheckpoint1Undo:
+    """撤销批准/拒绝——2026-08-20 真机事故：误批了两个岗位，approved 之后没有
+    任何撤销入口，只能由维护者直接跑 SQL 改库。而批准之后另一个按钮会把简历
+    传进企业申请表，不可撤销，所以撤销入口本身必须存在。"""
+
+    def test_undo_approved_job(self, client):
+        job_id = _add_job()
+        client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={})
+
+        r = client.post(f"/api/checkpoint1/jobs/{job_id}/undo")
+
+        assert r.status_code == 200 and r.json()["ok"] is True
+        assert app.state.tracker.get_pending_job(job_id).status == "pending"
+
+    def test_undo_rejected_job(self, client):
+        job_id = _add_job()
+        client.post(f"/api/checkpoint1/jobs/{job_id}/reject", json={"reason": "其实是客服岗"})
+
+        r = client.post(f"/api/checkpoint1/jobs/{job_id}/undo")
+
+        assert r.status_code == 200
+        job = app.state.tracker.get_pending_job(job_id)
+        assert job.status == "pending" and job.reason is None
+
+    def test_undo_missing_job_is_404(self, client):
+        assert client.post("/api/checkpoint1/jobs/9999/undo").status_code == 404
+
+    def test_undo_already_pending_job_is_a_no_op(self, client):
+        job_id = _add_job()
+        r = client.post(f"/api/checkpoint1/jobs/{job_id}/undo")
+        assert r.status_code == 200 and r.json()["ok"] is True
+        assert app.state.tracker.get_pending_job(job_id).status == "pending"
+
+
 class TestCheckpoint1Resume:
     """审批页要能看到「批了会发哪份简历」——2026-08-20 真机事故：一个「服务运营」
     岗位批准后实际兜底发了「游戏岗版」，页面上完全看不出来，是有人事后手动跑匹配
@@ -1724,6 +1758,24 @@ class TestApproveEnqueuesFill:
         before = len(self._pending())
         assert client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={}).status_code == 409
         assert len(self._pending()) == before
+
+    def test_undo_then_reapprove_a_filled_job_never_reenters_the_fill_pool(self, client):
+        """撤销的核心正确性：撤销**不需要**区分"填过表没有"。
+
+        一个已经填过表的岗位（`pending_applications.source_job_id` 指回它）撤销后
+        重新批准，`source_job_id` 那条回指记录仍在，差集依旧把它排除——不会二次
+        把简历传进企业申请表。这条守的正是撤销设计能成立的前提。
+        """
+        job_id = _add_job()
+        client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={})
+        app.state.tracker.add_pending_application(
+            site_name="bambulab", job_title="t", fields=[], source_job_id=job_id)
+
+        client.post(f"/api/checkpoint1/jobs/{job_id}/undo")
+        client.post(f"/api/checkpoint1/jobs/{job_id}/approve", json={})
+
+        awaiting = srv._jobs_awaiting_fill("bambulab")
+        assert job_id not in [j.id for j in awaiting]
 
 
 class TestCheckpoint1BucketCounts:

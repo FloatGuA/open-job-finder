@@ -64,6 +64,47 @@ class TestDecidePendingJob:
         assert "category" not in sig.parameters
 
 
+class TestUndoPendingJobDecision:
+    """撤销审批——2026-08-20 真机事故：用户误批了两个岗位，approved 之后
+    `decide_pending_job` 的 `WHERE status='pending'` 让它改不动，只能由维护者
+    直接跑 SQL 改库。这里补上唯一的正规撤销入口。"""
+
+    def test_undo_approved_goes_back_to_pending(self, tracker):
+        job_id = _add(tracker)
+        tracker.decide_pending_job(job_id, "approved")
+
+        assert tracker.undo_pending_job_decision(job_id) == 1
+
+        job = tracker.get_pending_job(job_id)
+        assert job.status == "pending"
+
+    def test_undo_clears_reason_and_decided_at(self, tracker):
+        """留着旧值会自相矛盾：一行显示"已因 Y 被拒绝"但状态是待审。本项目在
+        状态机"回到中性状态时残留旧值"上已经栽过好几次。"""
+        job_id = _add(tracker)
+        tracker.decide_pending_job(job_id, "rejected", reason="其实是客服岗")
+
+        assert tracker.undo_pending_job_decision(job_id) == 1
+
+        job = tracker.get_pending_job(job_id)
+        assert job.status == "pending"
+        assert job.reason is None
+        assert job.decided_at is None
+
+    def test_undo_rejected_goes_back_to_pending(self, tracker):
+        job_id = _add(tracker)
+        tracker.decide_pending_job(job_id, "rejected", reason="x")
+
+        assert tracker.undo_pending_job_decision(job_id) == 1
+        assert tracker.get_pending_job(job_id).status == "pending"
+
+    def test_undo_on_already_pending_job_is_a_no_op(self, tracker):
+        # 对称于 decide_pending_job 对已决定行的 no-op。
+        job_id = _add(tracker)
+        assert tracker.undo_pending_job_decision(job_id) == 0
+        assert tracker.get_pending_job(job_id).status == "pending"
+
+
 class TestSetPendingJobReview:
     def test_correcting_the_category_never_touches_category_agent(self, tracker):
         """整个文件的重点。人把「产品」改成「运营」之后，仍然要能看出 agent

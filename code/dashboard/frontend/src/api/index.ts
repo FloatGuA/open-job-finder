@@ -1119,6 +1119,12 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason }),
     }),
+  // 撤销一次批准/拒绝，改回 pending。不区分“填过表没有”——
+  // 已经填过表的岗位本来就不在待填池子里，重新批准也不会二次传简历。
+  undoCheckpoint1Job: (id: number): Promise<{ ok: boolean }> =>
+    requestJson(`/api/checkpoint1/jobs/${id}/undo`, {
+      method: 'POST',
+    }),
   decideCheckpoint1Batch: (
     decision: 'approved' | 'rejected',
     ids: number[],

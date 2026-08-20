@@ -1394,6 +1394,33 @@ class ApplicationTracker:
             )
             return cur.rowcount
 
+    def undo_pending_job_decision(self, job_id: int) -> int:
+        """Reverse a Checkpoint 1 approve/reject back to `pending`.
+
+        2026-08-20 真机事故：用户误批了两个岗位，approved 之后 `decide_pending_job`
+        的 `WHERE status = 'pending'` 让它改不动，只能由维护者直接跑 SQL 改库。
+
+        清掉 `reason`/`decided_at`（而不是留着旧值）：留着的话这一行会显示"已于 X
+        时间因 Y 被拒绝"但状态是待审——自相矛盾。本项目在"回到中性状态时残留旧值"
+        上已经栽过好几次（见 tracker 顶部/PITFALLS 的状态机反模式）。
+
+        `WHERE status IN ('approved','rejected')` 让对已经是 pending 的行调用是
+        no-op 返回 0，与 `decide_pending_job` 对称。
+
+        **撤销不需要区分"填过表没有"**：`pending_applications.source_job_id` 的
+        回指记录不受这里影响，重新批准后 `_jobs_awaiting_fill` 的差集依旧会排除
+        已经填过表的岗位，不会二次传简历。
+        """
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                UPDATE pending_jobs SET status = 'pending', reason = NULL, decided_at = NULL
+                WHERE id = ? AND status IN ('approved', 'rejected')
+                """,
+                (job_id,),
+            )
+            return cur.rowcount
+
     def set_pending_job_review(
         self,
         job_id: int,

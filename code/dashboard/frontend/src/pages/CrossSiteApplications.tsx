@@ -93,6 +93,11 @@ const T_REJECT_REASON_PLACEHOLDER = '\u9a73\u56de\u7406\u7531\uff08\u53ef\u9009\
 const T_CONFIRM_REJECT = '\u786e\u8ba4\u9a73\u56de'
 const T_REASON_LABEL = '\u9a73\u56de\u7406\u7531'
 const T_DECIDED_AT = '\u5904\u7406\u65f6\u95f4'
+// 撤销入口——2026-08-20 真机事故：误批之后没有任何撤销入口，只能维护者直接跑
+// SQL 改库。样式刻意跟 T_C1_UNDO_GOLDEN 一样低调（文字+虚线下划线），
+// 这是纠错入口，不是主操作。
+const T_UNDO_DECISION = '\u64a4\u9500'
+const T_UNDO_DECISION_HINT = '\u64a4\u9500\u8fd9\u6b21\u5ba1\u6279\u7ed3\u679c\uff0c\u6539\u56de\u5f85\u5ba1\u6279'
 
 // ---- Checkpoint 2 ----
 const T_INTRO_A = '\u8de8\u7ad9\u70b9\u6295\u9012\u5ba1\u6279\u3002'
@@ -563,6 +568,7 @@ function JobRow({
   onCategory,
   onApprove,
   onReject,
+  onUndo,
   onGolden,
 }: {
   job: PendingJob
@@ -574,6 +580,7 @@ function JobRow({
   onCategory: (v: string) => void
   onApprove: () => void
   onReject: () => void
+  onUndo: () => void
   onGolden: (v: boolean) => void
 }) {
   const editable = job.status === 'pending'
@@ -698,7 +705,7 @@ function JobRow({
         )}
       </div>
 
-      {editable && (
+      {editable ? (
         <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
@@ -718,6 +725,17 @@ function JobRow({
             {T_REJECT}
           </button>
         </div>
+      ) : (
+        // 纠错入口，不是主操作——样式刻意跟批准/驳回拉开，只用文字+虚线下划线。
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onUndo}
+          title={T_UNDO_DECISION_HINT}
+          className="shrink-0 self-start text-[12.5px] text-text-3 underline decoration-dotted underline-offset-2 opacity-75 transition hover:text-text-1 hover:opacity-100 disabled:opacity-40"
+        >
+          {T_UNDO_DECISION}
+        </button>
       )}
     </div>
   )
@@ -829,6 +847,18 @@ function Checkpoint1() {
       refresh()
       setRejecting(null)
       setRejectReason('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 撤销不需要区分“填过表没有”——已经填过表的岗位靠 pending_applications.source_job_id
+  // 那条回指记录挡住二次入队，撤销/重批不会碰它，细节在后端 undo_pending_job_decision。
+  async function undo(id: number) {
+    setBusy(true)
+    try {
+      await API.undoCheckpoint1Job(id)
+      refresh()
     } finally {
       setBusy(false)
     }
@@ -970,6 +1000,7 @@ function Checkpoint1() {
                   onCategory={(v) => setEdited((prev) => ({ ...prev, [job.id]: v }))}
                   onApprove={() => void decide([job.id], 'approved')}
                   onReject={() => setRejecting([job.id])}
+                  onUndo={() => void undo(job.id)}
                   onGolden={(v) => void markGolden(job.id, v)}
                 />
               ))}
