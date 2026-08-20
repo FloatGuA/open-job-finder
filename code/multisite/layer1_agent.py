@@ -1249,6 +1249,15 @@ def _make_nodes(
 
         async def set_filter(option_name: str, checked: bool = True) -> str:
             ok, why = await set_filter_option(option_name, tools, checked=checked)
+            # **记的是这个选项的最终状态，不是每一次尝试。**
+            # 真机（run `m1_20260820_2028`）：设「深圳」的正常路径就是
+            # 失败→展开→失败→再展开→成功——工具的错误信息**正是把 agent 一步步
+            # 引导到成功的东西**，那两次失败是探索路径，不是问题。可摘要里却留下
+            # 两条「深圳 失败」，而抓回来的岗位 4/4 都在深圳。
+            # **谎报比不报更糟**：这个字段存在的全部意义是"哪个筛选没设上、
+            # 所以那个桶的结果不可信"，一旦会误报，人就得每次翻 agent 轨迹核对，
+            # 那还不如没有。
+            filter_failures[:] = [f for f in filter_failures if f["option"] != option_name]
             if not ok:
                 filter_failures.append({"option": option_name, "reason": why})
             return why

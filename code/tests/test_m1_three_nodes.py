@@ -457,3 +457,154 @@ class TestScanBucketsSummaryNamesTheFiltersThatFailed:
         _fn, summarize = nodes["scan_buckets"]
         data = summarize({"found_jobs": [], "truncated": False, "filter_failures": []})
         assert "filter_failures" not in data
+
+
+class TestFilterFailuresRecordTheFinalStateOnly:
+    """`filter_failures` 记的是**最终**设没设上，不是每一次尝试。
+
+    **真机（run `m1_20260820_2028`）**：agent 设「深圳」的完整轨迹是
+
+    ```
+    set_filter_option(深圳) → 找不到，先展开
+    click 工作城市 → set_filter_option(深圳) → 找不到，先展开   ← 还有第二层
+    click 中国     → set_filter_option(深圳) → 已勾上 ✅  → 542 个岗位
+    ```
+
+    工具的错误信息**正是把它一步步引导到成功的东西**——两次"失败"是正常的探索路径。
+    可摘要里却留下两条「深圳 失败」，而实际抓回来的 4 个岗位 4/4 都在深圳。
+
+    **谎报比不报更糟**：这个字段存在的全部意义是"哪个筛选没设上、所以那个桶的结果
+    不可信"。它一旦会误报，人就得每次去翻 agent 轨迹核对，那还不如没有。
+    """
+
+    def _tools(self):
+        from langchain_core.tools import StructuredTool
+
+        async def _noop(uid: str = "") -> str:
+            return ""
+
+        names = ("take_snapshot", "click", "navigate_page", "wait_for",
+                 "list_pages", "select_page", "close_page")
+        return [StructuredTool.from_function(coroutine=_noop, name=n, description=n)
+                for n in names]
+
+    def _tool_and_sink(self, monkeypatch, outcomes):
+        """`outcomes` 是 `set_filter_option` 依次返回的 (ok, why)。"""
+        import multisite.layer1_agent as mod
+
+        state = {"n": 0}
+
+        async def fake_set(option_name, tools, *, checked=True):
+            i = min(state["n"], len(outcomes) - 1)
+            state["n"] += 1
+            return outcomes[i]
+
+        monkeypatch.setattr(mod, "set_filter_option", fake_set)
+        nodes, _ = mod._make_nodes(tools=self._tools(), personal_info={},
+                                   tracker=FakeTracker(), quotas={"开发": 1})
+        return mod, nodes
+
+    def test_an_option_that_eventually_succeeds_is_not_reported(self, monkeypatch):
+        import asyncio
+
+        import multisite.layer1_agent as mod
+        captured = {}
+
+        async def fake_run_agent(agent, message, on_step=None):
+            tool = next(t for t in agent.tools if t.name == "set_filter_option")
+            for _ in range(3):
+                await tool.ainvoke({"option_name": "深圳"})
+            hv = next(t for t in agent.tools if t.name == "harvest_current_page")
+            await hv.ainvoke({"bucket": "b"})
+            return {"messages": []}
+
+        async def fake_harvest(snapshot_text, tools, manual, *, bucket, classify,
+                               sink, known_urls, limit):
+            return {"rows": 0, "collected": 0, "skipped_known": 0, "url_failed": 0,
+                    "truncated": False}
+
+        outcomes = [(False, "找不到，先展开"), (False, "找不到，先展开"), (True, "已勾上")]
+        state = {"n": 0}
+
+        async def fake_set(option_name, tools, *, checked=True):
+            i = min(state["n"], len(outcomes) - 1)
+            state["n"] += 1
+            return outcomes[i]
+
+        class _FakeAgent:
+            def __init__(self, tools):
+                self.tools = tools
+
+        monkeypatch.setattr(mod, "set_filter_option", fake_set)
+        monkeypatch.setattr(mod, "harvest_page", fake_harvest)
+        monkeypatch.setattr(mod.preferences, "render_golden_examples", lambda t: "")
+        monkeypatch.setattr(mod.agent_runtime, "build_agent",
+                            lambda tools, prompt: _FakeAgent(tools))
+        monkeypatch.setattr(mod.agent_runtime, "run_agent", fake_run_agent)
+
+        from multisite.site_manual import SiteManual
+        manual = SiteManual.from_dict({
+            "job_url_source": "new_tab_on_click", "url_template": "",
+            "pagination": "next_button", "filter_interaction": "direct_click",
+            "filters_survive_reload": False, "total_count_locator": "",
+            "row_split": "anchor_text", "row_anchor": "x", "dimensions": [],
+            "important_notes": ""})
+        nodes, _ = mod._make_nodes(tools=self._tools(), personal_info={},
+                                   tracker=FakeTracker(), quotas={"开发": 1})
+        out = asyncio.run(nodes["scan_buckets"][0]({
+            "manual": manual,
+            "bucket_plan": [{"dimension": "d", "option": "o", "why": "", "targets": ["开发"]}],
+            "site_name": "s", "search_url": "https://x/s"}))
+
+        assert out["filter_failures"] == [], \
+            f"深圳最后设上了，不该出现在失败清单里：{out['filter_failures']}"
+
+    def test_an_option_that_never_succeeds_is_reported(self, monkeypatch):
+        """真的没设上就必须报——这个字段存在的理由就是它。"""
+        import asyncio
+
+        import multisite.layer1_agent as mod
+
+        async def fake_set(option_name, tools, *, checked=True):
+            return False, "找不到，先展开"
+
+        async def fake_harvest(snapshot_text, tools, manual, *, bucket, classify,
+                               sink, known_urls, limit):
+            return {"rows": 0, "collected": 0, "skipped_known": 0, "url_failed": 0,
+                    "truncated": False}
+
+        async def fake_run_agent(agent, message, on_step=None):
+            tool = next(t for t in agent.tools if t.name == "set_filter_option")
+            await tool.ainvoke({"option_name": "深圳"})
+            await tool.ainvoke({"option_name": "深圳"})
+            hv = next(t for t in agent.tools if t.name == "harvest_current_page")
+            await hv.ainvoke({"bucket": "b"})
+            return {"messages": []}
+
+        class _FakeAgent:
+            def __init__(self, tools):
+                self.tools = tools
+
+        monkeypatch.setattr(mod, "set_filter_option", fake_set)
+        monkeypatch.setattr(mod, "harvest_page", fake_harvest)
+        monkeypatch.setattr(mod.preferences, "render_golden_examples", lambda t: "")
+        monkeypatch.setattr(mod.agent_runtime, "build_agent",
+                            lambda tools, prompt: _FakeAgent(tools))
+        monkeypatch.setattr(mod.agent_runtime, "run_agent", fake_run_agent)
+
+        from multisite.site_manual import SiteManual
+        manual = SiteManual.from_dict({
+            "job_url_source": "new_tab_on_click", "url_template": "",
+            "pagination": "next_button", "filter_interaction": "direct_click",
+            "filters_survive_reload": False, "total_count_locator": "",
+            "row_split": "anchor_text", "row_anchor": "x", "dimensions": [],
+            "important_notes": ""})
+        nodes, _ = mod._make_nodes(tools=self._tools(), personal_info={},
+                                   tracker=FakeTracker(), quotas={"开发": 1})
+        out = asyncio.run(nodes["scan_buckets"][0]({
+            "manual": manual,
+            "bucket_plan": [{"dimension": "d", "option": "o", "why": "", "targets": ["开发"]}],
+            "site_name": "s", "search_url": "https://x/s"}))
+
+        assert len(out["filter_failures"]) == 1, out["filter_failures"]
+        assert out["filter_failures"][0]["option"] == "深圳"
