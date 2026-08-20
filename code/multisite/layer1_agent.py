@@ -60,6 +60,7 @@ from multisite import agent_runtime, chrome_mcp_client, preferences, safe_tools
 from multisite.bucket_plan import plan_buckets as compute_bucket_plan
 from multisite.classify import classify_jobs
 from multisite.executors import validate_manual
+from multisite.executors import set_filter_option
 from multisite.harvest import harvest_page
 from multisite.observability import agent_step_sink, run_scope, traced_stage
 from multisite.personal_info_loader import load_candidates, load_personal_info, match_value
@@ -1241,6 +1242,30 @@ def _make_nodes(
         _latest_snapshot["text"] = text
         return text
 
+    def _make_set_filter_tool(filter_failures: list):
+        """勾筛选选项的工具。`filter_failures` 收下每一次失败，用来在阶段摘要里
+        说清楚"哪个筛选没设上"——**不靠 agent 自己记得汇报**（它常常不报）。"""
+        from langchain_core.tools import StructuredTool
+
+        async def set_filter(option_name: str, checked: bool = True) -> str:
+            ok, why = await set_filter_option(option_name, tools, checked=checked)
+            if not ok:
+                filter_failures.append({"option": option_name, "reason": why})
+            return why
+
+        return StructuredTool.from_function(
+            coroutine=set_filter,
+            name="set_filter_option",
+            description=(
+                "勾上（或取消）一个筛选选项，比如某个城市、某个招聘项目。"
+                "**筛选选项一律用这个工具，不要用 click**——很多站点的复选框把真正的 "
+                "input 藏成 0×0 的隐藏元素，直接点那个节点永远会超时，"
+                "换多少次重试都一样。这个工具会替你点到正确的位置，并**回读确认真的设上了**。"
+                "option_name 填选项上显示的文字（比如「深圳」）。"
+                "找不到那个选项时它会告诉你——多半是所在分组还收着，先点分组标题展开。"
+            ),
+        )
+
     def _agent_tools(passthrough: tuple) -> list:
         return build_agent_toolset(
             tools,
@@ -1361,6 +1386,9 @@ def _make_nodes(
         sink: dict = {}
         tools_for_agent = [
             *_agent_tools(_PASSTHROUGH_FIND_JOBS),
+            # 勘察阶段就要试探筛选器（多选还是互斥只能靠"勾一个、回读总数"判定），
+            # 所以这里也得有它——否则 agent 会拿 click 去点隐藏的 checkbox。
+            _make_set_filter_tool([]),
             make_record_site_manual_tool(sink),
         ]
         agent = agent_runtime.build_agent(tools_for_agent, prompt)
@@ -1434,6 +1462,10 @@ def _make_nodes(
         # 诚实的成功；一次都没抓则是 agent 压根没干这个活。两者不能长成一个样子。
         # 用调用次数而不是 len(raw_sink)：后者在"抓了但一条都没新收"时也是 0。
         harvest_calls = {"n": 0}
+        # 设不上的筛选选项。**记下来放进阶段摘要**：某个桶没扫成，
+        # 原因要写在明面上，而不是让人从"这一类怎么一个岗位都没有"
+        # 反推。agent 自己常常不报，所以由工具层收集。
+        filter_failures: list[dict] = []
         # 库里已经收录过的岗位不该重复抓；每次 harvest_current_page 调用后会把
         # 新记的 url 并入这个集合，防止同一岗位在本轮里被跨页/跨桶重复收录。
         known_urls = {j.url for j in tracker.get_pending_jobs()}
@@ -1505,6 +1537,7 @@ def _make_nodes(
 
         tools_for_agent = [
             *_agent_tools(_PASSTHROUGH_FIND_JOBS),
+            _make_set_filter_tool(filter_failures),
             _harvest_current_page_tool(),
             make_record_site_limit_tool(tracker, site_name),
             make_record_site_brief_tool(tracker, site_name),
@@ -1550,7 +1583,8 @@ def _make_nodes(
                 + "常见原因：筛选器点不动，agent 全程卡在切桶上。"
                   "run 日志的 agent_step 里能看到它到底在点什么。")
 
-        return {"found_jobs": _harvest_items_to_found_jobs(raw_sink), "truncated": truncated}
+        return {"found_jobs": _harvest_items_to_found_jobs(raw_sink),
+                "truncated": truncated, "filter_failures": filter_failures}
 
     async def write_pending_jobs(state: Layer1State) -> dict:
         """Checkpoint 1：把候选岗位落库，然后**结束这次 run**。
@@ -1680,9 +1714,7 @@ def _make_nodes(
         "plan_buckets": (plan_buckets,
                         lambda out: {"buckets": len(out.get("bucket_plan") or [])}),
         "scan_buckets": (scan_buckets,
-                        lambda out: {"found": len(out.get("found_jobs") or []),
-                                     "by_category": dict(Counter(j.category for j in
-                                                                 (out.get("found_jobs") or [])))}),
+                        _summarize_scan_buckets),
         "write_pending_jobs": (write_pending_jobs,
                                lambda out: {"new": len(out.get("pending_job_ids") or [])}),
         "open_application": (open_application,
@@ -1724,6 +1756,25 @@ def _stages_for(nodes: dict, stage_order: tuple) -> list:
     不上"，得靠人再往回查一层。
     """
     return [(name, *nodes.get(name, (None, None))) for name in stage_order]
+
+
+def _summarize_scan_buckets(out: dict) -> dict:
+    """`scan_buckets` 的阶段摘要。
+
+    **设不上的筛选选项要出现在这里**：地点筛选没设上，那个桶要么没扫、要么扫回来
+    一堆外地岗位，而摘要上只有 `found: N`——人得从"这一类怎么一个岗位都没有"反推。
+    agent 自己常常不报（它写完总结就结束），所以由工具层收集、在这里输出。
+
+    **没失败就不放这个键**：每个阶段的 data 都会进 run 日志和前端，常驻一个空字段
+    只会让"有没有出问题"变得要多看一眼。
+    """
+    jobs = out.get("found_jobs") or []
+    data = {"found": len(jobs),
+            "by_category": dict(Counter(j.category for j in jobs))}
+    failures = out.get("filter_failures") or []
+    if failures:
+        data["filter_failures"] = failures
+    return data
 
 
 def build_select_graph(

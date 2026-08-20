@@ -917,3 +917,69 @@ agent 照样写了总结就结束。**结构问题只能用结构解决。**
 前几次：W3 verify 撞历史气泡假阳性、`upload_resume_file` 点完确定就报成功。
 这次是**取到了快照 ≠ 取到了内容**。同一个形状：**拿到一个"看起来是那个东西"的
 返回值，就当事情成了。**
+
+## a11y 树里的 `checkbox` 节点点不动：真正的 input 被藏成 0×0 透明元素
+
+**现象**：agent 反复点某个筛选选项，每次都是
+`Error: Failed to interact with the element ... did not become interactive within
+the configured timeout`。换 uid、先展开分组、重试——**全都没用**。
+它把一整轮的步数预算耗在这上面，最后写段总结就结束了。
+
+**根因**（2026-08-21 真机 join.qq.com，`evaluate_script` 查 DOM 得到）：
+
+```json
+{"tag":"INPUT","type":"checkbox","w":0,"h":0,"opacity":"0",
+ "position":"absolute","parentClass":"el-checkbox__input"}
+```
+
+祖先链：
+
+```
+INPUT.el-checkbox__original  0x0     ← a11y 树把它暴露成 checkbox 节点
+  └ SPAN.el-checkbox__input  16x18
+    └ LABEL.el-checkbox      178x40  ← 真正的点击区
+```
+
+Element UI 把真 `<input>` 藏成 0×0、`opacity:0`，可见的是旁边那个样式化 span。
+Puppeteer 的 click 会等元素"可交互"（可见、有尺寸）——**这个目标永远等不到**。
+`fill_form` 也一样失败（同一套可交互性检查）。
+
+**正确目标是紧跟其后的同名 `StaticText`**（它对应外层 LABEL）：
+
+```
+uid=3_0 checkbox "深圳"      ← 点这个：永远超时
+uid=3_1 StaticText "深圳"    ← 点这个：943 → 542，checked 立刻出现
+```
+
+**这是 Element UI / Ant Design 这类组件库的通用形态，不是某个站特有的。**
+已收进 `executors.set_filter_option`（点 label + 回读 `checked` 确认），
+agent 侧的 `set_filter_option` 工具是唯一入口，prompt 明确禁止用 `click` 点筛选选项。
+
+---
+
+### 三条连带发现
+
+**① 验证要看 `checked`，不能看岗位总数——总数是滞后的。**
+实测勾上第二个城市后总数纹丝不动（542→542），而 `checked` 立刻就有了。
+拿滞后的量做判据会把成功误报成失败。
+
+**② 点 `StaticText` 会返回 "Successfully clicked on the element" 而筛选没生效过。**
+又一次「动作做没做 ≠ 结果发生没发生」——所以 `set_filter_option` 必须回读，
+不能拿工具返回值当结论。
+
+**③ 收起状态下选项根本不是节点。**
+`tab "工作城市" description="中国 深圳 北京 …"` ——所有城市只存在于 `description`
+字符串里。**而且分组是嵌套的**：工作城市 → 中国 → 深圳，要展开两层。
+只展开一层就去找「深圳」，找到的是 description 里的字，不是可点的节点。
+
+---
+
+### 方法论：agent 反复撞同一堵墙时，去查 DOM，别调 prompt
+
+这次 agent 的行为**完全合理**——它按 prompt 说的"点不动多半是分组收起了，
+先展开再点"做了，展开了，还是不行，于是重试、换目标、最后放弃。
+**问题不在它的判断，在于我们给的目标从物理上就点不动。**
+
+判据：**同一个操作换了几种方式都失败，而错误信息始终一样** → 不是策略问题，
+是目标选错了。这时候花五分钟用 `evaluate_script` 查一次 DOM，
+比改十遍 prompt 有用。

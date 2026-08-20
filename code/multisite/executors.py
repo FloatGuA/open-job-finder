@@ -386,6 +386,76 @@ async def job_url_online(row: JobRow, tools, manual: SiteManual) -> tuple[str, s
     return url, detail
 
 
+async def set_filter_option(option_name: str, tools, *, checked: bool = True
+                            ) -> tuple[bool, str]:
+    """勾上（或取消）一个筛选选项。返回 `(成功没有, 人看得懂的原因)`。
+
+    **为什么不能直接 click 那个 checkbox 节点**（真机根因，2026-08-21 join.qq.com）：
+    组件库把真正的 `<input type=checkbox>` 藏成 0×0、`opacity:0` 的元素，
+    a11y 树照样把它暴露成 `checkbox` 节点，而 Puppeteer 的 click 会等元素
+    "可交互"——**必然超时**，重试多少次都一样：
+
+    ```
+    INPUT.el-checkbox__original  0x0     ← a11y 树里的 checkbox 节点
+      └ SPAN.el-checkbox__input  16x18
+        └ LABEL.el-checkbox      178x40  ← 真正的点击区
+    ```
+
+    可见的点击区在外层 LABEL 上，而 a11y 树把标签文字暴露成**紧跟其后的同名
+    `StaticText` 兄弟节点**。点它就等于点 LABEL。Element UI / Ant Design 这类
+    组件库都是这个形态，**不是某个站特有的**，所以放执行器：写一次全站通用。
+
+    **必须回读 `checked` 确认**：点 StaticText 会老老实实返回
+    "Successfully clicked on the element"，而筛选可能根本没生效——又是"动作做没做
+    ≠ 结果发生没发生"。**判据只能是 `checked`，不能是岗位总数**：实测总数是滞后的
+    （勾上第二个城市后总数纹丝不动，但 `checked` 立刻就有），拿它做判据会误报失败。
+
+    **同名选项多于一个时诚实失败**：「工作城市」和「面试地点」都可能有"深圳"，
+    两个分组同时展开就分不清是哪个。猜错等于设错筛选，而且完全看不出来——
+    让 agent 先收起另一个分组，比赌一把强。
+    """
+    snapshot = _flat(await get_tool(tools, "take_snapshot").ainvoke({}))
+    lines = snapshot.splitlines()
+
+    hits = [i for i, l in enumerate(lines)
+            if _NODE_RE.search(l) and f'checkbox "{option_name}"' in l]
+    if not hits:
+        return False, (f"当前页面上找不到名为「{option_name}」的选项。"
+                       "多半是它所在的分组还收着——先点分组标题把它展开。")
+    if len(hits) > 1:
+        return False, (f"页面上有 {len(hits)} 个都叫「{option_name}」的选项（不同分组里"
+                       "常有重名，比如工作城市和面试地点）。先把用不到的那个分组收起来，"
+                       "再来设这一个。")
+
+    idx = hits[0]
+    if ("checked" in lines[idx]) == checked:
+        return True, f"「{option_name}」本来就是{'勾上' if checked else '没勾'}的状态，没有动它。"
+
+    # 紧跟其后的同名 StaticText 就是那个可见的标签；没有就退回点 checkbox 本身
+    # （普通的 `<input type=checkbox>` 站点本来就可点，a11y 树里也不会有这个兄弟）。
+    target = _NODE_RE.search(lines[idx]).group("uid")
+    what = "checkbox"
+    if idx + 1 < len(lines):
+        nxt = _NODE_RE.search(lines[idx + 1])
+        if nxt and (nxt.group("name") or "") == option_name and nxt.group("role") == "StaticText":
+            target = nxt.group("uid")
+            what = "label"
+
+    result = _flat(await get_tool(tools, "click").ainvoke({"uid": target}))
+    if "Error" in result:
+        return False, f"点「{option_name}」的{what}（uid={target}）失败：{result[:160]}"
+
+    after = _flat(await get_tool(tools, "take_snapshot").ainvoke({}))
+    now = [l for l in after.splitlines()
+           if _NODE_RE.search(l) and f'checkbox "{option_name}"' in l]
+    if not now:
+        return False, f"点完之后「{option_name}」这个选项从页面上消失了，状态不明。"
+    if ("checked" in now[0]) != checked:
+        return False, (f"点了「{option_name}」的{what}，但回读它的 checked 状态没有变成"
+                       f"{'勾上' if checked else '取消'}——这一下没真的生效。")
+    return True, f"「{option_name}」已{'勾上' if checked else '取消'}（点的是{what}，回读确认过）。"
+
+
 async def validate_manual(snapshot_text: str, tools, manual: SiteManual) -> tuple[bool, str]:
     """旧手册还成不成立。返回 `(过了没有, 人看得懂的原因)`。
 

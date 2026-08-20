@@ -417,3 +417,43 @@ class TestNodesHandTheirRouterToThePlainLlmCalls:
         asyncio.run(nodes["plan_buckets"][0]({"manual": self._manual()}))
 
         assert captured["router"] is sentinel
+
+
+class TestScanBucketsSummaryNamesTheFiltersThatFailed:
+    """设不上的筛选选项要出现在阶段摘要里。
+
+    **不然它是隐形的**：地点筛选没设上 → 那个桶要么没扫、要么扫回来一堆外地岗位，
+    而摘要上只有 `found: N`，人得从"这类怎么一个岗位都没有"反推。
+    **agent 自己常常不报**（它写完总结就结束了），所以由工具层收集、由摘要输出。
+    """
+
+    def _tools(self):
+        from langchain_core.tools import StructuredTool
+
+        async def _noop(uid: str = "") -> str:
+            return ""
+
+        names = ("take_snapshot", "click", "navigate_page", "wait_for",
+                 "list_pages", "select_page", "close_page")
+        return [StructuredTool.from_function(coroutine=_noop, name=n, description=n)
+                for n in names]
+
+    def test_summary_carries_filter_failures(self):
+        import multisite.layer1_agent as mod
+        nodes, _ = mod._make_nodes(tools=self._tools(), personal_info={},
+                                   tracker=FakeTracker(), quotas={"开发": 1})
+        _fn, summarize = nodes["scan_buckets"]
+        out = {"found_jobs": [], "truncated": False,
+               "filter_failures": [{"option": "深圳", "reason": "找不到那个选项"}]}
+        data = summarize(out)
+        assert data["filter_failures"] == [{"option": "深圳", "reason": "找不到那个选项"}]
+
+    def test_no_failures_means_the_key_is_absent(self):
+        """没失败就别塞一个空列表进摘要——每个阶段的 data 都会进 run 日志和前端，
+        常驻一个空字段只会让"有没有出问题"变得要多看一眼。"""
+        import multisite.layer1_agent as mod
+        nodes, _ = mod._make_nodes(tools=self._tools(), personal_info={},
+                                   tracker=FakeTracker(), quotas={"开发": 1})
+        _fn, summarize = nodes["scan_buckets"]
+        data = summarize({"found_jobs": [], "truncated": False, "filter_failures": []})
+        assert "filter_failures" not in data
