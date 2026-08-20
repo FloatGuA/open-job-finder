@@ -23,12 +23,20 @@ import asyncio
 
 import pytest
 from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 
 from multisite.executors import set_filter_option
 
 
 def _run(c):
     return asyncio.run(c)
+
+
+class _EvalArgs(BaseModel):
+    """跟 chrome-devtools-mcp 的 `evaluate_script` 声明一致：`function` + `args`。"""
+
+    function: str
+    args: list = Field(default_factory=list)
 
 
 BEFORE = ('## Latest page snapshot\n'
@@ -40,7 +48,7 @@ BEFORE = ('## Latest page snapshot\n'
 AFTER = BEFORE.replace('uid=3_0 checkbox "深圳"', 'uid=3_0 checkbox "深圳" checked')
 
 
-def _tools(snapshots, click_result="Successfully clicked on the element"):
+def _tools(snapshots, click_result="Script ran on page and returned:\n```json\n\"label\"\n```"):
     """`take_snapshot` 依次返回 snapshots，用完停在最后一张。"""
     calls = []
     state = {"n": 0}
@@ -50,23 +58,36 @@ def _tools(snapshots, click_result="Successfully clicked on the element"):
         state["n"] += 1
         return snapshots[i]
 
+    async def evaluate_script(**kw):
+        calls.append(("js", (kw.get("args") or [None])[0]))
+        return click_result
+
     async def click(uid: str):
         calls.append(("click", uid))
-        return click_result
+        return "Successfully clicked on the element"
 
     tools = [StructuredTool.from_function(coroutine=f, name=n, description=n)
              for f, n in ((take_snapshot, "take_snapshot"), (click, "click"))]
+    # **显式给 schema**：真实 `evaluate_script` 的参数名是 `function` / `args`
+    # （核对过 chrome-devtools-mcp 的声明）。让 StructuredTool 从函数签名推断的话，
+    # pydantic 会把名为 `args` 的字段改写成 `v__args`，假替身就跟真工具对不上了
+    # ——那正是 `pageIdx` 那次踩过的坑：假工具和生产代码互相印证，只有真实世界不同意。
+    tools.append(StructuredTool(
+        name="evaluate_script", description="evaluate_script",
+        args_schema=_EvalArgs, coroutine=evaluate_script))
     return tools, calls
 
 
 class TestSetFilterOption:
-    def test_clicks_the_label_not_the_hidden_checkbox(self):
-        """点 `checkbox` 节点永远超时（0×0 隐藏 input）。必须点紧跟其后的同名
-        `StaticText`——那才对应可见的 LABEL。"""
+    def test_clicks_the_enclosing_label_via_script(self):
+        """`click` 那个 checkbox 节点永远超时（0×0 隐藏 input）。改用
+        `evaluate_script` 点它的 `<label>` 祖先——**一条路径同时覆盖两种形态**
+        （叶子选项和分组标题，见 `TestGroupHeaderCheckbox`）。"""
         tools, calls = _tools([BEFORE, AFTER])
         ok, why = _run(set_filter_option("深圳", tools))
         assert ok, why
-        assert calls == [("click", "3_1")], f"点错了目标：{calls}"
+        assert calls == [("js", "3_0")], f"点错了目标或用错了工具：{calls}"
+        assert not any(c[0] == "click" for c in calls), "不能用 click 点隐藏的 checkbox"
 
     def test_confirms_by_reading_back_checked(self):
         """点完报 OK 不等于设上了——真机上点 StaticText 会返回
@@ -87,7 +108,7 @@ class TestSetFilterOption:
         tools, calls = _tools([AFTER, BEFORE])
         ok, _ = _run(set_filter_option("深圳", tools, checked=False))
         assert ok
-        assert calls == [("click", "3_1")]
+        assert calls == [("js", "3_0")]
 
     def test_missing_option_says_so(self):
         tools, calls = _tools([BEFORE])
@@ -107,9 +128,10 @@ class TestSetFilterOption:
         assert "深圳" in why
         assert calls == []
 
-    def test_falls_back_to_the_checkbox_when_there_is_no_label_sibling(self):
-        """不是所有站都用组件库——普通的 `<input type=checkbox>` 本身就可点，
-        a11y 树里也不会有那个同名 StaticText 兄弟。这时点 checkbox 本身。"""
+    def test_a_plain_checkbox_with_no_label_still_works(self):
+        """不是所有站都用组件库。普通的 `<input type=checkbox>` 没有 `<label>`
+        祖先，脚本里 `closest('label')` 返回 null 就点元素自己——**同一段脚本，
+        不是第二条代码路径**。"""
         plain = ('## Latest page snapshot\n'
                  '  uid=3_0 checkbox "深圳"\n'
                  '  uid=3_2 checkbox "北京"\n')
@@ -118,15 +140,66 @@ class TestSetFilterOption:
         tools, calls = _tools([plain, plain_after])
         ok, why = _run(set_filter_option("深圳", tools))
         assert ok, why
-        assert calls == [("click", "3_0")]
+        assert calls == [("js", "3_0")]
 
     def test_a_click_error_is_reported_not_swallowed(self):
         """chrome-devtools-mcp 把执行错误当正常内容返回（isError=False），
         不是异常路径——不显式检查就会当成点成功了。"""
         tools, _ = _tools(
             [BEFORE, BEFORE],
-            click_result="Error: Failed to interact with the element with uid 3_1. "
-                         "The element did not become interactive within the configured timeout.")
+            click_result="Error: Cannot read properties of null (reading 'click')")
         ok, why = _run(set_filter_option("深圳", tools))
         assert not ok
-        assert "interactive" in why or "Error" in why
+        assert "Error" in why
+
+
+class TestGroupHeaderCheckbox:
+    """**分组标题上也有 checkbox，而它没有同名 `StaticText` 兄弟。**
+
+    真机（join.qq.com「岗位类别」展开后）：
+
+    ```
+    uid=2_3 tab "技术" description="软件开发类 技术运营类 …"
+      uid=2_4 button "技术"        ← 点它是**展开分组**，不是勾选
+        uid=2_5 checkbox "技术"    ← 0×0 隐藏 input
+    ```
+
+    祖先链跟叶子选项同构（`LABEL.el-checkbox` 52×48 可点），但 a11y 树里
+    **没有可点的同名节点**。第一版按"找紧跟其后的同名 StaticText，找不到就点
+    checkbox 本身"写，对这种形态**必然超时**——真机 `filter_failures` 里
+    「技术」就是这么失败的，整轮 `found: 0`。
+
+    改用 `evaluate_script` 点 `closest('label')` 之后，一条路径同时覆盖两种形态：
+    实测分组标题「技术」943→152、叶子「深圳」152→99，两个都 `checked=True`。
+    """
+
+    SNAP = ('## Latest page snapshot\n'
+            '  uid=2_3 tab "技术" description="软件开发类 技术运营类"\n'
+            '    uid=2_4 button "技术"\n'
+            '      uid=2_5 checkbox "技术"\n')
+    SNAP_ON = SNAP.replace('uid=2_5 checkbox "技术"', 'uid=2_5 checkbox "技术" checked')
+
+    def test_it_sets_a_group_header_checkbox(self):
+        tools, calls = _tools([self.SNAP, self.SNAP_ON])
+        ok, why = _run(set_filter_option("技术", tools))
+        assert ok, why
+        assert calls == [("js", "2_5")]
+
+    def test_the_script_targets_the_label_ancestor(self):
+        """**脚本体的行为是真机验的，不是单测验的**——脚本在浏览器里执行，
+        单测观测不到它选中了哪个元素（把 `closest('label')` 换成 `null` 时
+        本文件一条都不会红）。真机证据：分组标题「技术」943→152、
+        叶子「深圳」152→99，两个都 `checked=True`。
+
+        这条只做一件事：**防止那段脚本被无声改掉**。字符串断言很弱，
+        但它把一个"结构上观测不到"的变异变成了观测得到的。
+        """
+        from multisite.executors import _CLICK_LABEL_JS
+        assert "closest('label')" in _CLICK_LABEL_JS
+
+    def test_it_never_clicks_the_group_button(self):
+        """点 `button "技术"` 是**展开分组**，不是勾选——点错了会让"设上了没"
+        的判断彻底错位（展开成功、筛选没设，而两者都不报错）。"""
+        tools, calls = _tools([self.SNAP, self.SNAP_ON])
+        _run(set_filter_option("技术", tools))
+        assert ("js", "2_4") not in calls and ("click", "2_4") not in calls

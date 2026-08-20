@@ -386,6 +386,15 @@ async def job_url_online(row: JobRow, tools, manual: SiteManual) -> tuple[str, s
     return url, detail
 
 
+# 勾选筛选框用的脚本：点这个 checkbox 的 `<label>` 祖先。
+# **组件库（Element UI / Ant Design 等）把真正的 `<input>` 藏成 0×0、opacity:0 的
+# 元素**，`click` 工具会等它"可交互"，必然超时。可见的点击区在外层 LABEL 上。
+# 没有 `<label>` 祖先的（普通 `<input type=checkbox>` 站点）就点元素自己——
+# **同一段脚本里的一个 `??`，不是第二条代码路径**。
+_CLICK_LABEL_JS = ("(el) => { const lab = el.closest('label'); (lab || el).click(); "
+                   "return lab ? 'label' : 'element'; }")
+
+
 async def set_filter_option(option_name: str, tools, *, checked: bool = True
                             ) -> tuple[bool, str]:
     """勾上（或取消）一个筛选选项。返回 `(成功没有, 人看得懂的原因)`。
@@ -401,9 +410,16 @@ async def set_filter_option(option_name: str, tools, *, checked: bool = True
         └ LABEL.el-checkbox      178x40  ← 真正的点击区
     ```
 
-    可见的点击区在外层 LABEL 上，而 a11y 树把标签文字暴露成**紧跟其后的同名
-    `StaticText` 兄弟节点**。点它就等于点 LABEL。Element UI / Ant Design 这类
-    组件库都是这个形态，**不是某个站特有的**，所以放执行器：写一次全站通用。
+    可见的点击区在外层 `LABEL` 上，所以用 `evaluate_script` 点 `closest('label')`。
+    Element UI / Ant Design 这类组件库都是这个形态，**不是某个站特有的**，
+    所以放执行器：写一次全站通用。
+
+    **一条路径覆盖两种形态**：叶子选项（checkbox 旁边有同名 StaticText）和
+    分组标题（`tab "技术" > button "技术" > checkbox "技术"`，a11y 树里**没有**
+    可点的同名节点）。第一版按"找同名 StaticText 兄弟，找不到就点 checkbox"写，
+    对分组标题必然超时——真机 `filter_failures` 里「技术」就是这么失败的，
+    整轮 `found: 0`。实测改用脚本之后：分组标题「技术」943→152、叶子「深圳」
+    152→99，两个都 `checked=True`。
 
     **必须回读 `checked` 确认**：点 StaticText 会老老实实返回
     "Successfully clicked on the element"，而筛选可能根本没生效——又是"动作做没做
@@ -431,19 +447,11 @@ async def set_filter_option(option_name: str, tools, *, checked: bool = True
     if ("checked" in lines[idx]) == checked:
         return True, f"「{option_name}」本来就是{'勾上' if checked else '没勾'}的状态，没有动它。"
 
-    # 紧跟其后的同名 StaticText 就是那个可见的标签；没有就退回点 checkbox 本身
-    # （普通的 `<input type=checkbox>` 站点本来就可点，a11y 树里也不会有这个兄弟）。
     target = _NODE_RE.search(lines[idx]).group("uid")
-    what = "checkbox"
-    if idx + 1 < len(lines):
-        nxt = _NODE_RE.search(lines[idx + 1])
-        if nxt and (nxt.group("name") or "") == option_name and nxt.group("role") == "StaticText":
-            target = nxt.group("uid")
-            what = "label"
-
-    result = _flat(await get_tool(tools, "click").ainvoke({"uid": target}))
+    result = _flat(await get_tool(tools, "evaluate_script").ainvoke(
+        {"function": _CLICK_LABEL_JS, "args": [target]}))
     if "Error" in result:
-        return False, f"点「{option_name}」的{what}（uid={target}）失败：{result[:160]}"
+        return False, f"勾「{option_name}」（uid={target}）失败：{result[:160]}"
 
     after = _flat(await get_tool(tools, "take_snapshot").ainvoke({}))
     now = [l for l in after.splitlines()
@@ -451,9 +459,9 @@ async def set_filter_option(option_name: str, tools, *, checked: bool = True
     if not now:
         return False, f"点完之后「{option_name}」这个选项从页面上消失了，状态不明。"
     if ("checked" in now[0]) != checked:
-        return False, (f"点了「{option_name}」的{what}，但回读它的 checked 状态没有变成"
+        return False, (f"勾了「{option_name}」，但回读它的 checked 状态没有变成"
                        f"{'勾上' if checked else '取消'}——这一下没真的生效。")
-    return True, f"「{option_name}」已{'勾上' if checked else '取消'}（点的是{what}，回读确认过）。"
+    return True, f"「{option_name}」已{'勾上' if checked else '取消'}（回读确认过）。"
 
 
 async def validate_manual(snapshot_text: str, tools, manual: SiteManual) -> tuple[bool, str]:
