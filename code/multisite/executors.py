@@ -211,24 +211,23 @@ def _flat(result) -> str:
     return str(result)
 
 
-async def job_url_online(row: JobRow, tools, manual: SiteManual) -> str | None:
-    """点开卡片、从新标签页读 URL、关掉。取不到返回 None。
+async def job_url_online(row: JobRow, tools, manual: SiteManual) -> tuple[str, str] | None:
+    """点开卡片、从新标签页读 URL **和 JD 快照**、关掉。取不到仍返回 None。
+
+    返回 `(url, detail_snapshot)`：`detail_snapshot` 是切到新标签页**之后**读到的
+    快照文本，即详情页正文，不是列表页——spec §5.1 的成本论证就建立在"取 URL 和取
+    JD 是同一次访问"上：这个站本来就必须点开详情页才能拿到 URL，既然已经在这一页
+    上了，顺手读走快照近乎免费；分成两次访问会让 run 时长翻倍（每个岗位 ≈8 秒 →
+    ≈16 秒）。
 
     **拿完必须关**：不关的话标签页越积越多，`list_pages` 里"哪个是刚开的"就判不准了，
     第 11 个岗位会拿到第 3 个岗位的 URL——而这种错完全不会报错，只会让库里躺着
-    一批指错地方的记录。
+    一批指错地方的记录。读快照这一步插在 `close_page` 之前，不改变这条约束。
 
     **异常安全性**：本函数不吞异常（fail fast）。如果 `close_page` 本身调用失败，
     异常会原样上抛，新开的那个标签页**不会**被关闭。计划 B 的 harvest 循环会连续
     调用本函数几十次，这种残留会累积，并让后续调用里"哪个是刚开的"判定失准——
     调用方需要知晓这一点（例如捕获异常时考虑是否需要额外清理）。
-
-    **只取 URL，不读 JD**——拿到 URL 就立刻 `close_page`。spec §5.1 的成本论证建立在
-    "在 new_tab_on_click 类站点上，取 URL 和取 JD 是同一次访问"上（本来就要点开详情页
-    才能拿到 URL，顺手读 JD 近乎免费），但**这个函数目前没有兑现那半句"顺手"**——
-    详情页开了又关，JD 正文从没被读过。这不是本次改动要修的东西：计划 B 的
-    `harvest_current_page` 才是唯一的消费方，且它还没写；届时改这里的签名（多返回一段
-    JD 文本）比现在猜一个还没有调用方验证过的形状更划算。
 
     **用索引集合而不是 URL 集合做"新开的是哪一页"的判定**（见下方实现）：`list_pages`
     出错时 chrome-devtools-mcp 会把错误文本当正常内容返回（`isError=False`，
@@ -264,8 +263,14 @@ async def job_url_online(row: JobRow, tools, manual: SiteManual) -> str | None:
         # 当成岗位 URL**。
         return None
     idx, url = fresh[0]
+    # **在同一次访问里把详情页快照也读走**（spec §5.1）：这个站本来就必须点开才能
+    # 拿到 URL，既然已经在这一页上，读快照近乎免费。分成两次访问会让 run 时长翻倍。
+    # 必须先 select_page 切过去再 take_snapshot——不切的话读到的是列表页快照，
+    # 每个岗位拿到一样的 JD，而这个错不会报错、不崩溃，分类照跑不误。
+    await get_tool(tools, "select_page").ainvoke({"pageIdx": idx})
+    detail = _flat(await get_tool(tools, "take_snapshot").ainvoke({}))
     await get_tool(tools, "close_page").ainvoke({"pageIdx": idx})
-    return url
+    return url, detail
 
 
 async def validate_manual(snapshot_text: str, tools, manual: SiteManual) -> tuple[bool, str]:
@@ -314,7 +319,8 @@ async def validate_manual(snapshot_text: str, tools, manual: SiteManual) -> tupl
     if not rows:
         return False, f"按 row_anchor={manual.row_anchor!r} 一行都切不出来"
     if manual.job_url_source == "new_tab_on_click":
-        url = await job_url_online(rows[0], tools, manual)
+        got = await job_url_online(rows[0], tools, manual)
+        url = got[0] if got is not None else None
     else:
         url = job_url_offline(rows[0], snapshot_text, manual)
     if not (url or "").startswith("http"):

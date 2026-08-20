@@ -40,6 +40,14 @@ def _tools(pages_after_click=PAGES_TWO):
         calls.append(("list_pages", None))
         return state["pages"]
 
+    async def select_page(pageIdx: int):
+        calls.append(("select_page", pageIdx))
+        return f"Selected page {pageIdx}"
+
+    async def take_snapshot():
+        calls.append(("take_snapshot", None))
+        return "DETAIL-SNAPSHOT: 岗位详情正文"
+
     async def close_page(pageIdx: int):
         calls.append(("close_page", pageIdx))
         state["pages"] = PAGES_ONE
@@ -47,6 +55,7 @@ def _tools(pages_after_click=PAGES_TWO):
 
     return [StructuredTool.from_function(coroutine=f, name=n, description=n)
             for f, n in ((click, "click"), (list_pages, "list_pages"),
+                         (select_page, "select_page"), (take_snapshot, "take_snapshot"),
                          (close_page, "close_page"))], calls
 
 
@@ -57,7 +66,7 @@ def _run(c):
 class TestJobUrlOnline:
     def test_returns_the_url_of_the_newly_opened_page(self):
         tools, _ = _tools()
-        url = _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
+        url, _detail = _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
         assert url == "https://join.qq.com/post_detail.html?postid=999"
 
     def test_clicks_the_anchor_uid(self):
@@ -78,8 +87,46 @@ class TestJobUrlOnline:
         """有的行点了不跳转（比如那一行其实是广告）。要返回 None 让调用方计一次失败，
         **而不是把当前列表页的 URL 当成岗位 URL 写进库**。"""
         tools, calls = _tools(pages_after_click=PAGES_ONE)
-        url = _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
-        assert url is None
+        got = _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
+        assert got is None
+        assert not any(c[0] == "close_page" for c in calls)
+
+
+class TestJobUrlOnlineAlsoReadsTheDetailPage:
+    """取 URL 和取 JD 必须是同一次访问。
+
+    spec §5.1 的成本论证就建立在这上面：`new_tab_on_click` 的站本来就必须点开详情页
+    才能拿到 URL，既然已经在那一页上了，顺手读走快照近乎免费。分成两次访问会让
+    run 时长翻倍（每个岗位 ≈8 秒 → ≈16 秒）。
+    """
+
+    def test_returns_url_and_detail_snapshot(self):
+        tools, _ = _tools()
+        got = _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
+        assert got is not None
+        url, detail = got
+        assert url == "https://join.qq.com/post_detail.html?postid=999"
+        assert "DETAIL-SNAPSHOT" in detail
+
+    def test_reads_the_detail_page_not_the_list_page(self):
+        """必须在**切到新标签页之后**读快照。读成列表页的话，每个岗位拿到的 JD
+        都一样，而那看起来完全正常——分类会按同一段文本给所有岗位打分。"""
+        tools, calls = _tools()
+        _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
+        names = [c[0] for c in calls]
+        assert "select_page" in names, "没有切到详情页就读快照"
+        assert names.index("select_page") < names.index("take_snapshot")
+
+    def test_closes_the_tab_even_after_reading(self):
+        """加了读快照这一步之后，「拿完必须关」这条不能被破坏。"""
+        tools, calls = _tools()
+        _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual()))
+        assert ("close_page", 1) in calls
+        assert ("close_page", 0) not in calls
+
+    def test_still_returns_none_when_nothing_opens(self):
+        tools, calls = _tools(pages_after_click=PAGES_ONE)
+        assert _run(job_url_online(JobRow(anchor_uid="1_87", text="x"), tools, _manual())) is None
         assert not any(c[0] == "close_page" for c in calls)
 
 

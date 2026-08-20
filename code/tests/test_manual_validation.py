@@ -42,12 +42,19 @@ def _tools(url="https://join.qq.com/post_detail.html?postid=999"):
     async def list_pages():
         return state["pages"]
 
+    async def select_page(pageIdx: int):
+        return f"Selected page {pageIdx}"
+
+    async def take_snapshot():
+        return "DETAIL-SNAPSHOT: 岗位详情正文"
+
     async def close_page(pageIdx: int):
         state["pages"] = pages_one
         return "closed"
 
     return [StructuredTool.from_function(coroutine=f, name=n, description=n)
             for f, n in ((click, "click"), (list_pages, "list_pages"),
+                         (select_page, "select_page"), (take_snapshot, "take_snapshot"),
                          (close_page, "close_page"))]
 
 
