@@ -40,16 +40,16 @@ def _tools(pages_after_click=PAGES_TWO):
         calls.append(("list_pages", None))
         return state["pages"]
 
-    async def select_page(pageIdx: int):
-        calls.append(("select_page", pageIdx))
-        return f"Selected page {pageIdx}"
+    async def select_page(pageId: int):
+        calls.append(("select_page", pageId))
+        return f"Selected page {pageId}"
 
     async def take_snapshot():
         calls.append(("take_snapshot", None))
         return "DETAIL-SNAPSHOT: 岗位详情正文"
 
-    async def close_page(pageIdx: int):
-        calls.append(("close_page", pageIdx))
+    async def close_page(pageId: int):
+        calls.append(("close_page", pageId))
         state["pages"] = PAGES_ONE
         return "closed"
 
@@ -149,8 +149,8 @@ class TestJobUrlOnlineFailsFastWhenListPagesErrors:
             calls.append(("list_pages", None))
             return "Error: Protocol error (Page.captureSnapshot): Target closed"
 
-        async def close_page(pageIdx: int):
-            calls.append(("close_page", pageIdx))
+        async def close_page(pageId: int):
+            calls.append(("close_page", pageId))
             return "closed"
 
         tools = [StructuredTool.from_function(coroutine=f, name=n, description=n)

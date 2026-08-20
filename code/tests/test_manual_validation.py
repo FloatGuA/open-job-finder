@@ -42,13 +42,13 @@ def _tools(url="https://join.qq.com/post_detail.html?postid=999"):
     async def list_pages():
         return state["pages"]
 
-    async def select_page(pageIdx: int):
-        return f"Selected page {pageIdx}"
+    async def select_page(pageId: int):
+        return f"Selected page {pageId}"
 
     async def take_snapshot():
         return "DETAIL-SNAPSHOT: 岗位详情正文"
 
-    async def close_page(pageIdx: int):
+    async def close_page(pageId: int):
         state["pages"] = pages_one
         return "closed"
 

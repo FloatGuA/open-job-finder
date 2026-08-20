@@ -267,9 +267,14 @@ async def job_url_online(row: JobRow, tools, manual: SiteManual) -> tuple[str, s
     # 拿到 URL，既然已经在这一页上，读快照近乎免费。分成两次访问会让 run 时长翻倍。
     # 必须先 select_page 切过去再 take_snapshot——不切的话读到的是列表页快照，
     # 每个岗位拿到一样的 JD，而这个错不会报错、不崩溃，分类照跑不误。
-    await get_tool(tools, "select_page").ainvoke({"pageIdx": idx})
+    # chrome-devtools-mcp 的 select_page/close_page 参数名是 pageId。之前这里和
+    # 测试假工具都多打了三个字母（旧参数名比这个多一个 "Idx" 后缀），两边互相
+    # 印证却都跟真实 MCP 服务器的参数名不一致，真机会直接因为多出未知参数 /
+    # 缺少必填参数而报错。已核对 chrome-devtools-mcp/build/src/tools/pages.js
+    # 的 select_page/close_page schema：两者都是 `pageId: zod.number()`。
+    await get_tool(tools, "select_page").ainvoke({"pageId": idx})
     detail = _flat(await get_tool(tools, "take_snapshot").ainvoke({}))
-    await get_tool(tools, "close_page").ainvoke({"pageIdx": idx})
+    await get_tool(tools, "close_page").ainvoke({"pageId": idx})
     return url, detail
 
 
