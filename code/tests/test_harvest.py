@@ -224,11 +224,19 @@ class TestHarvestPageTruncatesOversizedJd:
         assert len(sink[0]["jd"]) == _JD_MAX_CHARS
 
     def test_jd_under_the_cap_is_left_untouched(self):
+        """没超上限就一字不剪。
+
+        断言的是“详情页正文完整保留”而不是“jd 恰好等于它”——
+        `jd` 现在还会带上列表卡片那一行（工作地点只在卡片上，
+        见 `TestHarvestKeepsTheCardText`）。这条测试守的是**截断**，
+        不是 jd 的完整组成。
+        """
         tools = self._tools_with_long_jd(jd_len=10)  # "JD" * 10 = 20 字符，远低于上限
         sink = []
         _run(harvest_page(SNAPSHOT, tools, _manual(), bucket="技术",
                           classify=_classify_all, sink=sink, known_urls=set(), limit=1))
-        assert sink[0]["jd"] == "JD" * 10
+        assert "JD" * 10 in sink[0]["jd"], "详情页正文被剪了"
+        assert sink[0]["jd"].endswith("JD" * 10), "末尾被截了"
 
 
 class TestHarvestPageOfflineJd:
@@ -350,3 +358,105 @@ class TestHarvestStoresReadableJd:
         assert "RootWebArea" not in jd
         assert "岗位描述" in jd
         assert "1、负责后端开发；" in jd
+
+
+class TestHarvestKeepsTheCardText:
+    """列表卡片那一行也要进 `jd`——**工作地点只在卡片上，详情页里没有**。
+
+    **真机（2026-08-21 joinqq）**：地点筛选确实设上了（agent 轨迹 + 岗位总数
+    943→542 都证实），但落库的 17 条里 JD 含「深圳」的是 **0/17**，因为详情页正文
+    压根没有工作地点字段：
+
+    ```
+    uid=1_78 StaticText "工作地点："
+    uid=1_79 StaticText "深圳总部 北京 上海 广州 成都 杭州"     ← 只在列表卡片上
+    ```
+
+    结果是**审批的人看不到这个岗位在哪**，事后也无从核对——而地点是硬约束。
+
+    **不是新模式**：`link_in_row` 那条路径本来就整个拿 `row.text` 当 jd
+    （见 `harvest_page` 里那段注释）。给 `new_tab_on_click` 也拼上，两条路径反而一致了。
+    """
+
+    SNAP_DETAIL = ('## Latest page snapshot\n'
+                   'uid=7_0 RootWebArea "岗位详情" url="https://example.test/d?id=1"\n'
+                   '  uid=7_3 StaticText "岗位描述"\n'
+                   '  uid=7_4 StaticText "负责后端服务开发"\n')
+
+    def _tools(self):
+        state = {"pages": "## Pages\n0: list (https://x/list) [selected]\n"}
+
+        async def click(uid: str):
+            state["pages"] = ("## Pages\n0: list (https://x/list) [selected]\n"
+                              "1: detail (https://example.test/d?id=1)\n")
+            return "ok"
+
+        async def list_pages():
+            return state["pages"]
+
+        async def select_page(pageId: int):
+            return "ok"
+
+        async def navigate_page(url: str):
+            return "Navigated"
+
+        async def take_snapshot():
+            return self.SNAP_DETAIL
+
+        async def close_page(pageId: int):
+            state["pages"] = "## Pages\n0: list (https://x/list) [selected]\n"
+            return "ok"
+
+        return [StructuredTool.from_function(coroutine=f, name=n, description=n)
+                for f, n in ((click, "click"), (list_pages, "list_pages"),
+                             (select_page, "select_page"), (navigate_page, "navigate_page"),
+                             (take_snapshot, "take_snapshot"), (close_page, "close_page"))]
+
+    def test_jd_carries_the_work_location_from_the_card(self):
+        sink = []
+
+        async def classify(items):
+            return [dict(it, category="开发", why="", title="t", company="c")
+                    for it in items]
+
+        rep = asyncio.run(harvest_page(SNAPSHOT, self._tools(), _manual(),
+                                       bucket="b", classify=classify, sink=sink,
+                                       known_urls=set(), limit=1))
+        assert rep["collected"] == 1, rep
+        jd = sink[0]["jd"]
+        assert "工作地点" in jd, f"卡片文本没进 jd，审批页看不到地点：{jd[:150]}"
+        # 详情页正文不能因此丢掉
+        assert "岗位描述" in jd and "负责后端服务开发" in jd
+
+    def test_the_card_text_comes_first(self):
+        """卡片那行放最前面：审批页默认折叠、只露开头，地点要在第一眼能看见的位置。"""
+        sink = []
+
+        async def classify(items):
+            return [dict(it, category="开发", why="", title="t", company="c")
+                    for it in items]
+
+        asyncio.run(harvest_page(SNAPSHOT, self._tools(), _manual(), bucket="b",
+                                 classify=classify, sink=sink, known_urls=set(), limit=1))
+        jd = sink[0]["jd"]
+        assert jd.index("工作地点") < jd.index("岗位描述")
+
+    def test_still_capped(self):
+        """拼上卡片文本之后总长仍然受 `_JD_MAX_CHARS` 管——截断只在 harvest 边界
+        做一次这条不能破。"""
+        from multisite.harvest import _JD_MAX_CHARS
+        sink = []
+
+        class _Big:
+            SNAP_DETAIL = ('## Latest page snapshot\n'
+                           '  uid=7_4 StaticText "%s"\n' % ("负" * (_JD_MAX_CHARS + 500)))
+
+        tools = TestHarvestKeepsTheCardText._tools(_Big())
+
+        async def classify(items):
+            return [dict(it, category="开发", why="", title="t", company="c")
+                    for it in items]
+
+        asyncio.run(harvest_page(SNAPSHOT, tools, _manual(), bucket="b",
+                                 classify=classify, sink=sink, known_urls=set(), limit=1))
+        assert len(sink[0]["jd"]) <= _JD_MAX_CHARS

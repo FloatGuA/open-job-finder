@@ -70,7 +70,13 @@ async def harvest_page(
             # `url=` 这些标记占掉大半篇幅。顺序反了的话，按标记算的 3000 字里
             # 转换完可能只剩一千出头的正文——而且两个消费方（Checkpoint 1 审批页、
             # 分类 prompt）都是拿转换后的文本用，没有谁需要原始快照。
-            jd = snapshot_to_text(detail)[:_JD_MAX_CHARS]
+            # **列表卡片那一行放在最前面**：工作地点只在卡片上，详情页正文里没有。
+            # 真机（2026-08-21 joinqq）：地点筛选确实设上了，但落库的 17 条里
+            # JD 含「深圳」的是 0/17——审批的人看不到这个岗位在哪，而地点是硬约束。
+            # 放最前面是因为审批页的 JD 块默认折叠、只露开头。
+            # 这不是新模式：`link_in_row` 那条路径本来就整个拿 `row.text` 当 jd
+            # （见下面那段注释），给这条也拼上，两条路径反而一致了。
+            jd = (row.text + "\n" + snapshot_to_text(detail))[:_JD_MAX_CHARS]
         else:
             url = job_url_offline(row, snapshot_text, manual)
             if url is None:
