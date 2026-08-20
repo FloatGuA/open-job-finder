@@ -89,3 +89,48 @@ class TestClassifyJobs:
         _run(classify_jobs(ITEMS, QUOTAS, model=model))
         blob = str(model.prompts)
         assert "AI算法工程师" in blob and "Agent 工具开发" in blob and "技术" in blob
+
+
+class TestClassifyJobsExtractsTitleAndCompany:
+    """修复轮 1：harvest_page（多站点抓取）拿不到干净标题，塞进输入 `title` 的
+    其实是整行卡片文本。既然模型要读这段文本才能分类，顺手把标题/公司名择出来
+    是免费的——设计稿 §3.7 的原意，Task 4 首版漏接了这一步。"""
+
+    def test_output_includes_title_and_company(self):
+        model = _FakeModel([
+            {"index": 0, "category": "AI NATIVE", "why": "x",
+             "title": "AI算法工程师", "company": "腾讯"},
+            {"index": 1, "category": "运营", "why": "y",
+             "title": "服务运营", "company": ""},
+        ])
+        out = _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        assert out[0]["title"] == "AI算法工程师"
+        assert out[0]["company"] == "腾讯"
+        # 读不出公司名是模型的合法答案（不是缺陷），空串要如实覆盖，不能被
+        # 当成"没回答"而退回到别的什么值。
+        assert out[1]["company"] == ""
+
+    def test_extracted_title_is_not_the_whole_raw_row_text(self):
+        """守门测试：`harvest_page` 抓到的候选没有干净标题，只有整行卡片文本
+        （通过适配闭包塞进了 `title` 这个输入字段）。分类模型必须从里面择出
+        真正的标题——**代码不能偷懒退回整段原文**，模型偷懒把整段原样返回
+        也要能在这条测试里现出原形（因为 `_FakeModel` 明确回了一个不同于原文
+        的干净标题，断言的是"用了模型给的值"，不是"输出非空"这种弱断言）。
+        """
+        raw_blob = ("AI全栈工程师 技术 ｜ 应届毕业生 ｜ CDG CSIG IEG PCG TEG WXG "
+                   "工作地点： 深圳总部 北京 上海 广州 成都 杭州")
+        items = [{"title": raw_blob, "jd": "", "site_category": "技术"}]
+        model = _FakeModel([{"index": 0, "category": "开发", "why": "x",
+                             "title": "AI全栈工程师", "company": "腾讯"}])
+
+        out = _run(classify_jobs(items, QUOTAS, model=model))
+
+        assert out[0]["title"] == "AI全栈工程师"
+        assert out[0]["title"] != raw_blob
+
+    def test_model_omitting_title_key_falls_back_to_the_original_input(self):
+        """跟"给了空串"不同：`title` 这个 key 压根没出现在响应里，说明模型没
+        回答这一项（不是老实说"提不出标题"），这时保留原样透传，不强行清空。"""
+        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"}])
+        out = _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        assert out[0]["title"] == "AI算法工程师"

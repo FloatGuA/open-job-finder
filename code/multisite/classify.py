@@ -41,11 +41,23 @@ async def classify_jobs(
     model=None,
     prompt_text: str | None = None,
 ) -> list[dict]:
-    """给每条岗位打一个类别标签。
+    """给每条岗位打一个类别标签，**顺带抽取干净的标题和公司名**。
 
-    入参每项至少 `{title, jd, site_category}`，出参每项在原字段基础上加
-    `{category, why}`。空输入直接返回空列表，**不调模型**——没有岗位就没有
-    要判断的东西，调一次空 prompt 只是白花钱。
+    入参每项至少 `{title, jd, site_category}`——但这里的 `title` 未必是干净的
+    标题，harvest_page（多站点抓取）传进来的其实是一整行卡片文本（标题+标签+
+    地点混在一起）。模型本来就要读这段文本才能分类，顺手把标题和公司名择出来
+    是免费的（修复轮 1：设计稿 §3.7 的原意，Task 4/6 首版漏接了这一步——`title`
+    当时被当成输入字段直接透传，harvest 抓不到干净标题，落库的 `pending_jobs.title`
+    变成了两百字的长文本，直接影响 Checkpoint 1 审批页可读性和
+    `resume_matcher.pick_for_job` 的关键词匹配）。
+
+    出参每项在原字段基础上加 `{category, why}`；`title`/`company` **只要模型
+    在这一条的响应里给出对应字段就用模型的**（哪怕是空串——"读不出公司名"是
+    合法答案，不是缺陷），模型没给这个字段（key 缺失，不是空串）才保留原样透传。
+    绝不退回用原始 `title` 输入（那段整行文本）兜底——那正是这次要修的坏味道。
+
+    空输入直接返回空列表，**不调模型**——没有岗位就没有要判断的东西，调一次
+    空 prompt 只是白花钱。
     """
     if not items:
         return []
@@ -88,6 +100,15 @@ async def classify_jobs(
                 # 写进 why 留痕，这是调 prompt 时最好的线索。
                 merged["category"] = ""
                 merged["why"] = f"LLM 报的类别「{category}」不在配额表里。{why}".strip()
+            # title/company：**按 key 是否存在判断**，不是按值是否为真。模型显式
+            # 给了空串（"读不出公司名"）要如实覆盖；只有这个 key 压根没出现在
+            # 响应里，才说明模型没回答，退回保留原样透传的值。**绝不因为模型
+            # 给的 title 是空串就倒退回原始整行文本**——那正是这次要修的坏味道
+            # （修复轮 1 的守门测试就测这一条）。
+            if "title" in entry:
+                merged["title"] = entry.get("title") or ""
+            if "company" in entry:
+                merged["company"] = entry.get("company") or ""
         out.append(merged)
     return out
 

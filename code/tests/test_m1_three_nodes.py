@@ -60,3 +60,44 @@ class TestM1HasThreeNodes:
         monkeypatch.setattr(mod, "M1_STAGES", ("ensure_ready", "oops"))
         with pytest.raises(RuntimeError, match="阶段表"):
             build_select_graph(**_kw())
+
+
+class TestHarvestItemsToFoundJobs:
+    """修复轮 1：`scan_buckets` 把 `harvest_current_page` 的原始产出（已经过
+    `classify_jobs` 加工）转成 `FoundJob` 时，`title`/`company` 必须用 classify
+    的输出，不能退回用整行卡片文本——那正是这次修复要堵住的坏味道。这段转换
+    逻辑被提到模块级 `_harvest_items_to_found_jobs`，就是为了能这样单测。
+    """
+
+    def test_title_and_company_come_from_classify_output_not_raw_text(self):
+        from multisite.layer1_agent import _harvest_items_to_found_jobs
+
+        raw_text = ("AI全栈工程师 技术 ｜ 应届毕业生 ｜ CDG CSIG IEG PCG TEG WXG "
+                   "工作地点： 深圳总部 北京")
+        raw = [{
+            "url": "https://x/1",
+            "text": raw_text,          # harvest_page 抓到的整行原文，仅供分类参考
+            "jd": "职责：负责……",
+            "bucket": "技术",
+            "category": "开发",
+            "why": "命中开发方向",
+            "title": "AI全栈工程师",     # classify_jobs 抽取出的干净标题
+            "company": "腾讯",
+        }]
+
+        jobs = _harvest_items_to_found_jobs(raw)
+
+        assert jobs[0].title == "AI全栈工程师"
+        assert jobs[0].company == "腾讯"
+        assert jobs[0].title != raw_text
+        assert jobs[0].jd == "职责：负责……"
+        assert jobs[0].bucket == "技术"
+
+    def test_missing_title_or_company_defaults_to_empty_string(self):
+        """`classify_jobs` 没给这两个字段（比如整段解析失败前就短路）时不能
+        炸——落库空字符串是诚实的、不是缺陷。"""
+        from multisite.layer1_agent import _harvest_items_to_found_jobs
+
+        jobs = _harvest_items_to_found_jobs([{"url": "https://x/2"}])
+        assert jobs[0].title == ""
+        assert jobs[0].company == ""

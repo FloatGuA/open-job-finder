@@ -1173,6 +1173,31 @@ def _render_bucket_plan(plan: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _harvest_items_to_found_jobs(raw_items: list[dict]) -> list[FoundJob]:
+    """把 `harvest_current_page`（经 `classify_jobs` 加工过）的原始字典列表转成
+    `FoundJob` 列表。**`title`/`company` 必须来自 `classify_jobs` 的输出，绝不
+    退回用原始整行文本兜底**（修复轮 1）：`harvest_page` 抓到的候选没有干净标题，
+    只有整行卡片文本；分类模型读那段文本判类别时顺手抽取出标题/公司名，这里
+    只管把结果原样接过来。
+
+    提到模块级（不是留在 `scan_buckets` 闭包里）是为了能单测——这段转换逻辑
+    正是修复轮 1 要守住的那条不变量（"标题不能是整段原文"），关在闭包里就得
+    真浏览器+真 LLM 才测得到，跟 `record_candidates` 同一个理由。
+    """
+    return [
+        FoundJob(
+            url=j["url"],
+            title=j.get("title") or "",
+            company=j.get("company") or "",
+            category=j.get("category") or "",
+            bucket=j.get("bucket") or "",
+            why=j.get("why") or "",
+            jd=j.get("jd") or "",
+        )
+        for j in raw_items
+    ]
+
+
 def _make_nodes(
     tools: list,
     personal_info: Optional[dict] = None,
@@ -1397,6 +1422,11 @@ def _make_nodes(
             # NATIVE"这条核心规则——这里把 harvest 的字段名接到 classify 期待的
             # 字段名上。两个模块的字段契约本来就不同（分属 Task 3/Task 4，各自
             # 独立可测），不是同一份数据的两处实现，这层适配只在接线处存在一次。
+            #
+            # **`text`（整行卡片文本）塞进输入的 `title` 只是给模型提供原始素材
+            # 去读，不代表输出的 title 就是它**（修复轮 1）：classify_jobs 会用
+            # 模型抽取出的干净标题覆盖这个输入值，`_harvest_items_to_found_jobs`
+            # 读的是覆盖之后的结果，不会把这段整行文本当成标题落库。
             mapped = [{**it, "title": it.get("text", ""), "site_category": it.get("bucket", "")}
                      for it in items]
             return await classify_jobs(mapped, quotas)
@@ -1473,18 +1503,7 @@ def _make_nodes(
             safe_print(f"[layer1] 扫桶 agent 达到步数上限，采用已记录的 {len(raw_sink)} 个岗位。",
                        flush=True)
 
-        found_jobs = [
-            FoundJob(
-                url=j["url"],
-                title=(j.get("text") or "").strip()[:200],
-                category=j.get("category") or "",
-                bucket=j.get("bucket") or "",
-                why=j.get("why") or "",
-                jd=j.get("jd") or "",
-            )
-            for j in raw_sink
-        ]
-        return {"found_jobs": found_jobs, "truncated": truncated}
+        return {"found_jobs": _harvest_items_to_found_jobs(raw_sink), "truncated": truncated}
 
     async def write_pending_jobs(state: Layer1State) -> dict:
         """Checkpoint 1：把候选岗位落库，然后**结束这次 run**。
