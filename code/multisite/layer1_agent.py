@@ -1184,6 +1184,7 @@ def _make_nodes(
     max_pages: int = 8,
     max_filter_clicks: int = 4,
     candidates_per_bucket: int = 15,
+    model_router=None,
     logger=None,
     workflow: str = "m2",
 ) -> tuple:
@@ -1404,7 +1405,9 @@ def _make_nodes(
         可 eval（spec §2.1）。空列表是合法结果（站上确实没有相关的桶）。
         """
         manual: SiteManual = state["manual"]
-        plan = await compute_bucket_plan(manual, quotas, preferences.render_constraints())
+        plan = await compute_bucket_plan(manual, quotas,
+                                         preferences.render_constraints(),
+                                         router=model_router)
         return {"bucket_plan": plan}
 
     async def scan_buckets(state: Layer1State) -> dict:
@@ -1454,7 +1457,9 @@ def _make_nodes(
             # 读的是覆盖之后的结果，不会把这段整行文本当成标题落库。
             mapped = [{**it, "title": it.get("text", ""), "site_category": it.get("bucket", "")}
                      for it in items]
-            return await classify_jobs(mapped, quotas, golden_examples=golden_examples)
+            return await classify_jobs(mapped, quotas,
+                                       golden_examples=golden_examples,
+                                       router=model_router)
 
         def _harvest_current_page_tool() -> "object":
             from langchain_core.tools import StructuredTool
@@ -1729,6 +1734,7 @@ def build_select_graph(
     max_pages: int = 8,
     max_filter_clicks: int = 4,
     candidates_per_bucket: int = 15,
+    model_router=None,
     logger=None,
 ):
     """m1：入口页 → 探结构 → 定桶计划 → 扫桶 → 落库 → 结束。**没有 open_application**，
@@ -1740,7 +1746,7 @@ def build_select_graph(
     nodes, snapshot_provider = _make_nodes(
         tools, personal_info=personal_info, tracker=tracker, quotas=quotas,
         max_pages=max_pages, max_filter_clicks=max_filter_clicks,
-        candidates_per_bucket=candidates_per_bucket, logger=logger,
+        candidates_per_bucket=candidates_per_bucket, model_router=model_router, logger=logger,
         workflow="m1",
     )
     # 阶段名读**活的**模块全局 M1_STAGES（不是拷贝一份字面量）：_compile 里对着的
@@ -1762,6 +1768,7 @@ def build_survey_graph(
     max_pages: int = 8,
     max_filter_clicks: int = 4,
     candidates_per_bucket: int = 15,
+    model_router=None,
     logger=None,
 ):
     """m2：直接从调用方给定的岗位 URL 开表单。**没有 m1 那五站里除 ensure_ready
@@ -1774,7 +1781,7 @@ def build_survey_graph(
     nodes, snapshot_provider = _make_nodes(
         tools, personal_info=personal_info, tracker=tracker, quotas=quotas,
         max_pages=max_pages, max_filter_clicks=max_filter_clicks,
-        candidates_per_bucket=candidates_per_bucket, logger=logger,
+        candidates_per_bucket=candidates_per_bucket, model_router=model_router, logger=logger,
         workflow="m2",
     )
     stages = _stages_for(nodes, M2_STAGES)
@@ -1797,6 +1804,7 @@ async def run_layer1(
     max_pages: int = 8,
     max_filter_clicks: int = 4,
     candidates_per_bucket: int = 15,
+    model_router=None,
     emitter=None,
     job_title: str = "",
     company: str = "",
@@ -1864,7 +1872,7 @@ async def run_layer1(
                                      max_pages=max_pages,
                                      max_filter_clicks=max_filter_clicks,
                                      candidates_per_bucket=candidates_per_bucket,
-                                     logger=run.logger)
+                                     model_router=model_router, logger=run.logger)
             state = await app.ainvoke({
                 "job_url": job_url,
                 "search_url": search_url,

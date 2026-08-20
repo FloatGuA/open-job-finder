@@ -159,6 +159,7 @@ def main() -> int:
     args = parser.parse_args()
 
     from multisite import preferences
+    from services.llm_client import build_model_router, load_config
 
     quotas = _parse_quota_overrides(args.category)
 
@@ -202,6 +203,10 @@ def main() -> int:
             headless=args.headless,
             max_pages=args.max_pages,
             quotas=quotas,
+            # `--direct` 没有 app.state，自己建一个 router。**显式建、不给默认值**：
+            # 让 `run_layer1` 在缺 router 时静默退回写死的模型，正是"同一件事两条
+            # 路径"——那条隐形分支只会在某次 DeepSeek 抽风时才暴露出来。
+            model_router=build_model_router(load_config()),
         )
     )
 

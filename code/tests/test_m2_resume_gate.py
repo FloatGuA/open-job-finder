@@ -25,6 +25,7 @@ class _FakeState:
     def __init__(self, tracker):
         self.tracker = tracker
         self.emitter = _FakeEmitter()
+        self.model_router = object()
 
 
 @pytest.fixture()

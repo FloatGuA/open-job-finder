@@ -17,6 +17,8 @@
 layer1_agent）游离于项目 LLM 路由之外的原因，取舍已记在 DECISION.md。
 """
 import os
+
+from services.llm_client import load_config
 from typing import Optional, Sequence
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -57,15 +59,31 @@ _BULKY_CHARS = 2000
 
 
 def build_model(temperature: float = 0.0) -> ChatOpenAI:
-    """DeepSeek。api_key 从环境读（scripts/run_layer1.py 会先 load_dotenv）。
+    """LangGraph 用的 chat model，参数读 `config.yaml` 的 `multisite.model`。
 
-    刻意不给默认值：缺 key 就应该在这里以 KeyError 直接炸掉，而不是带着空 key
-    走到第一次网络调用才报一个 401（fail fast，见全局开发原则）。
+    **只有这两处需要它**：`create_react_agent`（三个 ReAct 节点）和
+    `with_structured_output`（m2 的表单字段分类）。两者都要求一个 LangChain 的
+    chat model 且**必须支持 tool calling**，而 `FallbackChain.complete()` 返回的是
+    文本——所以这两处拿不到兜底链，只能配、不能兜。纯文本的 `classify_jobs` /
+    `plan_buckets` 已经收敛到 `ModelRouter` 的 balanced 链了，不走这里。
+
+    **为什么是独立的 `multisite.model` 节、不复用 `llm.capabilities.balanced` 的
+    第一条**：那条链是给 `FallbackChain` 用的，第一条不保证是 `openai_compatible`
+    ——哪天把 ollama 或 claude_cli 放到链首，这里就会拿到一个没有 base_url 的条目，
+    m1 当场挂掉。约束不同（这里必须支持 tool calling），写成独立的节才说得清楚。
+
+    缺配置、缺 api_key 都在这里直接炸：带着空值走到第一次网络调用才报 401
+    是最难查的那种失败（fail fast，见全局开发原则）。
     """
+    node = (load_config().get("multisite") or {}).get("model") or {}
+    if not node.get("model"):
+        raise RuntimeError(
+            "config.yaml 缺 multisite.model 节（LangGraph 用的模型，必须支持 tool "
+            "calling）。需要 model / base_url / api_key_env 三个字段。")
     return ChatOpenAI(
-        model="deepseek-chat",
-        base_url="https://api.deepseek.com",
-        api_key=os.environ["DEEPSEEK_API_KEY"],
+        model=node["model"],
+        base_url=node.get("base_url"),
+        api_key=os.environ[node["api_key_env"]],
         temperature=temperature,
     )
 

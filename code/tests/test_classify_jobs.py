@@ -21,72 +21,56 @@ ITEMS = [
 QUOTAS = {"AI NATIVE": 3, "开发": 5, "运营": 3}
 
 
-class _FakeModel:
-    """按脚本回话的假模型。真实调用会走 langchain 的 `.ainvoke`。"""
-
-    def __init__(self, payload):
-        self.payload = payload
-        self.prompts = []
-
-    async def ainvoke(self, messages):
-        self.prompts.append(messages)
-
-        class _R:
-            content = self.payload if isinstance(self.payload, str) else json.dumps(
-                self.payload, ensure_ascii=False)
-        return _R()
-
-
 class TestClassifyJobs:
     def test_assigns_a_category_to_each_item(self):
-        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "LLM/Agent"},
+        model = _FakeRouterCJ([{"index": 0, "category": "AI NATIVE", "why": "LLM/Agent"},
                             {"index": 1, "category": "运营", "why": "数据看板"}])
-        out = _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        out = _run(classify_jobs(ITEMS, QUOTAS, router=model))
         assert [o["category"] for o in out] == ["AI NATIVE", "运营"]
         assert out[0]["why"]
 
     def test_keeps_the_original_fields(self):
-        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"},
+        model = _FakeRouterCJ([{"index": 0, "category": "AI NATIVE", "why": "x"},
                             {"index": 1, "category": "运营", "why": "y"}])
-        out = _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        out = _run(classify_jobs(ITEMS, QUOTAS, router=model))
         assert out[0]["title"] == "AI算法工程师"
         assert out[0]["jd"].startswith("职责")
 
     def test_a_category_outside_the_quota_table_is_rejected(self):
         """类别必须来自配额表。放任 LLM 自造类别名，配额就形同虚设
         （它报一个新名字就绕过了上限）。"""
-        model = _FakeModel([{"index": 0, "category": "机器学习", "why": "x"},
+        model = _FakeRouterCJ([{"index": 0, "category": "机器学习", "why": "x"},
                             {"index": 1, "category": "运营", "why": "y"}])
-        out = _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        out = _run(classify_jobs(ITEMS, QUOTAS, router=model))
         assert out[0]["category"] == ""
         assert "机器学习" in out[0]["why"]
 
     def test_a_missing_index_leaves_that_item_unclassified(self):
         """LLM 少回一条时，**不能让后面的答案错位顶上**——那会给岗位安错标签，
         而结果看起来完全正常。按 index 对齐，缺的就是空。"""
-        model = _FakeModel([{"index": 1, "category": "运营", "why": "y"}])
-        out = _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        model = _FakeRouterCJ([{"index": 1, "category": "运营", "why": "y"}])
+        out = _run(classify_jobs(ITEMS, QUOTAS, router=model))
         assert out[0]["category"] == ""
         assert out[1]["category"] == "运营"
 
     def test_unparseable_response_raises(self):
         """整段回不成 JSON 是**失败**，不是"都没分上类"。
         静默返回全空会让上层把它当成"这一页没有符合的岗位"。"""
-        model = _FakeModel("对不起我不会")
+        model = _FakeRouterCJ("对不起我不会")
         with pytest.raises(ValueError):
-            _run(classify_jobs(ITEMS, QUOTAS, model=model))
+            _run(classify_jobs(ITEMS, QUOTAS, router=model))
 
     def test_empty_input_does_not_call_the_model(self):
-        model = _FakeModel([])
-        assert _run(classify_jobs([], QUOTAS, model=model)) == []
+        model = _FakeRouterCJ([])
+        assert _run(classify_jobs([], QUOTAS, router=model)) == []
         assert model.prompts == []
 
     def test_prompt_carries_title_jd_and_site_category(self):
         """三样都要进 prompt：只给标题的话，「职责里出现 LLM/Agent 就归 AI NATIVE」
         那条核心规则一个字都执行不了。"""
-        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"},
+        model = _FakeRouterCJ([{"index": 0, "category": "AI NATIVE", "why": "x"},
                             {"index": 1, "category": "运营", "why": "y"}])
-        _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        _run(classify_jobs(ITEMS, QUOTAS, router=model))
         blob = str(model.prompts)
         assert "AI算法工程师" in blob and "Agent 工具开发" in blob and "技术" in blob
 
@@ -97,13 +81,13 @@ class TestClassifyJobsExtractsTitleAndCompany:
     是免费的——设计稿 §3.7 的原意，Task 4 首版漏接了这一步。"""
 
     def test_output_includes_title_and_company(self):
-        model = _FakeModel([
+        model = _FakeRouterCJ([
             {"index": 0, "category": "AI NATIVE", "why": "x",
              "title": "AI算法工程师", "company": "腾讯"},
             {"index": 1, "category": "运营", "why": "y",
              "title": "服务运营", "company": ""},
         ])
-        out = _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        out = _run(classify_jobs(ITEMS, QUOTAS, router=model))
         assert out[0]["title"] == "AI算法工程师"
         assert out[0]["company"] == "腾讯"
         # 读不出公司名是模型的合法答案（不是缺陷），空串要如实覆盖，不能被
@@ -114,16 +98,16 @@ class TestClassifyJobsExtractsTitleAndCompany:
         """守门测试：`harvest_page` 抓到的候选没有干净标题，只有整行卡片文本
         （通过适配闭包塞进了 `title` 这个输入字段）。分类模型必须从里面择出
         真正的标题——**代码不能偷懒退回整段原文**，模型偷懒把整段原样返回
-        也要能在这条测试里现出原形（因为 `_FakeModel` 明确回了一个不同于原文
+        也要能在这条测试里现出原形（因为 `_FakeRouterCJ` 明确回了一个不同于原文
         的干净标题，断言的是"用了模型给的值"，不是"输出非空"这种弱断言）。
         """
         raw_blob = ("AI全栈工程师 技术 ｜ 应届毕业生 ｜ CDG CSIG IEG PCG TEG WXG "
                    "工作地点： 深圳总部 北京 上海 广州 成都 杭州")
         items = [{"title": raw_blob, "jd": "", "site_category": "技术"}]
-        model = _FakeModel([{"index": 0, "category": "开发", "why": "x",
+        model = _FakeRouterCJ([{"index": 0, "category": "开发", "why": "x",
                              "title": "AI全栈工程师", "company": "腾讯"}])
 
-        out = _run(classify_jobs(items, QUOTAS, model=model))
+        out = _run(classify_jobs(items, QUOTAS, router=model))
 
         assert out[0]["title"] == "AI全栈工程师"
         assert out[0]["title"] != raw_blob
@@ -133,8 +117,8 @@ class TestClassifyJobsExtractsTitleAndCompany:
         回答这一项（不是老实说"提不出标题"）。这里的兜底是**截断过的原文**
         （FIX-5），只是 ITEMS[0] 的原始 title 本来就很短（8 个字），截断是
         无操作，所以看起来跟"原样透传"一样。"""
-        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"}])
-        out = _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        model = _FakeRouterCJ([{"index": 0, "category": "AI NATIVE", "why": "x"}])
+        out = _run(classify_jobs(ITEMS, QUOTAS, router=model))
         assert out[0]["title"] == "AI算法工程师"
 
 
@@ -157,15 +141,15 @@ class TestClassifyJobsNeverLeaksTheRawRowTextAsTitle:
 
     def test_llm_skipping_the_index_does_not_leak_raw_text(self):
         items = [{"title": self.RAW_ROW_TEXT, "jd": "", "site_category": "技术"}]
-        model = _FakeModel([])  # 没回任何一条，index 0 缺失
-        out = _run(classify_jobs(items, QUOTAS, model=model))
+        model = _FakeRouterCJ([])  # 没回任何一条，index 0 缺失
+        out = _run(classify_jobs(items, QUOTAS, router=model))
         assert out[0]["title"] != self.RAW_ROW_TEXT
         assert len(out[0]["title"]) < len(self.RAW_ROW_TEXT)
 
     def test_llm_response_missing_the_title_key_does_not_leak_raw_text(self):
         items = [{"title": self.RAW_ROW_TEXT, "jd": "", "site_category": "技术"}]
-        model = _FakeModel([{"index": 0, "category": "开发", "why": "x"}])  # 没给 title
-        out = _run(classify_jobs(items, QUOTAS, model=model))
+        model = _FakeRouterCJ([{"index": 0, "category": "开发", "why": "x"}])  # 没给 title
+        out = _run(classify_jobs(items, QUOTAS, router=model))
         assert out[0]["title"] != self.RAW_ROW_TEXT
         assert len(out[0]["title"]) < len(self.RAW_ROW_TEXT)
 
@@ -189,8 +173,8 @@ class TestClassifyJobsLoadsPromptThroughPromptManager:
         monkeypatch.setattr(classify_mod, "PromptManager",
                             lambda *a, **k: PromptManager(override_dir=tmp_path))
 
-        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"}])
-        _run(classify_jobs(ITEMS[:1], QUOTAS, model=model))
+        model = _FakeRouterCJ([{"index": 0, "category": "AI NATIVE", "why": "x"}])
+        _run(classify_jobs(ITEMS[:1], QUOTAS, router=model))
 
         assert "【override 标记】" in str(model.prompts)
 
@@ -200,15 +184,55 @@ class TestClassifyJobsGoldenExamples:
     白标——`preferences.render_golden_examples` 早就写好了，只是没人传进来。"""
 
     def test_golden_examples_are_rendered_into_the_prompt(self):
-        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"},
+        model = _FakeRouterCJ([{"index": 0, "category": "AI NATIVE", "why": "x"},
                             {"index": 1, "category": "运营", "why": "y"}])
-        _run(classify_jobs(ITEMS, QUOTAS, model=model,
+        _run(classify_jobs(ITEMS, QUOTAS, router=model,
                            golden_examples="「某某岗」归类为「开发」是错的，应该归「AI NATIVE」"))
         blob = str(model.prompts)
         assert "某某岗" in blob and "应该归「AI NATIVE」" in blob
 
     def test_no_golden_examples_falls_back_to_the_placeholder_text(self):
-        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"},
+        model = _FakeRouterCJ([{"index": 0, "category": "AI NATIVE", "why": "x"},
                             {"index": 1, "category": "运营", "why": "y"}])
-        _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        _run(classify_jobs(ITEMS, QUOTAS, router=model))
         assert "本次未提供历史纠正样例" in str(model.prompts)
+
+
+class _FakeRouterCJ:
+    def __init__(self, payload):
+        self.payload = payload
+        self.calls = []
+        self.prompts = []
+
+    def complete(self, prompt, system="", capability="balanced", **kw):
+        import json as _json
+        self.calls.append({"prompt": prompt, "capability": capability})
+        self.prompts.append(prompt)
+        text = self.payload if isinstance(self.payload, str) else _json.dumps(
+            self.payload, ensure_ascii=False)
+        return text, "fake-provider"
+
+
+class TestClassifyJobsGoesThroughTheModelRouter:
+    """`classify_jobs` 走 `ModelRouter` 的 balanced 链。
+
+    **这一处的兜底最要紧**：`classify_jobs` 抛异常 = 整页丢弃 = `found` 少一整页
+    （`harvest_page` 是先攒 pending、分类成功才 `sink.extend`）。此前它直连
+    DeepSeek、没有任何重试或兜底。
+    """
+
+    def test_it_calls_the_router_with_the_balanced_capability(self):
+        router = _FakeRouterCJ([
+            {"index": 0, "category": "\u5f00\u53d1", "why": "r",
+             "title": "\u540e\u7aef\u5de5\u7a0b\u5e08", "company": "c"},
+        ])
+        items = [{"url": "https://x/1", "jd": "j", "title": "raw", "site_category": "b"}]
+        out = _run(classify_jobs(items, {"\u5f00\u53d1": 1}, golden_examples="", router=router))
+        assert len(out) == 1
+        assert router.calls[0]["capability"] == "balanced"
+
+    def test_empty_input_still_never_calls_the_router(self):
+        """空输入不调模型这条既有行为不能被换接缝弄丢——没有岗位就没有要判断的东西。"""
+        router = _FakeRouterCJ([])
+        assert _run(classify_jobs([], {}, golden_examples="", router=router)) == []
+        assert router.calls == []

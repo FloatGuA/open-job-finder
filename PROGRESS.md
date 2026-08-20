@@ -5,12 +5,55 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-21（v2.29.5 按站点清候选池） |
+| 最后更新 | 2026-08-21（v2.29.7 多站点 LLM 配置收敛） |
 | 当前版本 | 2.28.0                         |
 
 > ⚠️ **下一轮动手前先读**：Layer 1 已按 2026-08-13 的对齐改完并真机验证。**SDK 继续 LangGraph 是用户拍板的（理由是他本人正求职 agent 开发岗位、亲手做工程本身是目标），后续会话不要因为技术理由自作主张换成 Anthropic/Codex SDK。** 完整取舍见 `DECISION.md` 三条：「Layer 1 的导航/找入口/选岗交给 agent 自主决策」「选岗结果用 record_job 边找边落袋」「提交防线从不给工具改成点击工具自己拒绝」。
 
 ## 待跟进（另开会话）
+
+### ✅ 多站点 LLM 配置收敛（2026-08-21，v2.29.7）
+
+多站点这条线此前是**完全独立的第二套 LLM 栈**：`agent_runtime.build_model()` 写死
+`deepseek-chat`，m1/m2 的每一次 LLM 调用都绕开 `ModelRouter` / `FallbackChain`。
+后果：DeepSeek 一挂 m1 直接死，设置页也调不动它。
+
+**收敛不是一刀切——四个调用方分属两类约束**：
+
+| 调用方 | 性质 | 归宿 |
+|---|---|---|
+| 三个 ReAct 节点 / m2 表单字段分类 | 要 LangChain chat model **且必须支持 tool calling** | `config.yaml` 的 `multisite.model` 节（能配、拿不到兜底） |
+| `classify_jobs` / `plan_buckets` | 纯文本进出，无工具 | `ModelRouter` 的 **balanced 链**，跟 `score_job`/`analyze_intent` 同一条 |
+
+`FallbackChain.complete()` 返回的是文本，喂不进 `create_react_agent`——所以前一类
+**结构上**拿不到兜底，不是没做。后一类的兜底最要紧：**`classify_jobs` 抛异常 =
+整页丢弃**（`harvest_page` 先攒 pending、分类成功才 `sink.extend`）。
+
+**为什么 `multisite.model` 是独立的节、不复用 balanced 链的第一条**：那条链是给
+`FallbackChain` 用的，首位不保证是 `openai_compatible`——哪天把 ollama 或 claude_cli
+放到链首，`build_model` 就拿到一个没有 base_url 的条目，m1 当场挂掉。约束不同，
+写成独立的节才说得清楚。
+
+#### 变异验证拆穿了我自己的守门
+
+router 要经过**六道逐个枚举的关键字参数**（编排层 → `run_layer1` →
+`build_select_graph` → `_make_nodes` → 闭包 → `classify_jobs`/`plan_buckets`），
+正是 W2 接简历踩过的「漏一处永远传不到且无报错」。我加了一条端到端断言守门，
+然后做变异验证：
+
+- 变异「编排层漏传」→ 红 ✅
+- 变异「节点漏把 router 交给 classify」→ **一条都不红** ❌
+
+因为 `TestScanBucketsWiresGoldenExamplesIntoClassify` 用的是**假 classify**（真的
+那个根本没跑），而 `test_classify_jobs.py` 是直接给 classify 注入 router 单测的——
+**中间那一跳谁都没看着**。补了 `TestNodesHandTheirRouterToThePlainLlmCalls`
+（比对同一个对象，不是"非 None"——路上任何一处新建 router 都能让"非 None"通过）。
+
+**教训：守门加完必须逐跳变异，"我加了断言"和"这条链被守住了"是两件事。**
+
+顺带修了 `test_multisite_wiring.py` 的夹具：`get_state` 每次新建一个 `_FakeState`，
+而真实 `app.state` 只有一个——假替身与现实不符，让"这个对象一路传到底"这类断言
+无从写起。
 
 ### ✅ 按站点清候选池（2026-08-21，v2.29.5）
 

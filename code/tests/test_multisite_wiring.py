@@ -79,10 +79,16 @@ class _FakeEmitter:
         self.current_workflow = None
 
 
+class _FakeSentinelRouter:
+    """认得出来的 router 替身——`test_the_model_router_reaches_run_layer1` 靠身份
+    比对确认传下去的就是 `st.model_router` 这一个，而不是路上新建的另一个。"""
+
+
 class _FakeState:
     def __init__(self, tracker):
         self.tracker = tracker
         self.emitter = _FakeEmitter()
+        self.model_router = _FakeSentinelRouter()
 
 
 @pytest.fixture()
@@ -92,8 +98,11 @@ def tracker(tmp_path):
 
 @pytest.fixture()
 def service(tmp_path, tracker):
+    # **同一个 state 实例**：真实的 `app.state` 只有一个，每次 get_state() 新建
+    # 一个假的会让"这个对象一路传到底"这类断言无从写起（也确实挡过一次）。
+    state = _FakeState(tracker)
     return OrchestrationService(
-        get_state=lambda: _FakeState(tracker),
+        get_state=lambda: state,
         ensure_state=lambda: None,
         data_dir=tmp_path,
         write_schedule_log=lambda entry: None,
@@ -134,6 +143,22 @@ class TestSelectPassthrough:
         kw = captured_run[0]
         assert kw["quotas"] == {"开发": 5}
         assert kw["max_pages"] == 3
+
+    def test_the_model_router_reaches_run_layer1(self, service, captured_run):
+        """`st.model_router` 必须一路传到 `run_layer1`。
+
+        **这条测试挡的是"漏传一处、静默失效"**：router 要经过
+        编排层 → `run_layer1` → `build_select_graph` → `_make_nodes` → 闭包 →
+        `classify_jobs` / `plan_buckets` 六道手，全是逐个枚举的关键字参数。
+        本项目在 W2 接简历时踩过一模一样的坑：漏一处，开关永远传不到，
+        而且没有任何报错。
+
+        比的是**同一个对象**，不是"非 None"——路上任何一处新建一个 router
+        （比如某个默认值写成 `build_model_router(load_config())`）都能让
+        "非 None" 通过，而那正是要挡的分叉。
+        """
+        service._run_multisite_select({"site": "s", "search_url": "https://x/jobs"})
+        assert captured_run[0]["model_router"] is service._st.model_router
 
     def test_defaults_when_not_given(self, service, captured_run):
         # 不给 = 用 profile 的站点解析结果（quotas=None 让 run_layer1 自己解析）+ 默认 8 页。

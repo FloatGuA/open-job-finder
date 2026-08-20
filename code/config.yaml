@@ -62,6 +62,18 @@ w2:                           # 检查回应流程
   dry_run: false
   headless: true
 
+multisite:                    # [m1/m2] LangGraph 用的 chat model（与下方 llm 的 fallback 链分开）
+  model:                      # 只服务两处：create_react_agent 和 with_structured_output，
+                              # 两者都要求 LangChain chat model **且必须支持 tool calling**，
+                              # 而 FallbackChain.complete() 返回的是文本——所以这两处只能配、不能兜。
+                              # 纯文本的 classify_jobs / plan_buckets 已走 llm.capabilities.balanced。
+                              # 不复用 balanced 链首条：那条链首位不保证是 openai_compatible，
+                              # 换成 ollama/claude_cli 就没有 base_url，m1 会当场挂掉。
+    type: openai_compatible
+    model: deepseek-chat
+    base_url: https://api.deepseek.com
+    api_key_env: DEEPSEEK_API_KEY
+
 m1:                           # 多站点选岗（Layer 1 Checkpoint 1；对外零副作用）
   site: ''                    # 站点标识，决定用哪个持久化登录目录 data/browser_profile_multisite/<site>/
   search_url: ''              # 站点招聘入口页（校招首页，**不要带筛选参数**——

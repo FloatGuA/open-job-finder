@@ -25,7 +25,6 @@ multisite 这一层从浏览器工具到 `run_agent` 全是 async，分类是网
 """
 import re
 
-from multisite.agent_runtime import build_model
 from services.exceptions import LLMParseError
 from services.llm_parser import safe_parse_json_array
 from services.prompt_manager import PromptManager
@@ -58,7 +57,7 @@ async def classify_jobs(
     items: list[dict],
     quotas: dict,
     *,
-    model=None,
+    router=None,
     prompt_text: str | None = None,
     golden_examples: str | None = None,
 ) -> list[dict]:
@@ -89,16 +88,17 @@ async def classify_jobs(
     if not items:
         return []
 
-    if model is None:
-        model = build_model()
     if prompt_text is None:
         # 覆盖层优先——见模块 docstring 的 FIX-2 说明。不能直接 `Path.read_text()`。
         prompt_text = PromptManager().load(_PROMPT_NAME)
 
     prompt = _render_prompt(prompt_text, items, quotas, golden_examples)
 
-    response = await model.ainvoke(prompt)
-    raw_results = _parse_response(response.content)
+    # `ModelRouter.complete` 是同步的。从 async 里调它只是阻塞事件循环——这条
+    # 流水线本来就是串行的（一次一个岗位、一次一页），没有并发在等它让路，
+    # 也不存在 `asyncio.run` 嵌套的问题。
+    text, _provider = router.complete(prompt=prompt, capability="balanced")
+    raw_results = _parse_response(text)
 
     by_index: dict[int, dict] = {}
     for entry in raw_results:

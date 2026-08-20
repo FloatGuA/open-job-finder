@@ -140,7 +140,7 @@ class TestScanBucketsWiresGoldenExamplesIntoClassify:
 
         captured = {}
 
-        async def fake_classify_jobs(items, quotas, *, model=None, prompt_text=None,
+        async def fake_classify_jobs(items, quotas, *, router=None, prompt_text=None,
                                      golden_examples=None):
             captured["golden_examples"] = golden_examples
             return [{**it, "category": "开发", "why": ""} for it in items]
@@ -312,3 +312,108 @@ class TestScanBucketsFailsWhenItNeverHarvested:
         state = {**self._state(), "bucket_plan": []}
         out = asyncio.run(nodes["scan_buckets"][0](state))
         assert out["found_jobs"] == []
+
+
+class TestNodesHandTheirRouterToThePlainLlmCalls:
+    """`_make_nodes(model_router=...)` 拿到的 router，必须真的交到
+    `classify_jobs` / `compute_bucket_plan` 手上。
+
+    **这条是变异验证逼出来的**：只守"编排层 → run_layer1"那一跳时，把节点里的
+    `router=model_router` 改成 `router=None`，**全量测试一条都不红**——因为
+    `TestScanBucketsWiresGoldenExamplesIntoClassify` 用的是假 classify（真的那个
+    根本没跑），而 `test_classify_jobs.py` 是直接给 classify 注入 router 单测的。
+    中间那一跳谁都没看着。
+
+    router 要经过六道逐个枚举的关键字参数（编排层 → run_layer1 → build_select_graph
+    → _make_nodes → 闭包 → classify_jobs/plan_buckets）。**漏一处不会报错**，
+    只会让那条链路悄悄退回没有兜底的状态——W2 接简历时踩过一模一样的坑。
+    """
+
+    def _tools(self):
+        from langchain_core.tools import StructuredTool
+
+        async def _noop(uid: str = "") -> str:
+            return ""
+
+        names = ("take_snapshot", "click", "navigate_page", "wait_for",
+                 "list_pages", "select_page", "close_page")
+        return [StructuredTool.from_function(coroutine=_noop, name=n, description=n)
+                for n in names]
+
+    def _manual(self):
+        from multisite.site_manual import SiteManual
+        return SiteManual.from_dict({
+            "job_url_source": "new_tab_on_click", "url_template": "",
+            "pagination": "next_button", "filter_interaction": "direct_click",
+            "filters_survive_reload": False, "total_count_locator": "",
+            "row_split": "anchor_text", "row_anchor": "x", "dimensions": [],
+            "important_notes": ""})
+
+    def test_scan_buckets_passes_it_to_classify_jobs(self, monkeypatch):
+        import asyncio
+
+        import multisite.layer1_agent as mod
+
+        sentinel = object()
+        captured = {}
+
+        async def fake_classify_jobs(items, quotas, *, router=None, prompt_text=None,
+                                     golden_examples=None):
+            captured["router"] = router
+            return [{**it, "category": "开发", "why": ""} for it in items]
+
+        async def fake_harvest_page(snapshot_text, tools, manual, *, bucket, classify,
+                                    sink, known_urls, limit):
+            sink.extend(await classify(
+                [{"url": "https://x/1", "jd": "j", "bucket": bucket, "text": "raw"}]))
+            return {"rows": 1, "collected": 1, "skipped_known": 0, "url_failed": 0,
+                    "truncated": False}
+
+        class _FakeAgent:
+            def __init__(self, tools):
+                self.tools = tools
+
+        async def fake_run_agent(agent, message, on_step=None):
+            tool = next(t for t in agent.tools if t.name == "harvest_current_page")
+            await tool.ainvoke({"bucket": "技术"})
+            return {"messages": []}
+
+        monkeypatch.setattr(mod, "classify_jobs", fake_classify_jobs)
+        monkeypatch.setattr(mod, "harvest_page", fake_harvest_page)
+        monkeypatch.setattr(mod.preferences, "render_golden_examples", lambda tracker: "")
+        monkeypatch.setattr(mod.agent_runtime, "build_agent",
+                            lambda tools, prompt: _FakeAgent(tools))
+        monkeypatch.setattr(mod.agent_runtime, "run_agent", fake_run_agent)
+
+        nodes, _ = mod._make_nodes(tools=self._tools(), personal_info={},
+                                   tracker=FakeTracker(), quotas={"开发": 1},
+                                   model_router=sentinel)
+        asyncio.run(nodes["scan_buckets"][0]({
+            "manual": self._manual(),
+            "bucket_plan": [{"dimension": "d", "option": "o", "why": "", "targets": ["开发"]}],
+            "site_name": "s", "search_url": "https://x/search",
+        }))
+
+        assert captured["router"] is sentinel, \
+            "节点没把自己的 model_router 交给 classify_jobs——那条链路会静默退回无兜底"
+
+    def test_plan_buckets_passes_it_to_compute_bucket_plan(self, monkeypatch):
+        import asyncio
+
+        import multisite.layer1_agent as mod
+
+        sentinel = object()
+        captured = {}
+
+        async def fake_compute_bucket_plan(manual, quotas, constraints, *, router=None):
+            captured["router"] = router
+            return []
+
+        monkeypatch.setattr(mod, "compute_bucket_plan", fake_compute_bucket_plan)
+
+        nodes, _ = mod._make_nodes(tools=self._tools(), personal_info={},
+                                   tracker=FakeTracker(), quotas={"开发": 1},
+                                   model_router=sentinel)
+        asyncio.run(nodes["plan_buckets"][0]({"manual": self._manual()}))
+
+        assert captured["router"] is sentinel

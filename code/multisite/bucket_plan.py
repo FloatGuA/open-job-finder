@@ -34,7 +34,6 @@ JSON 数组，`safe_parse_json` 认死了顶层是对象套用不了，于是收
 """
 import re
 
-from multisite.agent_runtime import build_model
 from multisite.site_manual import SiteManual
 from services.exceptions import LLMParseError
 from services.llm_parser import safe_parse_json_array
@@ -50,7 +49,7 @@ async def plan_buckets(
     quotas: dict,
     constraints: str,
     *,
-    model=None,
+    router=None,
     prompt_text: str | None = None,
 ) -> list[dict]:
     """决定这一轮扫哪几个桶。
@@ -59,16 +58,15 @@ async def plan_buckets(
     **空列表是合法结果**（站上确实没有相关的桶），不抛；整段回不成 JSON 数组才抛
     `ValueError`（那是"没读懂"，不是"没有"，两者不能用同一个返回值表达）。
     """
-    if model is None:
-        model = build_model()
     if prompt_text is None:
         # 覆盖层优先——见模块 docstring 的 FIX-2 说明。不能直接 `Path.read_text()`。
         prompt_text = PromptManager().load(_PROMPT_NAME)
 
     prompt = _render_prompt(prompt_text, manual, quotas, constraints)
 
-    response = await model.ainvoke(prompt)
-    raw_plan = _parse_response(response.content)
+    # `ModelRouter.complete` 是同步的；这条流水线本身是串行的，阻塞无害。
+    text, _provider = router.complete(prompt=prompt, capability="balanced")
+    raw_plan = _parse_response(text)
 
     valid_options = {
         dim.get("name"): set(dim.get("options") or [])

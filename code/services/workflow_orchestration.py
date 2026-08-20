@@ -190,6 +190,10 @@ class OrchestrationService:
             # 会有两处来源，改一处漏一处。
             **({"candidates_per_bucket": int(overrides["candidates_per_bucket"])}
                if overrides.get("candidates_per_bucket") else {}),
+            # 跟 w1/w2/w3 同一个来源（`st.model_router`）。`classify_jobs` /
+            # `plan_buckets` 靠它走 balanced 链拿兜底——此前多站点完全绕开
+            # FallbackChain，DeepSeek 打个嗝就是一次废跑。
+            model_router=self._st.model_router,
             emitter=getattr(self._st, "emitter", None),
             workflow="m1",
         ))
@@ -268,6 +272,10 @@ class OrchestrationService:
             job_url=job.url,
             headless=bool(overrides.get("headless") or False),
             tracker=self._st.tracker,
+            # 跟 w1/w2/w3 同一个来源（`st.model_router`）。`classify_jobs` /
+            # `plan_buckets` 靠它走 balanced 链拿兜底——此前多站点完全绕开
+            # FallbackChain，DeepSeek 打个嗝就是一次废跑。
+            model_router=self._st.model_router,
             emitter=getattr(self._st, "emitter", None),
             workflow="m2",
             # 这行 pending_job 就在手里——不要绕回数据库按 url 反查（拆图后 m2 的

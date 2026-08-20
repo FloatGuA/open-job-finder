@@ -786,3 +786,37 @@
   不等于删除。**
 - **UI 两步确认**：删除不可逆，按钮又在站点标题旁边，误点的代价是整个站的
   候选池没了、还得重跑一次 m1。第一下只切状态、绝不发请求（有测试守着）。
+
+## 多站点 LLM 分两处配置：balanced 链 + 独立的 `multisite.model`
+
+- **日期 / 版本**：2026-08-21，v2.29.7
+- **背景**：`agent_runtime.build_model()` 写死 `deepseek-chat`，m1/m2 完全绕开
+  项目的 `ModelRouter` / `FallbackChain`——没有兜底，设置页也调不动。
+- **选了什么**：按**约束**而不是按模块拆。纯文本调用（`classify_jobs` /
+  `plan_buckets`）走 `ModelRouter` 的 balanced 链，跟 W1/W2 同一条；需要
+  tool calling 的两处（`create_react_agent` / `with_structured_output`）读
+  `config.yaml` 的 `multisite.model` 节。
+- **否掉了「全部走 ModelRouter」**：`FallbackChain.complete()` 返回文本，
+  喂不进 `create_react_agent`。这不是没做，是**结构上做不到**。
+- **否掉了「build_model 复用 balanced 链的第一条」**：看着最"一个契约一份实现"，
+  但那条链是给 FallbackChain 用的，**首位不保证是 `openai_compatible`**——
+  把 ollama 或 claude_cli 放到链首，`build_model` 就拿到一个没有 base_url 的条目，
+  m1 当场挂掉。两者约束不同（这里必须支持 tool calling），独立的节才说得清楚。
+- **代价**：一条流程两处模型配置。接受它，因为**那个差异是真实存在的**，
+  合并只会把它藏起来。
+
+## `scan_buckets` 一次都没抓就必须失败：agent 正常结束 ≠ agent 干了活
+
+- **日期 / 版本**：2026-08-21，v2.29.6
+- **背景**：真机 run `m1_20260820_1831`——agent 把整段预算耗在点「深圳」城市
+  筛选器上（反复撞 `did not become interactive`），最后写了一段总结文字、
+  没有任何工具调用就正常返回。`hit_step_limit` 是 False → `truncated` 是 False →
+  `scan_buckets` 报 `successful`、`found: 0`、`run_end: done`。**全绿，而它什么都没抓。**
+- **选了什么**：`harvest_calls` 计数，一次都没调就 `raise`（跟 `survey_structure`
+  在 `record_site_manual` 没调时一致，诚实失败并说清缺哪一步）。
+- **判据是"看没看"，不是"找到没找到"**：抓过但这一页全是已收录岗位
+  （`skipped_known`）时 `found=0` 是**诚实的成功**。**没看过和看了没有，
+  不能长成一个样子**——有测试守着这条边界不被误伤。
+- **一般化**：`observability.stage()` 里那句「没跑完就不许报成功」只覆盖了
+  "被打断"，没覆盖"跑完了但没干活"。**凡是靠 agent 自主决定何时收工的阶段，
+  都需要一个"它到底干没干那件事"的计数**，不能只看它有没有异常退出。
