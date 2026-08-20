@@ -3,12 +3,12 @@
 **不走 ReAct 循环**是刻意的（spec §2.1 同理）：它不需要"看一眼再决定下一步"，
 输入是文本、输出是标签。做成普通 LLM 调用换来的是**可单测 + 可 eval**。
 
-**解析没有复用 `services/llm_parser.safe_parse_json`**：那个函数认死了 LLM
-回复的顶层是一个 JSON 对象——`_extract_json_candidate` 只找 `{...}`，末尾还
-`isinstance(parsed, dict)` 校验。而这里的输出天然是一个数组（`[{"index":...}]`，
-按 index 对齐是硬要求，见下）。套用不了，所以照它的三层思路（围栏提取 →
-json.loads → json_repair 兜底）单独写了一份只服务数组场景的最小实现，
-详见本文件底部的 `_extract_json_array` / `_parse_response`。
+**解析复用 `services/llm_parser.safe_parse_json_array`**（修复轮 1 收敛）：
+这里的输出天然是一个数组（`[{"index":...}]`，按 index 对齐是硬要求，见下）。
+`safe_parse_json` 认死了顶层是 JSON 对象，套用不了；`bucket_plan.py` 的输出
+同样是数组，原本两边各写了一份逻辑相同、docstring 已经开始漂移的私有实现，
+现已收敛进 `llm_parser.safe_parse_json_array`——那份三层解析（围栏提取 →
+json.loads → json_repair 兜底）现在只有一份，见 `_parse_response`。
 
 **`classify_jobs` 是 `async def`**（修复轮 1）：调用方 `multisite/harvest.py` 的
 `harvest_page` 本身是 `async def`，且跑在 LangGraph 已有的事件循环里；这里如果
@@ -18,13 +18,12 @@ multisite 这一层从浏览器工具到 `run_agent` 全是 async，分类是网
 统一成 async 而不是靠 `model.invoke()` 同步接口绕过——后者会在 async 管线里
 插一个阻塞调用，只是「眼下没有并发」才不出问题，是把正确性寄托在环境假设上。
 """
-import json
 import re
 from pathlib import Path
 
-from json_repair import repair_json
-
 from multisite.agent_runtime import build_model
+from services.exceptions import LLMParseError
+from services.llm_parser import safe_parse_json_array
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "layer1_classify_jobs.md"
 
@@ -116,45 +115,10 @@ def _render_prompt(template: str, items: list[dict], quotas: dict) -> str:
     return text
 
 
-def _extract_json_array(text: str) -> str | None:
-    """比照 `services/llm_parser._extract_json_candidate`，但找 `[...]` 而不是
-    `{...}`——顶层结构不一样，找的括号也得跟着换。"""
-    fence_match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
-    if fence_match:
-        text = fence_match.group(1).strip()
-
-    start = text.find("[")
-    if start == -1:
-        return None
-
-    depth = 0
-    for index in range(start, len(text)):
-        char = text[index]
-        if char == "[":
-            depth += 1
-        elif char == "]":
-            depth -= 1
-            if depth == 0:
-                return text[start:index + 1].strip()
-    return None
-
-
 def _parse_response(text: str) -> list:
     """整段回不成 JSON 数组是失败，抛 `ValueError`——静默返回空列表会让上层
     把它当成"这一页没有符合的岗位"。"""
-    extracted = _extract_json_array(text)
-    if extracted is None:
-        raise ValueError(f"LLM 回复中没有找到 JSON 数组：{text[:200]!r}")
-
     try:
-        parsed = json.loads(extracted)
-    except json.JSONDecodeError as exc:
-        try:
-            repaired = repair_json(extracted)
-            parsed = json.loads(repaired) if isinstance(repaired, str) else repaired
-        except Exception:
-            raise ValueError(f"LLM 回复无法解析为 JSON：{text[:200]!r}") from exc
-
-    if not isinstance(parsed, list):
-        raise ValueError(f"LLM 回复解析结果不是 JSON 数组：{text[:200]!r}")
-    return parsed
+        return safe_parse_json_array(text)
+    except LLMParseError as exc:
+        raise ValueError(f"LLM 回复无法解析为 JSON 数组：{text[:200]!r}") from exc

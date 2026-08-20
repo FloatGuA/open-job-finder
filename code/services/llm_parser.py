@@ -90,3 +90,93 @@ def safe_parse_json(text: str, required_fields: dict = None) -> dict:
                     parsed[field_name] = None
 
     return parsed
+
+
+def _extract_json_array_candidate(text: str) -> str | None:
+    fence_match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        text = fence_match.group(1).strip()
+
+    start = text.find("[")
+    if start == -1:
+        return None
+
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1].strip()
+    return None
+
+
+def safe_parse_json_array(text: str, required_fields: dict = None) -> list:
+    """
+    与 `safe_parse_json` 同源的三层解析，但顶层结构是数组不是对象：
+    1. Regex：提取 ```json ... ``` 围栏内容；找不到则找第一个 [...] 块
+       （配平方括号，不是花括号——这是它跟 `safe_parse_json` 唯一的物理差异）。
+    2. json-repair：初次 json.loads 失败时调 repair(extracted_text)。
+    3. 可选 required_fields：对数组里每个 dict 元素做字段类型强制（跟
+       `safe_parse_json` 第 3 层同一套规则，只是循环套用到每个元素上）。
+
+    **为什么不是给 `safe_parse_json` 加一个"顶层是数组"的参数**：已实测过，
+    把一个 JSON 数组喂给 `safe_parse_json` 它不会报错——`_extract_json_candidate`
+    找的是第一个 "{"，命中的是数组里第一个元素对象，`json.loads` 解析成功、
+    `isinstance(parsed, dict)` 也通过，于是**只返回数组的第一个元素，其余元素
+    被静默丢弃**，调用方毫无察觉。两种顶层结构对应两种完全不同的失败模式，
+    合并成一个函数只会把这种静默截断也焊死在共用路径里，所以拆成两个函数。
+
+    Returns the parsed list. Raises LLMParseError if all layers fail or the
+    parsed result isn't a list.
+    """
+    extracted = _extract_json_array_candidate(text)
+
+    if not extracted:
+        logger.debug("Layer 1 array extraction failed. Original text: %s", text)
+        raise LLMParseError("No JSON array found in LLM response.")
+
+    parsed = None
+    try:
+        parsed = json.loads(extracted)
+    except json.JSONDecodeError as e:
+        logger.debug("Layer 2 json.loads failed for text: %s", text)
+
+        if _has_json_repair:
+            try:
+                repaired = json_repair_func(extracted)
+                parsed = json.loads(repaired) if isinstance(repaired, str) else repaired
+            except Exception as e2:
+                logger.debug("Layer 2 json-repair failed for text: %s; error: %s", text, e2)
+        else:
+            logger.debug("json-repair unavailable while parsing text: %s", text)
+
+        if parsed is None:
+            raise LLMParseError(f"Failed to parse JSON after all layers. Original error: {e}") from e
+
+    if not isinstance(parsed, list):
+        logger.debug("Parsed JSON is not an array for text: %s", text)
+        raise LLMParseError("Parsed JSON is not an array.")
+
+    if required_fields:
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            for field_name, field_type in required_fields.items():
+                if field_name not in item:
+                    item[field_name] = None
+                elif item[field_name] is not None:
+                    try:
+                        item[field_name] = field_type(item[field_name])
+                    except (ValueError, TypeError):
+                        logger.debug(
+                            "Layer 3 coercion failed for field '%s' to %s. Original text: %s",
+                            field_name,
+                            getattr(field_type, "__name__", str(field_type)),
+                            text,
+                        )
+                        item[field_name] = None
+
+    return parsed

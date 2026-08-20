@@ -20,20 +20,21 @@
 （同 `classify.py` 的理由——multisite 这一层从浏览器工具到 `run_agent` 全是 async，跟着
 统一成 async 而不是靠同步接口绕过）。
 
-**JSON 数组解析没有从 `classify.py` 里 import**：那两个函数（`_extract_json_array` /
-`_parse_response`）名字带下划线，是 classify.py 的模块内部实现，跨模块 import 私有符号会
-把 bucket_plan 的正确性绑在 classify.py 不打算维持的内部契约上。本次改动范围也不许碰
-classify.py（不能把它们改成公开符号）。两边形状确实一样（顶层都是 JSON 数组），所以这里
-按同样的思路（围栏提取 → json.loads → json_repair 兜底）单独写一份，重复的是逻辑不是接口。
+**JSON 数组解析复用 `services/llm_parser.safe_parse_json_array`**（修复轮 1 收敛）：
+原本这里跟 `classify.py` 各写了一份逻辑相同的 `_extract_json_array`/`_parse_response`
+——逻辑复制粘贴过来那一刻起就已经漂移（两边的 docstring 各改各的）。两边输出都是顶层
+JSON 数组，`safe_parse_json` 认死了顶层是对象套用不了，于是收敛进 `llm_parser` 新增的
+`safe_parse_json_array`，现在这套三层解析（围栏提取 → json.loads → json_repair 兜底）
+只有一份实现。**没有直接 import classify.py 的私有函数**：那两个函数名字带下划线，
+跨模块 import 私有符号等于把一个模块的内部实现变成另一个模块的公开依赖，比复制更糟。
 """
-import json
 import re
 from pathlib import Path
 
-from json_repair import repair_json
-
 from multisite.agent_runtime import build_model
 from multisite.site_manual import SiteManual
+from services.exceptions import LLMParseError
+from services.llm_parser import safe_parse_json_array
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "layer1_plan_buckets.md"
 
@@ -118,44 +119,10 @@ def _render_prompt(template: str, manual: SiteManual, quotas: dict, constraints:
     return text
 
 
-def _extract_json_array(text: str) -> str | None:
-    """比照 `classify.py` 的同名函数：围栏提取 + 括号配平，找 `[...]`。"""
-    fence_match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
-    if fence_match:
-        text = fence_match.group(1).strip()
-
-    start = text.find("[")
-    if start == -1:
-        return None
-
-    depth = 0
-    for index in range(start, len(text)):
-        char = text[index]
-        if char == "[":
-            depth += 1
-        elif char == "]":
-            depth -= 1
-            if depth == 0:
-                return text[start:index + 1].strip()
-    return None
-
-
 def _parse_response(text: str) -> list:
     """整段回不成 JSON 数组是失败，抛 `ValueError`——静默返回空列表会让"没读懂"
     和"确实没有相关的桶"变成同一个返回值，两者含义完全不同。"""
-    extracted = _extract_json_array(text)
-    if extracted is None:
-        raise ValueError(f"LLM 回复中没有找到 JSON 数组：{text[:200]!r}")
-
     try:
-        parsed = json.loads(extracted)
-    except json.JSONDecodeError as exc:
-        try:
-            repaired = repair_json(extracted)
-            parsed = json.loads(repaired) if isinstance(repaired, str) else repaired
-        except Exception:
-            raise ValueError(f"LLM 回复无法解析为 JSON：{text[:200]!r}") from exc
-
-    if not isinstance(parsed, list):
-        raise ValueError(f"LLM 回复解析结果不是 JSON 数组：{text[:200]!r}")
-    return parsed
+        return safe_parse_json_array(text)
+    except LLMParseError as exc:
+        raise ValueError(f"LLM 回复无法解析为 JSON 数组：{text[:200]!r}") from exc
