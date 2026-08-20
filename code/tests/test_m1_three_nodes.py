@@ -189,3 +189,126 @@ class TestScanBucketsWiresGoldenExamplesIntoClassify:
         asyncio.run(scan_buckets_fn(state))
 
         assert captured["golden_examples"] == "【golden marker】"
+
+
+class TestScanBucketsFailsWhenItNeverHarvested:
+    """agent **正常结束**、却一次 `harvest_current_page` 都没调 —— 这必须是失败。
+
+    **真机（2026-08-21 run `m1_20260820_1831`）**：agent 把整段预算耗在点「深圳」
+    城市筛选器上（反复撞 `did not become interactive`），最后写了一段总结文字、
+    没有任何工具调用，ReAct 循环就此正常返回。于是：
+
+    ```
+    scan_buckets  successful  {"found": 0, "by_category": {}}
+    run_end       done
+    ```
+
+    **全绿，而它什么都没抓。**
+
+    `observability.stage()` 里那句「没跑完就不许报成功」只认 `truncated`
+    （`hit_step_limit`，即步数耗尽）。这次 `hit_step_limit` 是 False——
+    **agent 正常结束 ≠ agent 干了活**，那是两件事，而只有前者有守门。
+
+    对照 `survey_structure`：它在 `record_site_manual` 一次都没调时会
+    `raise RuntimeError(还差：...)`，诚实失败并说清缺什么。`scan_buckets` 缺这道门。
+
+    **为什么判据是"调用次数"而不是"found > 0"**：harvest 调过、但这一页的岗位
+    全都已收录（`skipped_known`）或这一页本来就没岗位，`found=0` 是**诚实的成功**。
+    区别在于 agent 到底看没看——**没看过和看了没有，不能长成一个样子。**
+    """
+
+    def _tools(self):
+        from langchain_core.tools import StructuredTool
+
+        async def _noop(uid: str = "") -> str:
+            return ""
+
+        names = ("take_snapshot", "click", "navigate_page", "wait_for",
+                 "list_pages", "select_page", "close_page")
+        return [StructuredTool.from_function(coroutine=_noop, name=n, description=n)
+                for n in names]
+
+    def _state(self):
+        from multisite.site_manual import SiteManual
+        manual = SiteManual.from_dict({
+            "job_url_source": "new_tab_on_click", "url_template": "",
+            "pagination": "next_button", "filter_interaction": "direct_click",
+            "filters_survive_reload": False, "total_count_locator": "",
+            "row_split": "anchor_text", "row_anchor": "x", "dimensions": [],
+            "important_notes": ""})
+        return {
+            "manual": manual,
+            "bucket_plan": [{"dimension": "d", "option": "o", "why": "", "targets": ["开发"]}],
+            "site_name": "test-site",
+            "search_url": "https://x/search",
+        }
+
+    def _run(self, monkeypatch, fake_run_agent, fake_harvest=None):
+        import asyncio
+
+        import multisite.layer1_agent as mod
+
+        async def default_harvest(snapshot_text, tools, manual, *, bucket, classify,
+                                  sink, known_urls, limit):
+            return {"rows": 0, "collected": 0, "skipped_known": 0, "url_failed": 0,
+                    "truncated": False}
+
+        class _FakeAgent:
+            def __init__(self, tools):
+                self.tools = tools
+
+        monkeypatch.setattr(mod, "harvest_page", fake_harvest or default_harvest)
+        monkeypatch.setattr(mod.preferences, "render_golden_examples", lambda tracker: "")
+        monkeypatch.setattr(mod.agent_runtime, "build_agent",
+                            lambda tools, prompt: _FakeAgent(tools))
+        monkeypatch.setattr(mod.agent_runtime, "run_agent", fake_run_agent)
+
+        nodes, _ = mod._make_nodes(tools=self._tools(), personal_info={},
+                                   tracker=FakeTracker(), quotas={"开发": 1})
+        return asyncio.run(nodes["scan_buckets"][0](self._state()))
+
+    def test_agent_that_calls_nothing_is_a_failure(self, monkeypatch):
+        """真机那次的形状：agent 写了段文字就结束，一个工具都没调。"""
+        async def fake_run_agent(agent, message, on_step=None):
+            return {"messages": []}
+
+        with pytest.raises(RuntimeError, match="harvest_current_page"):
+            self._run(monkeypatch, fake_run_agent)
+
+    def test_agent_that_only_clicked_around_is_a_failure(self, monkeypatch):
+        """更贴近真机：它**调了**别的工具（点筛选器、截图），只是从没抓过。
+        "调过工具"不能算干过活——**干的是不是这个活**才是判据。"""
+        async def fake_run_agent(agent, message, on_step=None):
+            for name in ("take_snapshot", "click", "click", "take_snapshot"):
+                await next(t for t in agent.tools if t.name == name).ainvoke({"uid": "1_2"})
+            return {"messages": []}
+
+        with pytest.raises(RuntimeError, match="harvest_current_page"):
+            self._run(monkeypatch, fake_run_agent)
+
+    def test_harvesting_a_page_that_yields_nothing_is_still_success(self, monkeypatch):
+        """抓了、但这一页的岗位全都已收录 —— `found=0` 是诚实的成功，不该报错。"""
+        async def fake_run_agent(agent, message, on_step=None):
+            tool = next(t for t in agent.tools if t.name == "harvest_current_page")
+            await tool.ainvoke({"bucket": "技术"})
+            return {"messages": []}
+
+        async def all_known(snapshot_text, tools, manual, *, bucket, classify,
+                            sink, known_urls, limit):
+            return {"rows": 3, "collected": 0, "skipped_known": 3, "url_failed": 0,
+                    "truncated": False}
+
+        out = self._run(monkeypatch, fake_run_agent, fake_harvest=all_known)
+        assert out["found_jobs"] == []
+
+    def test_an_empty_plan_still_returns_quietly(self, monkeypatch):
+        """`bucket_plan` 为空是合法结果（手册探出的桶没一个匹配目标类别），
+        节点在进 agent 之前就返回了——那条早退路径不该被这道守门误伤。"""
+        import asyncio
+
+        import multisite.layer1_agent as mod
+        nodes, _ = mod._make_nodes(tools=self._tools(), personal_info={},
+                                   tracker=FakeTracker(), quotas={"开发": 1})
+        state = {**self._state(), "bucket_plan": []}
+        out = asyncio.run(nodes["scan_buckets"][0](state))
+        assert out["found_jobs"] == []

@@ -1426,6 +1426,11 @@ def _make_nodes(
         # 岗位随时经 harvest_current_page 落到这个 sink 里（原始字典，形状见
         # harvest.harvest_page），不依赖 agent 最后一次性输出。
         raw_sink: list[dict] = []
+        # `harvest_current_page` 被调用了几次。**判据是"看没看"，不是"找到没找到"**：
+        # 抓过但这一页全是已收录岗位（skipped_known）或本来就没岗位，found=0 是
+        # 诚实的成功；一次都没抓则是 agent 压根没干这个活。两者不能长成一个样子。
+        # 用调用次数而不是 len(raw_sink)：后者在"抓了但一条都没新收"时也是 0。
+        harvest_calls = {"n": 0}
         # 库里已经收录过的岗位不该重复抓；每次 harvest_current_page 调用后会把
         # 新记的 url 并入这个集合，防止同一岗位在本轮里被跨页/跨桶重复收录。
         known_urls = {j.url for j in tracker.get_pending_jobs()}
@@ -1455,6 +1460,7 @@ def _make_nodes(
             from langchain_core.tools import StructuredTool
 
             async def harvest_current_page(bucket: str) -> str:
+                harvest_calls["n"] += 1
                 # candidates_per_bucket 是**按桶**的候选上限（spec §4），不是每次
                 # 调用各自独立的上限——否则一个桶翻 5 页、每页各拿满 limit，会
                 # 让这个旋钮形同虚设。按桶已收数量算出这次还能拿多少。
@@ -1522,6 +1528,22 @@ def _make_nodes(
             truncated = True
             safe_print(f"[layer1] 扫桶 agent 达到步数上限，采用已记录的 {len(raw_sink)} 个岗位。",
                        flush=True)
+
+        if harvest_calls["n"] == 0:
+            # **agent 正常结束 ≠ agent 干了活。** `observability.stage()` 里那句
+            # 「没跑完就不许报成功」只认 `truncated`（步数耗尽）；agent 也可能像
+            # 真机 run `m1_20260820_1831` 那样把预算耗在点筛选器上、最后写一段
+            # 总结文字就正常返回——`hit_step_limit` 是 False，于是整个阶段报绿、
+            # `found: 0`，**看起来像"这个站没有匹配的岗位"**。
+            # 跟 `survey_structure` 在 `record_site_manual` 一次没调时的处理一致：
+            # 诚实失败，并说清楚缺的是哪一步。
+            raise RuntimeError(
+                f"扫桶结束了，但 harvest_current_page 一次都没调用过"
+                f"（计划里有 {len(plan)} 个桶）——agent 没有抓取任何一页。"
+                + ("步数已耗尽。" if truncated
+                   else "它是正常结束的，不是撞上步数上限。")
+                + "常见原因：筛选器点不动，agent 全程卡在切桶上。"
+                  "run 日志的 agent_step 里能看到它到底在点什么。")
 
         return {"found_jobs": _harvest_items_to_found_jobs(raw_sink), "truncated": truncated}
 
