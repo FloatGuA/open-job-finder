@@ -276,6 +276,7 @@ class ApplicationTracker:
                     category       TEXT DEFAULT '',
                     category_agent TEXT DEFAULT '',
                     why            TEXT DEFAULT '',
+                    jd             TEXT DEFAULT '',
                     status         TEXT NOT NULL DEFAULT 'pending',
                     reason         TEXT,
                     found_at       TEXT NOT NULL,
@@ -299,6 +300,14 @@ class ApplicationTracker:
             # and guessing would corrupt the per-bucket quota maths this column exists for.
             if "bucket" not in pj_cols:
                 self.conn.execute("ALTER TABLE pending_jobs ADD COLUMN bucket TEXT NOT NULL DEFAULT ''")
+            # Migration: jd -- the job detail page body, fetched by the same
+            # job_url_online visit that resolves `url`. Three consumers: the W1 scorer
+            # (avoid a second fetch), the Checkpoint 1 reviewer (currently sees only the
+            # title -- half a blind approval), and eval sample collection. Existing rows
+            # stay '' -- they predate the fetch, and '' is unambiguous for string-processing
+            # consumers (no `or ''` needed downstream).
+            if "jd" not in pj_cols:
+                self.conn.execute("ALTER TABLE pending_jobs ADD COLUMN jd TEXT DEFAULT ''")
 
             # site_limits: how many positions one person may apply to, discovered
             # opportunistically by the selection agent. `status` is THREE-way
@@ -1313,6 +1322,7 @@ class ApplicationTracker:
             category=row["category"] or "",
             category_agent=row["category_agent"] or "",
             why=row["why"] or "",
+            jd=row["jd"] or "",
             bucket=row["bucket"] or "",
             status=row["status"],
             reason=row["reason"],
@@ -1330,6 +1340,7 @@ class ApplicationTracker:
         category: str = "",
         why: str = "",
         bucket: str = "",
+        jd: str = "",
     ) -> Optional[int]:
         """Record one candidate job for Checkpoint 1. Returns the new id, or None if
         this url is already in the table.
@@ -1347,10 +1358,10 @@ class ApplicationTracker:
                 """
                 INSERT OR IGNORE INTO pending_jobs
                     (site_name, url, title, company, category, category_agent, why,
-                     bucket, status, found_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                     bucket, jd, status, found_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                 """,
-                (site_name, url, title, company, category, category, why, bucket,
+                (site_name, url, title, company, category, category, why, bucket, jd,
                  self._utcnow_iso()),
             )
             return cur.lastrowid if cur.rowcount else None

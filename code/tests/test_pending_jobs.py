@@ -238,3 +238,30 @@ class TestBucketColumn:
         jid = _add(tracker, url="https://x/1", bucket="研发类")
         tracker.decide_pending_job(jid, "approved")
         assert tracker.get_pending_job(jid).bucket == "研发类"
+
+
+class TestPendingJobCarriesJD:
+    """JD 要跟岗位一起落库。
+
+    **不是"以后可能有用"**：①W1 的评分器吃的就是 JD，抓一次两处用；②Checkpoint 1
+    审批时人要看得到（现在只有标题，是盲批的另一半）；③eval 要攒真实样本。
+    """
+
+    def test_jd_round_trips(self, tracker):
+        jid = tracker.add_pending_job(site_name="s", url="https://x/1", title="t",
+                                      jd="职责：做 Agent 工具开发")
+        assert tracker.get_pending_job(jid).jd == "职责：做 Agent 工具开发"
+
+    def test_jd_defaults_to_empty_not_none(self, tracker):
+        """空串而不是 NULL——消费方是字符串处理（评分器切词、前端渲染），
+        None 会让每个消费方各写一次 `or ''`。"""
+        jid = tracker.add_pending_job(site_name="s", url="https://x/2", title="t")
+        assert tracker.get_pending_job(jid).jd == ""
+
+    def test_existing_rows_migrate_with_empty_jd(self, tracker):
+        """加列前就存在的行读出来 jd 必须是空串，不能炸也不能是 None。"""
+        tracker.conn.execute("INSERT INTO pending_jobs (site_name, url, title, status, found_at) "
+                             "VALUES ('s', 'https://x/old', 'old', 'pending', '2026-01-01T00:00:00Z')")
+        tracker.conn.commit()
+        row = next(j for j in tracker.get_pending_jobs() if j.url == "https://x/old")
+        assert row.jd == ""
