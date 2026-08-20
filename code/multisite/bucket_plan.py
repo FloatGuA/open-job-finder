@@ -68,7 +68,12 @@ async def plan_buckets(
     valid_options = {
         dim.get("name"): set(dim.get("options") or [])
         for dim in (manual.dimensions or [])
-        if isinstance(dim, dict)
+        # `isinstance` 挡的是整条 dim 不是 dict；`dim.get("name")` 单独判空——
+        # 手册里某个 dim 缺 name（`SiteManual.from_dict` 不挡这个）时 key 会是
+        # None，如果 LLM 响应里某条 entry 又缺 dimension，`entry.get("dimension")`
+        # 同样是 None，两个畸形一对齐就会意外匹配通过（修复轮 2）。这个模块存在
+        # 的全部意义就是挡住 LLM 编出来的东西，不能被这种巧合绕过。
+        if isinstance(dim, dict) and dim.get("name")
     }
 
     out = []

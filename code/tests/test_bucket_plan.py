@@ -29,6 +29,17 @@ MANUAL = SiteManual.from_dict({
 })
 QUOTAS = {"AI NATIVE": 3, "开发": 5, "产品": 3}
 
+MANUAL_WITH_UNNAMED_DIM = SiteManual.from_dict({
+    "job_url_source": "new_tab_on_click", "url_template": "", "pagination": "next_button",
+    "filter_interaction": "expand_group_then_click", "filters_survive_reload": False,
+    "total_count_locator": r"共(\d+)个岗位", "row_split": "anchor_text",
+    "row_anchor": "工作地点：", "important_notes": "",
+    "dimensions": [
+        {"options": ["神秘选项"], "multi_select": True},  # 缺 name（SiteManual 不挡这个）
+        {"name": "岗位类别", "options": ["技术", "产品"], "multi_select": True},
+    ],
+})
+
 
 class _FakeModel:
     def __init__(self, payload):
@@ -93,6 +104,17 @@ class TestPlanBuckets:
         """站上确实没有相关的桶，是合法结论。返回空列表，**不抛**。"""
         model = _FakeModel([])
         assert _run(plan_buckets(MANUAL, QUOTAS, "", model=model)) == []
+
+    def test_a_dimension_missing_name_never_matches_an_entry_missing_dimension(self):
+        """手册里某个 dim 缺 name、LLM 响应里某条 entry 又缺 dimension——两个畸形
+        分别取 `.get()` 都会得到 None。如果 valid_options 里留了 None 这个 key，
+        两者就会意外匹配通过。这个模块存在的全部意义就是挡住 LLM 编出来的东西，
+        不能被这种巧合绕过。"""
+        model = _FakeModel([
+            {"option": "神秘选项", "why": "编的", "targets": ["开发"]},
+        ])
+        out = _run(plan_buckets(MANUAL_WITH_UNNAMED_DIM, QUOTAS, "", model=model))
+        assert out == []
 
     def test_prompt_carries_the_manual_dimensions_and_the_quotas(self):
         model = _FakeModel([])

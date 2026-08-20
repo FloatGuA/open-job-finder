@@ -113,14 +113,19 @@ def _extract_json_array_candidate(text: str) -> str | None:
     return None
 
 
-def safe_parse_json_array(text: str, required_fields: dict = None) -> list:
+def safe_parse_json_array(text: str) -> list:
     """
     与 `safe_parse_json` 同源的三层解析，但顶层结构是数组不是对象：
     1. Regex：提取 ```json ... ``` 围栏内容；找不到则找第一个 [...] 块
        （配平方括号，不是花括号——这是它跟 `safe_parse_json` 唯一的物理差异）。
     2. json-repair：初次 json.loads 失败时调 repair(extracted_text)。
-    3. 可选 required_fields：对数组里每个 dict 元素做字段类型强制（跟
-       `safe_parse_json` 第 3 层同一套规则，只是循环套用到每个元素上）。
+
+    **没有 `required_fields` 参数**（修复轮 2 去掉）：`safe_parse_json` 的第 3 层
+    字段类型强制是给它的调用方用的，`safe_parse_json_array` 目前两个调用方
+    （`multisite/classify.py`、`multisite/bucket_plan.py`）拿到 list 后都是自己按
+    各自规则逐条校验，不走这层强制。之前加了这个参数只是为了跟 `safe_parse_json`
+    "签名对称"，但没有调用方、没有测试——YAGNI。真有第二个数组场景需要字段强制
+    时再加，不要为了对称而对称。
 
     **为什么不是给 `safe_parse_json` 加一个"顶层是数组"的参数**：已实测过，
     把一个 JSON 数组喂给 `safe_parse_json` 它不会报错——`_extract_json_candidate`
@@ -159,24 +164,5 @@ def safe_parse_json_array(text: str, required_fields: dict = None) -> list:
     if not isinstance(parsed, list):
         logger.debug("Parsed JSON is not an array for text: %s", text)
         raise LLMParseError("Parsed JSON is not an array.")
-
-    if required_fields:
-        for item in parsed:
-            if not isinstance(item, dict):
-                continue
-            for field_name, field_type in required_fields.items():
-                if field_name not in item:
-                    item[field_name] = None
-                elif item[field_name] is not None:
-                    try:
-                        item[field_name] = field_type(item[field_name])
-                    except (ValueError, TypeError):
-                        logger.debug(
-                            "Layer 3 coercion failed for field '%s' to %s. Original text: %s",
-                            field_name,
-                            getattr(field_type, "__name__", str(field_type)),
-                            text,
-                        )
-                        item[field_name] = None
 
     return parsed
