@@ -1512,6 +1512,56 @@ class TestCheckpoint1Review:
                            json={"is_golden": True}).status_code == 404
 
 
+class TestClearOneSitesManual:
+    """删掉一个站的操作手册，逼下一次 m1 重新勘察。
+
+    **为什么必须有这条路**：手册是 `survey_structure` 探出来的结论缓存，而
+    `validate_manual` 只验三条（总数定位符、维度非空、页面结构）——**一份手册
+    可以在它永远发现不了的地方是错的**。
+
+    真机（2026-08-21）：joinqq 的手册是在 `set_filter_option` 存在之前探的，
+    那时勘察 agent 勾任何 checkbox 都会失败，做不了"勾一个、回读总数"那个实测，
+    于是三个字段全靠猜——`工作城市.multi_select` 记成 False（实为 True）、
+    `应聘项目.multi_select` 记成 True（实为互斥）、`filter_interaction` 记成
+    direct_click（实际要展开两层）。**而没有任何办法让它重探**：手册一旦存下，
+    每次 run 都会命中快速路径复用它，错误被无限期继承。
+
+    `survey_structure` 的"1 秒返回"因此是个双刃的信号——它可能是手册复用生效，
+    也可能是在复用一份全是猜测的手册。
+    """
+
+    def _manual(self):
+        from multisite.site_manual import SiteManual
+        return SiteManual.from_dict({
+            "job_url_source": "link_in_row", "url_template": "", "pagination": "none",
+            "filter_interaction": "direct_click", "filters_survive_reload": False,
+            "total_count_locator": "", "row_split": "container_per_row",
+            "row_anchor": "Apply", "dimensions": [], "important_notes": ""})
+
+    def test_deletes_it_so_the_next_run_re_surveys(self, client):
+        app.state.tracker.upsert_site_manual("bambulab", self._manual())
+        r = client.delete("/api/checkpoint1/sites/bambulab/manual")
+        assert r.status_code == 200
+        assert r.json()["deleted"] == 1
+        assert app.state.tracker.get_site_manual("bambulab") is None
+
+    def test_only_the_named_site(self, client):
+        app.state.tracker.upsert_site_manual("bambulab", self._manual())
+        app.state.tracker.upsert_site_manual("joinqq", self._manual())
+        client.delete("/api/checkpoint1/sites/bambulab/manual")
+        assert app.state.tracker.get_site_manual("joinqq") is not None
+
+    def test_it_does_not_touch_the_candidates(self, client):
+        """只删手册，候选池一行不动——两件事分开，误点一个不会连累另一个。"""
+        job_id = _add_job()
+        app.state.tracker.upsert_site_manual("bambulab", self._manual())
+        client.delete("/api/checkpoint1/sites/bambulab/manual")
+        assert app.state.tracker.get_pending_job(job_id) is not None
+
+    def test_no_manual_is_a_no_op_not_an_error(self, client):
+        assert client.delete("/api/checkpoint1/sites/nope/manual").json()["deleted"] == 0
+
+
 class TestClearOneSitesCandidates:
     """按站点清掉候选池。
 

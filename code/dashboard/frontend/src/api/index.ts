@@ -1065,6 +1065,13 @@ export const API = {
   // 清掉一个站还没批准的候选（pending + rejected），好把这个站重收一遍。
   // 已批准的不动——pending_applications.source_job_id 回指它们。
   // 必须真删：known_urls 不看状态，标记成拒绝的岗位会被下一次 m1 永久跳过。
+  // 删掉这个站的操作手册，下一次 m1 会重新勘察。候选池不动。
+  // 手册是 survey_structure 的结论缓存，而 validate_manual 只验三条——一份手册
+  // 可以在它发现不了的地方是错的（比如某个维度到底是多选还是互斥），然后被后续
+  // 每一次 run 无限期继承。这是那份缓存唯一的失效路径。
+  clearSiteManual: (site: string): Promise<{ deleted: number; site: string }> =>
+    requestJson(`/api/checkpoint1/sites/${encodeURIComponent(site)}/manual`, { method: 'DELETE' }),
+
   clearSiteCandidates: (site: string): Promise<{ deleted: number; site: string }> =>
     requestJson(`/api/checkpoint1/sites/${encodeURIComponent(site)}/jobs`, { method: 'DELETE' }),
 

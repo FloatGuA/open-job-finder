@@ -1619,6 +1619,22 @@ class ApplicationTracker:
                 (site_name, json.dumps(manual.to_dict(), ensure_ascii=False), self._utcnow_iso()),
             )
 
+    def delete_site_manual(self, site_name: str) -> int:
+        """删掉一个站的操作手册，逼下一次 m1 重新勘察。返回删了几行。
+
+        **手册是结论缓存，而缓存需要失效路径。** `validate_manual` 只验三条
+        （总数定位符、维度非空、页面结构）——一份手册完全可以在它永远发现不了的
+        地方是错的（比如某个维度到底是多选还是互斥）。没有这条路的话，
+        错误会被后续每一次 run 无限期继承，而 `survey_structure` 的"1 秒返回"
+        看起来还像是好事。
+
+        只动 `site_manuals` 一张表，候选池一行不碰——误点一个不该连累另一个。
+        """
+        with self.conn:
+            cur = self.conn.execute(
+                "DELETE FROM site_manuals WHERE site_name = ?", (site_name,))
+            return cur.rowcount
+
     def get_site_manual(self, site_name: str) -> Optional[tuple[SiteManual, str]]:
         """返回 `(SiteManual, updated_at)`；没有则 None。"""
         row = self.conn.execute(

@@ -47,6 +47,9 @@ const T_C1_OPEN = '\u6253\u5f00\u5c97\u4f4d\u9875'
 const T_C1_JD = '\u5c97\u4f4d\u539f\u6587'
 const T_SITE_MANUAL = '\u7ad9\u70b9\u624b\u518c'
 const T_CLEAR_SITE = '\u6e05\u6389\u5019\u9009'
+const T_RESURVEY = '\u91cd\u65b0\u52d8\u5bdf'
+const T_RESURVEY_CONFIRM = '\u786e\u8ba4\u4f5c\u5e9f\uff1f'
+const T_RESURVEY_HINT = '\u4f5c\u5e9f\u8fd9\u4efd\u624b\u518c\uff0c\u4e0b\u4e00\u6b21 m1 \u4f1a\u91cd\u65b0\u52d8\u5bdf\u7ad9\u70b9\u7ed3\u6784\u3002\u5019\u9009\u6c60\u4e0d\u52a8\u3002\u624b\u518c\u91cc\u7684\u201c\u591a\u9009\u8fd8\u662f\u4e92\u65a5\u201d\u8fd9\u7c7b\u5224\u65ad\u53ef\u80fd\u662f\u9519\u7684\uff0c\u800c\u8f7b\u6821\u9a8c\u53d1\u73b0\u4e0d\u4e86'
 const T_CLEAR_CONFIRM = '\u786e\u8ba4\u6e05\u6389\uff1f'
 const T_CLEAR_CANCEL = '\u7b97\u4e86'
 const T_CLEAR_HINT = '\u5220\u6389\u8fd9\u4e2a\u7ad9\u8fd8\u6ca1\u6279\u51c6\u7684\u5019\u9009\uff08\u5f85\u5ba1\u6279\uff0b\u5df2\u62d2\u7edd\uff09\uff0c\u597d\u628a\u8fd9\u4e2a\u7ad9\u91cd\u6536\u4e00\u904d\u3002\u5df2\u6279\u51c6\u7684\u4e0d\u52a8'
@@ -445,7 +448,9 @@ function SiteBar({
         </div>
       )}
 
-      {info?.manual && <SiteManualBlock manual={info.manual} />}
+      {info?.manual && (
+        <SiteManualBlock manual={info.manual} site={site} onResurveyed={onLimitChanged} />
+      )}
     </div>
   )
 }
@@ -511,7 +516,62 @@ function ClearSiteButton({ site, onDone }: { site: string; onDone: () => void })
   )
 }
 
-function SiteManualBlock({ manual }: { manual: SiteManualInfo }) {
+// 作废一个站的操作手册，逼下一次 m1 重新勘察。
+//
+// **缓存需要失效路径**：手册是 survey_structure 的结论缓存，而 validate_manual
+// 只验三条（总数定位符、维度非空、页面结构）——一份手册完全可以在它永远发现不了的
+// 地方是错的（比如某个筛选维度到底是多选还是互斥），然后被后续每一次 run 无限期继承。
+// 没有这个按钮之前，那种错误在产品里是不可修的。
+//
+// 同样两步确认：重探要花几十秒和一轮 LLM 调用，不该误点就发生。
+function ResurveyButton({ site, onDone }: { site: string; onDone: () => void }) {
+  const [armed, setArmed] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  if (!armed) {
+    return (
+      <button
+        type="button"
+        onClick={() => setArmed(true)}
+        title={T_RESURVEY_HINT}
+        className="rounded-lg px-2 py-1 text-xs text-text-3 transition hover:bg-bg-card2 hover:text-text-1"
+      >
+        {T_RESURVEY}
+      </button>
+    )
+  }
+  return (
+    <span className="flex items-center gap-1.5">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true)
+          void API.clearSiteManual(site)
+            .then(() => onDone())
+            .finally(() => {
+              setBusy(false)
+              setArmed(false)
+            })
+        }}
+        className="rounded-lg px-2 py-1 text-xs font-medium transition disabled:opacity-40"
+        style={{ background: 'rgba(255,159,10,0.16)', color: '#ff9f0a' }}
+      >
+        {T_RESURVEY_CONFIRM}
+      </button>
+      <button
+        type="button"
+        onClick={() => setArmed(false)}
+        className="rounded-lg px-2 py-1 text-xs text-text-3 transition hover:text-text-1"
+      >
+        {T_CLEAR_CANCEL}
+      </button>
+    </span>
+  )
+}
+
+function SiteManualBlock({ manual, site, onResurveyed }:
+                         { manual: SiteManualInfo; site: string; onResurveyed: () => void }) {
   return (
     <div className="px-4 pb-3">
       {manual.important_notes && (
@@ -533,6 +593,9 @@ function SiteManualBlock({ manual }: { manual: SiteManualInfo }) {
           {manual.updated_at.slice(0, 16).replace('T', ' ')}
           {'\uff09'}
         </summary>
+        <div className="mt-1.5">
+          <ResurveyButton site={site} onDone={onResurveyed} />
+        </div>
         <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12.5px] text-text-3">
           {MANUAL_FIELDS.map(([key, label]) => (
             <Fragment key={key}>

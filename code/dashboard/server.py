@@ -1865,6 +1865,19 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
     })
 
 
+@app.delete("/api/checkpoint1/sites/{site_name}/manual")
+async def clear_site_manual(site_name: str) -> JSONResponse:
+    """删掉这个站的操作手册，下一次 m1 会重新勘察。候选池不动。
+
+    手册是 `survey_structure` 的结论缓存，而 `validate_manual` 只验三条——
+    一份手册可以在它发现不了的地方是错的（比如某个筛选维度到底是多选还是互斥），
+    然后被后续每一次 run 无限期继承。这是那份缓存唯一的失效路径。
+    """
+    _initialize_state()
+    deleted = app.state.tracker.delete_site_manual(site_name)
+    return JSONResponse({"deleted": deleted, "site": site_name})
+
+
 @app.delete("/api/checkpoint1/sites/{site_name}/jobs")
 async def clear_site_candidates(site_name: str) -> JSONResponse:
     """清掉一个站还没批准的候选，好把这个站重收一遍。已批准的不动。
