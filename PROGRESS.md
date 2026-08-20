@@ -726,6 +726,13 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 
 ## 已完成
 
+- **`link_in_row` 离线路径补上 `jd`（bambulab 真机端到端跑通后暴露的覆盖缺口）**（2026-08-20，commit `a6f5f32`，无版本号变更，`code` 目录全量 `pytest -q` 退出码 0）
+  - 上面那条 `container_per_row` 执行器补完之后，bambulab 真机端到端跑通了（`logs/runs/m1_20260820_1520.jsonl`，`successful`，落库 5 条），但暴露新缺口：5 条的 `jd` 长度全是 0。根因：`harvest.py` 的 `harvest_page` 只有 `new_tab_on_click` 那条路把详情页快照当 `jd`；`job_url_offline`（`link_in_row`）那条路 `jd` 恒为空串——这是当初写 harvest 时明确记下的设计边界，但导致这整类站点（拿不到详情页快照）没有 JD 可读，`layer1_classify_jobs.md` 那条"职责里出现 xx 就归类"的核心规则完全没有 jd 可执行。
+  - 修复：offline 分支下 `jd = row.text[:_JD_MAX_CHARS]`——`row.text`（容器模式下是那个 link 节点的 accessible name）本来就已经被当 `title` 用了，标题/地点/类型/JD 摘要全挤在一起，是手边能拿到的最好的 JD 替代；复用同一个 `_JD_MAX_CHARS`（3000），不新开第二个截断点。
+  - **判断不加"JD 来源"标记/字段**（详见 `DECISION.md`）：分类 prompt 早在这次修复之前就已经在读 `row.text` 的全部内容（只是被标成 `title`），修复不引入新的、质量更低的信息源；`jd` 字段从来没承诺过是"详情页全文"，`new_tab_on_click` 那条路的 jd 本身也已经是截断过的摊平文本，两条路径产出的都是"不同精度的摘要"，没有任何消费方需要按来源分支处理。
+  - 测试：`tests/test_harvest.py` 用真实 fixture `bambulab_job_list.txt` 新增 4 例（jd 非空、10 条各不相同、超长截断、未超限不动），`new_tab_on_click` 原有测试未改。
+  - **未做**：Checkpoint 1 审批页展示 JD（spec §5.2 消费方②，见上条"未做"里已经记过，仍待"计划 C"）；bambulab 真机跑分类结果的人工核验未做（这次只补数据管道，没验证分类准确率）。
+
 - **`container_per_row` 执行器（bambulab 真机缺口补完）**（2026-08-20，无版本号变更，`code` 目录全量 `pytest -q` 退出码 0）
   - 真机在 bambulab 上跑 `survey_structure` 诚实报"还差 row_split"——这个站每个岗位是**一个 link 节点**（没有 join.qq.com 那种平铺 StaticText + 锚点文本可用），`container_per_row` 此前在 `ROW_SPLITS` 里声明但没有执行器（`executors.split_rows` 一碰即 `NotImplementedError`）。补上执行器：识别判据是"节点带 `url` 属性且 url 包含 `row_anchor` 子串"（bambulab 用 `/position/` 把 10 个岗位 link 和 5 个导航 link 分开），复用 `row_anchor` 字段而非新增字段；`job_url_offline` 的 `link_in_row` 分支加了容器模式分支——行本身就是那个 link，直接按 `row.anchor_uid` 取自己的 url，不复用 `anchor_text` 的窗口搜索。`IMPLEMENTED_ROW_SPLITS` 加入 `container_per_row`。
   - fixture `code/tests/fixtures/bambulab_job_list.txt` 由脚本从真机快照 `logs/runs/m1_20260820_1437/survey_structure_snapshot.txt` 生成（剔除一处已打码的电话号码行，其余原样保留，扫描确认无 PII），新增/改写测试覆盖切出 10 行（非 15，排除导航）、行文本含标题、每行拿到各自不同的 url。

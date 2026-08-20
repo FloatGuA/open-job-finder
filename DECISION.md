@@ -706,3 +706,32 @@
   `TestContainerPerRowIsNotImplementedYet`。fixture `bambulab_job_list.txt` 由脚本
   从真机快照 `logs/runs/m1_20260820_1437/survey_structure_snapshot.txt` 生成（剔除
   页面上一处已打码的电话号码行，其余原样保留——招聘列表页公开信息，扫描确认无 PII）。
+
+## `link_in_row` 离线路径补 `jd`：直接用 `row.text`，不标来源、不加字段
+
+- **日期 / 版本**：2026-08-20，commit `a6f5f32`
+- **背景**：上一条决策补完 `container_per_row` 执行器后，bambulab 真机端到端跑通，
+  但落库的 5 条岗位 `jd` 长度全是 0——`harvest.py` 的 `job_url_offline` 分支（拿不到
+  详情页快照的站点）此前把 `jd` 硬编码成空串，是写 harvest 时记下的设计边界，但
+  导致这一整类站点没有 JD，`layer1_classify_jobs.md`"职责里出现 xx 就归类"的规则
+  无 jd 可读。
+- **选了什么**：offline 分支下 `jd = row.text[:_JD_MAX_CHARS]`——容器模式下 `row.text`
+  就是那个 link 节点的 accessible name，标题/地点/类型/JD 摘要全挤在一起；这段文本
+  在 `layer1_agent.py` 里早就被映射成分类 prompt 的 `title` 用了，只是没被同时接到
+  `jd` 上。复用已有的 `_JD_MAX_CHARS`（3000），不新开截断点。
+- **否掉了什么，为什么**：**否掉给 jd 加"来源标记"或新增字段**（比如区分"详情页全文"
+  vs "列表卡片摘要"）。三点理由：①分类 LLM 在这次修复之前就已经在读 `row.text` 的
+  全部内容（被标成 `title`），这次修复不是给分类引入一个新的、更低质量的信息源，
+  分类侧的实际输入内容修复前后完全一样，只是 `jd` 这个字段本身从空变成有内容；
+  ②`jd` 字段从没承诺过是"详情页全文"——`new_tab_on_click` 那条路的 jd 也早就是
+  `_JD_MAX_CHARS` 截断过的 a11y 摊平文本，不是网页原文；两条路径产出的都是"精度
+  不同的摘要"，不是"全量 vs 缺失"的二元对立；③目前没有任何消费方（分类 prompt/
+  Checkpoint 1 审批页/eval）需要按"jd 精度"分支处理，加字段/加标记是没有使用者
+  的能力，属于过度设计。
+- **代价 / 已知不足**：`anchor_text` 分支（非 container 模式）下 `row.text` 只是窗口
+  内节点 name 的拼接，信息密度低于 container 模式；这次只验证了 container_per_row
+  真实场景（bambulab），`anchor_text` + offline 组合暂无真实站点样本佐证质量是否
+  够用，出现新站点时留意。
+- **连带**：`tests/test_harvest.py` 新增 `TestHarvestPageOfflineJd` / 
+  `TestHarvestPageOfflineJdTruncation`（4 例，真实 fixture `bambulab_job_list.txt` +
+  一份合成超长快照测截断）；`new_tab_on_click` 分支未改动。
