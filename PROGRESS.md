@@ -5,12 +5,60 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-20（Checkpoint 1 补简历可见性，commit `e650d3b`；v2.28.0 计划 A 站点手册地基交付；spec/计划 A 已定稿，**计划 B 三节点重构未开始**） |
+| 最后更新 | 2026-08-20（v2.29.0 计划 B：m1 拆成三节点，prompt 进设置页；**尚未真机验证**） |
 | 当前版本 | 2.28.0                         |
 
 > ⚠️ **下一轮动手前先读**：Layer 1 已按 2026-08-13 的对齐改完并真机验证。**SDK 继续 LangGraph 是用户拍板的（理由是他本人正求职 agent 开发岗位、亲手做工程本身是目标），后续会话不要因为技术理由自作主张换成 Anthropic/Codex SDK。** 完整取舍见 `DECISION.md` 三条：「Layer 1 的导航/找入口/选岗交给 agent 自主决策」「选岗结果用 record_job 边找边落袋」「提交防线从不给工具改成点击工具自己拒绝」。
 
 ## 待跟进（另开会话）
+
+### ✅ 计划 B：m1 拆成三个节点（2026-08-20，v2.29.0，16 个提交，全量退出码 0）
+
+```
+旧：ensure_ready → find_jobs（一个 ReAct 节点混着三件事）→ write_pending_jobs
+新：ensure_ready → survey_structure(ReAct) → plan_buckets(非 ReAct)
+                 → scan_buckets(ReAct) → write_pending_jobs
+```
+
+新增模块：`multisite/harvest.py`（一次调用抓完一页）、`multisite/classify.py`（批量分类）、
+`multisite/bucket_plan.py`（定桶计划）。**抓取与分类交给代码，agent 只管导航与桶策略。**
+
+**五段 prompt 进了 `EDITABLE_PROMPTS`**（`layer1_survey_structure` / `layer1_plan_buckets` /
+`layer1_scan_buckets` / `layer1_classify_jobs` / `layer1_open_application`）——设置页自动列出，
+**这是「亲自调 ReAct」的入口**。
+
+**⚠️ 尚未真机验证**（账本 Ruling 3：七个 task 各跑一次真机不现实，且中间态的 m1 本来跑不通）。
+第一次真机建议把 `candidates_per_bucket` 压到 5 左右先看形状。
+
+#### 这一轮最贵的教训：测试替身把错的参数名固化了
+
+七个 task 全部通过各自评审、全量一直绿，**最终整支评审仍抓出一个必炸的 Critical**：
+`select_page`/`close_page` 传的是 `pageIdx`，而 chrome-devtools-mcp 声明的是 `pageId`。
+三个测试文件里的假工具**也写的 `pageIdx`**——测试与代码完美互相印证，只有真实世界不同意。
+
+它会让 `validate_manual` 判据③ 永远失败（还误报成"站点改版"）、`harvest` 抛异常被防循环拦下
+→ **found=0**，正是这次重构本身要消灭的症状。详见 PITFALLS 新增条目。
+
+#### 最终评审另抓的四条 Important（均已修）
+
+| 问题 | 后果 |
+|---|---|
+| `classify`/`bucket_plan` 绕过 `PromptManager` 直读文件 | **设置页改的 prompt 运行时不生效**，还显示"已修改" |
+| `jd` 无上限，一页 15 条塞进一个 prompt | 撑爆 64k 上下文 → 整页丢弃 → found=0 |
+| golden examples 回路断了（`render_golden_examples` 零调用方） | **人工标的 `is_golden` 教不到任何东西**，而端点还在写它 |
+| LLM 不回 title 时仍退回整行原文 | 经 `pick_resume` **改变实际发出去的是哪份简历** |
+
+后两条都是"跨 task 的消失/退化"——**七轮单 task 评审都看不见**，因为每个 diff 各自都对。
+
+#### 遗留（按处理顺序）
+
+1. **真机验 m1** ← 下一步就是它
+2. `candidates_per_bucket` 未接进 `profile.yaml`（默认 15），**是计划 C「前端可调候选上限」的前置**
+3. `_JD_MAX_CHARS=3000` / `_TITLE_FALLBACK_MAX_CHARS=60` 是量级估计，未用真实站点数据校准
+4. 按桶累计的候选上限依赖 agent 每次填一致的 bucket 名字（字符串约定，无强类型校验）
+5. spec §5.2 的消费方②（审批页显示 JD）未接线——**计划 C**
+6. `category == ""` 的岗位现在会进 `pending_jobs`（旧 `record_job` 会拒），
+   Checkpoint 1 怎么渲染空类别需要看一眼
 
 ### ✅ m2（勘察表单）拆图后首次真机跑通（2026-08-20）
 
