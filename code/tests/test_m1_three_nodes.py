@@ -101,3 +101,91 @@ class TestHarvestItemsToFoundJobs:
         jobs = _harvest_items_to_found_jobs([{"url": "https://x/2"}])
         assert jobs[0].title == ""
         assert jobs[0].company == ""
+
+
+class TestScanBucketsWiresGoldenExamplesIntoClassify:
+    """FIX-4：Checkpoint 1 的人工纠正一直在写 `is_golden`
+    （`POST /api/checkpoint1/jobs/{id}/review`），`preferences.render_golden_examples`
+    也早就写好了，但重构之后 `scan_buckets` 从没调用过它——标了也教不到。
+
+    这里不碰真浏览器/真 LLM：把 `agent_runtime.build_agent`/`run_agent` 换成假的
+    （直接调一次 `harvest_current_page` 工具，模拟 agent 决定去扫一个桶），
+    `harvest_page`/`classify_jobs` 也换成假的，只用来捕获最终传给 `classify_jobs`
+    的 `golden_examples` 参数，断言它就是 `preferences.render_golden_examples(tracker)`
+    的产出——而不是重构前那个从没被调用过的值。
+    """
+
+    def _real_mcp_tools(self):
+        """跟 `FakeTool`（只有 `.name`）不同——这里要真的跑一次
+        `build_agent_toolset`（`_agent_tools` → `make_repeat_failure_guard`），
+        它会读 `tool.description`/`tool.args_schema`。用 `StructuredTool`
+        构造出形状完整的假工具，跟 `test_harvest.py`/`test_executors_url_online.py`
+        的假浏览器同一个套路；这些工具在本测试里都不会被真的调用到
+        （`fake_run_agent` 只调 `harvest_current_page`），签名不重要。"""
+        from langchain_core.tools import StructuredTool
+
+        async def _noop(**kwargs) -> str:
+            return ""
+
+        names = ("take_snapshot", "click", "navigate_page", "wait_for",
+                 "list_pages", "select_page", "close_page")
+        return [StructuredTool.from_function(coroutine=_noop, name=n, description=n)
+                for n in names]
+
+    def test_golden_examples_flow_from_tracker_into_classify_jobs(self, monkeypatch):
+        import asyncio
+
+        import multisite.layer1_agent as mod
+        from multisite.site_manual import SiteManual
+
+        captured = {}
+
+        async def fake_classify_jobs(items, quotas, *, model=None, prompt_text=None,
+                                     golden_examples=None):
+            captured["golden_examples"] = golden_examples
+            return [{**it, "category": "开发", "why": ""} for it in items]
+
+        async def fake_harvest_page(snapshot_text, tools, manual, *, bucket, classify,
+                                    sink, known_urls, limit):
+            classified = await classify(
+                [{"url": "https://x/1", "jd": "j", "bucket": bucket, "text": "raw"}])
+            sink.extend(classified)
+            return {"rows": 1, "collected": 1, "skipped_known": 0, "url_failed": 0,
+                    "truncated": False}
+
+        class _FakeAgent:
+            def __init__(self, tools):
+                self.tools = tools
+
+        async def fake_run_agent(agent, message, on_step=None):
+            tool = next(t for t in agent.tools if t.name == "harvest_current_page")
+            await tool.ainvoke({"bucket": "技术"})
+            return {"messages": []}
+
+        monkeypatch.setattr(mod, "classify_jobs", fake_classify_jobs)
+        monkeypatch.setattr(mod, "harvest_page", fake_harvest_page)
+        monkeypatch.setattr(mod.preferences, "render_golden_examples",
+                            lambda tracker: "【golden marker】")
+        monkeypatch.setattr(mod.agent_runtime, "build_agent",
+                            lambda tools, prompt: _FakeAgent(tools))
+        monkeypatch.setattr(mod.agent_runtime, "run_agent", fake_run_agent)
+
+        nodes, _snapshot_provider = mod._make_nodes(
+            tools=self._real_mcp_tools(), personal_info={},
+            tracker=FakeTracker(), quotas={"开发": 1})
+        scan_buckets_fn, _summarize = nodes["scan_buckets"]
+
+        manual = SiteManual.from_dict({
+            "job_url_source": "new_tab_on_click", "url_template": "", "pagination": "next_button",
+            "filter_interaction": "direct_click", "filters_survive_reload": False,
+            "total_count_locator": "", "row_split": "anchor_text", "row_anchor": "x",
+            "dimensions": [], "important_notes": ""})
+        state = {
+            "manual": manual,
+            "bucket_plan": [{"dimension": "d", "option": "o", "why": "", "targets": ["开发"]}],
+            "site_name": "test-site",
+            "search_url": "https://x/search",
+        }
+        asyncio.run(scan_buckets_fn(state))
+
+        assert captured["golden_examples"] == "【golden marker】"

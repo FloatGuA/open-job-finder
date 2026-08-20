@@ -1333,6 +1333,12 @@ def _make_nodes(
         # 库里已经收录过的岗位不该重复抓；每次 harvest_current_page 调用后会把
         # 新记的 url 并入这个集合，防止同一岗位在本轮里被跨页/跨桶重复收录。
         known_urls = {j.url for j in tracker.get_pending_jobs()}
+        # FIX-4：人工纠正的反馈回路。用户在 Checkpoint 1 把某条归类标成 golden，
+        # `POST /api/checkpoint1/jobs/{id}/review` 一直在写 `is_golden`，但重构
+        # 之后没有任何生产调用方读它——`render_golden_examples` 早就写好了，只是
+        # 没接线，标了也教不到。这里读一次（本节点全程只调一次 harvest_page 之外
+        # 的一次数据库查询，不必每页重查）。
+        golden_examples = preferences.render_golden_examples(tracker)
 
         async def _classify(items: list[dict]) -> list[dict]:
             # harvest_page 产出 {url, jd, bucket, text}；classify_jobs 的 prompt
@@ -1347,7 +1353,7 @@ def _make_nodes(
             # 读的是覆盖之后的结果，不会把这段整行文本当成标题落库。
             mapped = [{**it, "title": it.get("text", ""), "site_category": it.get("bucket", "")}
                      for it in items]
-            return await classify_jobs(mapped, quotas)
+            return await classify_jobs(mapped, quotas, golden_examples=golden_examples)
 
         def _harvest_current_page_tool() -> "object":
             from langchain_core.tools import StructuredTool
