@@ -130,7 +130,85 @@ class TestClassifyJobsExtractsTitleAndCompany:
 
     def test_model_omitting_title_key_falls_back_to_the_original_input(self):
         """跟"给了空串"不同：`title` 这个 key 压根没出现在响应里，说明模型没
-        回答这一项（不是老实说"提不出标题"），这时保留原样透传，不强行清空。"""
+        回答这一项（不是老实说"提不出标题"）。这里的兜底是**截断过的原文**
+        （FIX-5），只是 ITEMS[0] 的原始 title 本来就很短（8 个字），截断是
+        无操作，所以看起来跟"原样透传"一样。"""
         model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"}])
         out = _run(classify_jobs(ITEMS, QUOTAS, model=model))
         assert out[0]["title"] == "AI算法工程师"
+
+
+class TestClassifyJobsNeverLeaksTheRawRowTextAsTitle:
+    """Ruling 10 的修复只覆盖了 happy path（模型给了干净 title 就用它）。
+    两条生产路径仍会让 `title` 变成整行原文，无长度上限：
+      ① 模型跳过某个 index（`entry is None`）；
+      ② 模型回的条目里没有 `title` 键。
+    旧的 `text[:200]` 兜底已经删了，退回"保留原样透传"就是退回整行原文——
+    一路落进 `pending_jobs.title`，还会改变 `resume_matcher.pick_for_job`
+    实际选中的简历（title 权重 3）。
+
+    生产里 `title` 这个 key 永远存在（`scan_buckets._classify` 把
+    `it.get("text", "")` 映到 `title`），值是整行卡片文本——这里必须用同样
+    的真实形状，不能像旧测试那样传一个已经很干净的短字符串（否则测不出
+    截断兜底有没有真的生效）。"""
+
+    RAW_ROW_TEXT = ("AI全栈工程师 技术 ｜ 应届毕业生 ｜ CDG CSIG IEG PCG TEG WXG "
+                    "工作地点： 深圳总部 北京 上海 广州 成都 杭州 " * 3)
+
+    def test_llm_skipping_the_index_does_not_leak_raw_text(self):
+        items = [{"title": self.RAW_ROW_TEXT, "jd": "", "site_category": "技术"}]
+        model = _FakeModel([])  # 没回任何一条，index 0 缺失
+        out = _run(classify_jobs(items, QUOTAS, model=model))
+        assert out[0]["title"] != self.RAW_ROW_TEXT
+        assert len(out[0]["title"]) < len(self.RAW_ROW_TEXT)
+
+    def test_llm_response_missing_the_title_key_does_not_leak_raw_text(self):
+        items = [{"title": self.RAW_ROW_TEXT, "jd": "", "site_category": "技术"}]
+        model = _FakeModel([{"index": 0, "category": "开发", "why": "x"}])  # 没给 title
+        out = _run(classify_jobs(items, QUOTAS, model=model))
+        assert out[0]["title"] != self.RAW_ROW_TEXT
+        assert len(out[0]["title"]) < len(self.RAW_ROW_TEXT)
+
+
+class TestClassifyJobsLoadsPromptThroughPromptManager:
+    """FIX-2：用户在设置页编辑 `layer1_classify_jobs`，写进
+    `data/prompts_override/layer1_classify_jobs.md`；只有 `PromptManager.load()`
+    会去看那个目录。之前这里直接 `_PROMPT_PATH.read_text()`，覆盖层形同虚设——
+    用户保存成功、页面显示"已修改"，但运行时用的还是 git 默认值。"""
+
+    def test_override_file_is_used_instead_of_the_default(self, tmp_path, monkeypatch):
+        import multisite.classify as classify_mod
+        from services.prompt_manager import PromptManager
+
+        pm = PromptManager(override_dir=tmp_path)
+        pm.save_override(
+            "layer1_classify_jobs",
+            pm.get_default("layer1_classify_jobs").replace(
+                "{{quota_table}}", "【override 标记】{{quota_table}}"),
+        )
+        monkeypatch.setattr(classify_mod, "PromptManager",
+                            lambda *a, **k: PromptManager(override_dir=tmp_path))
+
+        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"}])
+        _run(classify_jobs(ITEMS[:1], QUOTAS, model=model))
+
+        assert "【override 标记】" in str(model.prompts)
+
+
+class TestClassifyJobsGoldenExamples:
+    """FIX-4：人工纠正必须能教回分类 prompt，否则用户在审批页标的 golden 就是
+    白标——`preferences.render_golden_examples` 早就写好了，只是没人传进来。"""
+
+    def test_golden_examples_are_rendered_into_the_prompt(self):
+        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"},
+                            {"index": 1, "category": "运营", "why": "y"}])
+        _run(classify_jobs(ITEMS, QUOTAS, model=model,
+                           golden_examples="「某某岗」归类为「开发」是错的，应该归「AI NATIVE」"))
+        blob = str(model.prompts)
+        assert "某某岗" in blob and "应该归「AI NATIVE」" in blob
+
+    def test_no_golden_examples_falls_back_to_the_placeholder_text(self):
+        model = _FakeModel([{"index": 0, "category": "AI NATIVE", "why": "x"},
+                            {"index": 1, "category": "运营", "why": "y"}])
+        _run(classify_jobs(ITEMS, QUOTAS, model=model))
+        assert "本次未提供历史纠正样例" in str(model.prompts)

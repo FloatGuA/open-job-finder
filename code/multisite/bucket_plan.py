@@ -27,16 +27,20 @@ JSON 数组，`safe_parse_json` 认死了顶层是对象套用不了，于是收
 `safe_parse_json_array`，现在这套三层解析（围栏提取 → json.loads → json_repair 兜底）
 只有一份实现。**没有直接 import classify.py 的私有函数**：那两个函数名字带下划线，
 跨模块 import 私有符号等于把一个模块的内部实现变成另一个模块的公开依赖，比复制更糟。
+
+**prompt 默认走 `PromptManager`，不直接读文件**（修复轮 2 / FIX-2）：以前这里
+是 `_PROMPT_PATH.read_text()`，绕开了用户在设置页保存进 `data/prompts_override/`
+的覆盖版——同 `classify.py` 的取舍，理由见那边模块 docstring。
 """
 import re
-from pathlib import Path
 
 from multisite.agent_runtime import build_model
 from multisite.site_manual import SiteManual
 from services.exceptions import LLMParseError
 from services.llm_parser import safe_parse_json_array
+from services.prompt_manager import PromptManager
 
-_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "layer1_plan_buckets.md"
+_PROMPT_NAME = "layer1_plan_buckets"
 
 _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 
@@ -58,7 +62,8 @@ async def plan_buckets(
     if model is None:
         model = build_model()
     if prompt_text is None:
-        prompt_text = _PROMPT_PATH.read_text(encoding="utf-8")
+        # 覆盖层优先——见模块 docstring 的 FIX-2 说明。不能直接 `Path.read_text()`。
+        prompt_text = PromptManager().load(_PROMPT_NAME)
 
     prompt = _render_prompt(prompt_text, manual, quotas, constraints)
 

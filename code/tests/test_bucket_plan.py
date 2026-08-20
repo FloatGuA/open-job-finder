@@ -121,3 +121,28 @@ class TestPlanBuckets:
         _run(plan_buckets(MANUAL, QUOTAS, "只看深圳", model=model))
         blob = str(model.prompts)
         assert "青云课题" in blob and "AI NATIVE" in blob and "只看深圳" in blob
+
+
+class TestPlanBucketsLoadsPromptThroughPromptManager:
+    """FIX-2：用户在设置页编辑 `layer1_plan_buckets`，写进
+    `data/prompts_override/layer1_plan_buckets.md`；只有 `PromptManager.load()`
+    会去看那个目录。之前这里直接 `_PROMPT_PATH.read_text()`，覆盖层形同虚设——
+    用户保存成功、页面显示"已修改"，但运行时用的还是 git 默认值。"""
+
+    def test_override_file_is_used_instead_of_the_default(self, tmp_path, monkeypatch):
+        import multisite.bucket_plan as bucket_plan_mod
+        from services.prompt_manager import PromptManager
+
+        pm = PromptManager(override_dir=tmp_path)
+        pm.save_override(
+            "layer1_plan_buckets",
+            pm.get_default("layer1_plan_buckets").replace(
+                "{{constraints}}", "【override 标记】{{constraints}}"),
+        )
+        monkeypatch.setattr(bucket_plan_mod, "PromptManager",
+                            lambda *a, **k: PromptManager(override_dir=tmp_path))
+
+        model = _FakeModel([])
+        _run(plan_buckets(MANUAL, QUOTAS, "只看深圳", model=model))
+
+        assert "【override 标记】" in str(model.prompts)
