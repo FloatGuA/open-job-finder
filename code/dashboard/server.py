@@ -1865,6 +1865,19 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
     })
 
 
+@app.delete("/api/checkpoint1/sites/{site_name}/jobs")
+async def clear_site_candidates(site_name: str) -> JSONResponse:
+    """清掉一个站还没批准的候选，好把这个站重收一遍。已批准的不动。
+
+    在此之前，多站点候选池只有 `scripts/reset_multisite.py` 一条清理路径，而它是
+    **全站清空**——想重收一个站，代价是把别的站的候选和 `pending_applications`
+    （里面有真实投递过的记录）一起赔进去。
+    """
+    _initialize_state()
+    deleted = app.state.tracker.delete_pending_jobs_for_site(site_name)
+    return JSONResponse({"deleted": deleted, "site": site_name})
+
+
 def _site_manual_payload(tracker, site_name: str) -> dict | None:
     """站点手册 + 它是什么时候记的，没有就 None。"""
     got = tracker.get_site_manual(site_name)

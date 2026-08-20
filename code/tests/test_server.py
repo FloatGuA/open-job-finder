@@ -1512,6 +1512,54 @@ class TestCheckpoint1Review:
                            json={"is_golden": True}).status_code == 404
 
 
+class TestClearOneSitesCandidates:
+    """按站点清掉候选池。
+
+    **为什么需要它**：多站点候选池此前只有 `reset_multisite.py` 一条清理路径，
+    而它是**全站清空**——会连别的站的候选和 `pending_applications`（里面有真实
+    投递过的记录）一起删。想重收一个站，代价是把所有站的东西都赔进去。
+    用户的心智模型是「每个站点投递完就删了相关的数据库」，那需要的正是按站点清。
+
+    **必须重收得回来**：`known_urls` 取的是 `pending_jobs` 的全部 URL、**不看状态**，
+    所以"标记成拒绝"不等于清掉——那些岗位会被永久跳过。只有真删行才收得回来。
+
+    **已批准的一行都不动**：`pending_applications.source_job_id` 回指这些行，
+    删掉就断了"这个申请是从哪个岗位来的"这条链，而那是已经对外发生过的事。
+    """
+
+    def _job(self, site, status="pending", url=None):
+        jid = _add_job(url=url or f"https://{site}/{status}/x", site_name=site)
+        if status != "pending":
+            app.state.tracker.decide_pending_job(jid, status, reason="")
+        return jid
+
+    def test_deletes_only_the_named_site(self, client):
+        self._job("joinqq")
+        keep = self._job("bambulab")
+        r = client.delete("/api/checkpoint1/sites/joinqq/jobs")
+        assert r.status_code == 200
+        assert r.json()["deleted"] == 1
+        left = {j.site_name for j in app.state.tracker.get_pending_jobs()}
+        assert left == {"bambulab"}
+        assert app.state.tracker.get_pending_job(keep) is not None
+
+    def test_keeps_approved_rows(self, client):
+        approved = self._job("joinqq", "approved", url="https://joinqq/a")
+        self._job("joinqq", "pending", url="https://joinqq/b")
+        r = client.delete("/api/checkpoint1/sites/joinqq/jobs")
+        assert r.json()["deleted"] == 1, "只该删掉那条待审批的"
+        assert app.state.tracker.get_pending_job(approved) is not None, \
+            "已批准的行不能删——pending_applications.source_job_id 回指它"
+
+    def test_rejected_rows_go_too(self, client):
+        """拒绝过的也要真删掉，否则 `known_urls` 会让它们永远收不回来。"""
+        self._job("joinqq", "rejected")
+        assert client.delete("/api/checkpoint1/sites/joinqq/jobs").json()["deleted"] == 1
+
+    def test_unknown_site_is_a_no_op_not_an_error(self, client):
+        assert client.delete("/api/checkpoint1/sites/nope/jobs").json()["deleted"] == 0
+
+
 class TestM1CandidatesPerBucketDefault:
     """`candidates_per_bucket` 必须能存成 m1 的默认值。
 

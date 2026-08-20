@@ -1405,6 +1405,25 @@ class ApplicationTracker:
             )
             return cur.rowcount
 
+    def delete_pending_jobs_for_site(self, site_name: str) -> int:
+        """清掉一个站还没批准的候选（pending + rejected），返回删了几行。
+
+        **只有真删才收得回来**：`known_urls` 取的是 `pending_jobs` 的全部 URL、
+        **不看状态**，所以"标记成拒绝"不等于清掉——那些岗位会被下一次 m1 永久跳过。
+        重收一个站的前提就是这些行真的没了。
+
+        **已批准的一行都不动**：`pending_applications.source_job_id` 回指这些行，
+        删掉就断了"这个申请是从哪个岗位来的"，而那是已经对外发生过的事。
+        （对比 `scripts/reset_multisite.py`：那个是全站清空，会连别的站和
+        `pending_applications` 一起删——想重收一个站不该赔上所有站。）
+        """
+        with self.conn:
+            cur = self.conn.execute(
+                "DELETE FROM pending_jobs WHERE site_name = ? AND status IN ('pending', 'rejected')",
+                (site_name,),
+            )
+            return cur.rowcount
+
     def undo_pending_job_decision(self, job_id: int) -> int:
         """Reverse a Checkpoint 1 approve/reject back to `pending`.
 

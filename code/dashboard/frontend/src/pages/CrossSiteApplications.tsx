@@ -46,6 +46,10 @@ const T_C1_CORRECTED = 'agent \u5f52\u4e3a'
 const T_C1_OPEN = '\u6253\u5f00\u5c97\u4f4d\u9875'
 const T_C1_JD = '\u5c97\u4f4d\u539f\u6587'
 const T_SITE_MANUAL = '\u7ad9\u70b9\u624b\u518c'
+const T_CLEAR_SITE = '\u6e05\u6389\u5019\u9009'
+const T_CLEAR_CONFIRM = '\u786e\u8ba4\u6e05\u6389\uff1f'
+const T_CLEAR_CANCEL = '\u7b97\u4e86'
+const T_CLEAR_HINT = '\u5220\u6389\u8fd9\u4e2a\u7ad9\u8fd8\u6ca1\u6279\u51c6\u7684\u5019\u9009\uff08\u5f85\u5ba1\u6279\uff0b\u5df2\u62d2\u7edd\uff09\uff0c\u597d\u628a\u8fd9\u4e2a\u7ad9\u91cd\u6536\u4e00\u904d\u3002\u5df2\u6279\u51c6\u7684\u4e0d\u52a8'
 const T_MANUAL_NOTE = '\u73b0\u573a\u53d1\u73b0'
 const T_MANUAL_SURVEYED = '\u63a2\u4e8e'
 const T_C1_UNIT = '\u4e2a'
@@ -367,6 +371,8 @@ function SiteBar({
 
         <LimitEditor site={site} current={gate} onDone={onLimitChanged} />
 
+        <ClearSiteButton site={site} onDone={onLimitChanged} />
+
         <div className="flex-1" />
 
         <div className="flex items-center gap-2">
@@ -452,6 +458,59 @@ function SiteBar({
 // important_notes 是 agent 唯一的逃生舱：手册字段全是闭集，遇到设计没覆盖的情况
 // 只能写进这里。所以它非空时**必须显眼**——那是"系统该补一块了"的信号，
 // 混在手册里折叠起来等于没有。手册本身反过来：默认折叠，平时没人需要看。
+// 按站点清掉候选池。
+//
+// 这是"重收一个站"的前提：known_urls 取的是 pending_jobs 的全部 URL、**不看状态**，
+// 标记成拒绝的岗位会被下一次 m1 永久跳过，只有真删才收得回来。
+//
+// **两步确认**：删除不可逆，而这个按钮就在站点标题旁边，误点的代价是一整个站的
+// 候选池没了、还得重跑一次 m1。第一下只切状态，绝不发请求。
+function ClearSiteButton({ site, onDone }: { site: string; onDone: () => void }) {
+  const [armed, setArmed] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  if (!armed) {
+    return (
+      <button
+        type="button"
+        onClick={() => setArmed(true)}
+        title={T_CLEAR_HINT}
+        className="rounded-lg px-2.5 py-1 text-xs text-text-3 transition hover:bg-bg-card2 hover:text-text-1"
+      >
+        {T_CLEAR_SITE}
+      </button>
+    )
+  }
+  return (
+    <span className="flex items-center gap-1.5">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true)
+          void API.clearSiteCandidates(site)
+            .then(() => onDone())
+            .finally(() => {
+              setBusy(false)
+              setArmed(false)
+            })
+        }}
+        className="rounded-lg px-2.5 py-1 text-xs font-medium transition disabled:opacity-40"
+        style={{ background: 'rgba(255,69,58,0.16)', color: '#ff453a' }}
+      >
+        {T_CLEAR_CONFIRM}
+      </button>
+      <button
+        type="button"
+        onClick={() => setArmed(false)}
+        className="rounded-lg px-2 py-1 text-xs text-text-3 transition hover:text-text-1"
+      >
+        {T_CLEAR_CANCEL}
+      </button>
+    </span>
+  )
+}
+
 function SiteManualBlock({ manual }: { manual: SiteManualInfo }) {
   return (
     <div className="px-4 pb-3">
