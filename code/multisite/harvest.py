@@ -9,7 +9,8 @@
 **不碰 tracker**：落库是节点的事（Task 6），这里只负责抓和分类，`sink` 是调用方
 传入的 list，`known_urls` 是调用方传入的去重集合。
 """
-from multisite.executors import job_url_offline, job_url_online, split_rows
+from multisite.executors import (job_url_offline, job_url_online,
+                                 snapshot_to_text, split_rows)
 from multisite.site_manual import SiteManual
 
 # 详情页 a11y 快照全文可能有 75-120KB（真实列表页 fixture 是 8.5KB/10 行，详情页
@@ -64,8 +65,12 @@ async def harvest_page(
             if got is None:
                 url_failed += 1
                 continue
-            url, jd = got
-            jd = jd[:_JD_MAX_CHARS]
+            url, detail = got
+            # **先转可读正文再截断**：`detail` 是 a11y 快照转储，`uid=` / 角色名 /
+            # `url=` 这些标记占掉大半篇幅。顺序反了的话，按标记算的 3000 字里
+            # 转换完可能只剩一千出头的正文——而且两个消费方（Checkpoint 1 审批页、
+            # 分类 prompt）都是拿转换后的文本用，没有谁需要原始快照。
+            jd = snapshot_to_text(detail)[:_JD_MAX_CHARS]
         else:
             url = job_url_offline(row, snapshot_text, manual)
             if url is None:

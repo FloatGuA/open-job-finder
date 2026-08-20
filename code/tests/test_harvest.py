@@ -287,3 +287,66 @@ class TestHarvestPageOfflineJdTruncation:
         _run(harvest_page(snap, None, _bambulab_manual(), bucket="技术",
                           classify=_classify_all, sink=sink, known_urls=set(), limit=1))
         assert sink[0]["jd"] == "JD" * 10
+
+
+class TestHarvestStoresReadableJd:
+    """落库的 `jd` 必须是可读正文，不是 a11y 快照转储。
+
+    两个消费方都吃不下原始快照：Checkpoint 1 审批页原样渲染就是一屏 `uid=`；
+    分类 prompt 里 `_JD_MAX_CHARS` 的额度大半花在标记上，真正的岗位正文被挤掉。
+    **截断在 harvest 边界只做一次**，所以转换必须发生在截断之前——顺序反了的话
+    先按标记算的 3000 字里，转换完可能只剩一千出头。
+    """
+
+    SNAP_DETAIL = ('## Latest page snapshot\n'
+                   'uid=7_0 RootWebArea "岗位详情" url="https://example.test/d?id=1"\n'
+                   '  uid=7_1 link "关于我们" url="https://example.test/about"\n'
+                   '    uid=7_2 StaticText "关于我们"\n'
+                   '  uid=7_3 StaticText "岗位描述"\n'
+                   '  uid=7_4 StaticText "1、负责后端开发；\\n2、参与架构设计；"\n')
+
+    def _tools(self):
+        state = {"pages": "## Pages\n0: list (https://x/list) [selected]\n"}
+
+        async def click(uid: str):
+            state["pages"] = ("## Pages\n0: list (https://x/list) [selected]\n"
+                              "1: detail (https://example.test/d?id=1)\n")
+            return "ok"
+
+        async def list_pages():
+            return state["pages"]
+
+        async def select_page(pageId: int):
+            return "ok"
+
+        async def navigate_page(url: str):
+            return "Navigated"
+
+        async def take_snapshot():
+            return self.SNAP_DETAIL
+
+        async def close_page(pageId: int):
+            state["pages"] = "## Pages\n0: list (https://x/list) [selected]\n"
+            return "ok"
+
+        return [StructuredTool.from_function(coroutine=f, name=n, description=n)
+                for f, n in ((click, "click"), (list_pages, "list_pages"),
+                             (select_page, "select_page"), (navigate_page, "navigate_page"),
+                             (take_snapshot, "take_snapshot"), (close_page, "close_page"))]
+
+    def test_jd_has_no_markup(self):
+        sink = []
+
+        async def classify(items):
+            return [dict(it, category="开发", why="", title="t", company="c")
+                    for it in items]
+
+        rep = asyncio.run(harvest_page(SNAPSHOT, self._tools(), _manual(),
+                                       bucket="b", classify=classify, sink=sink,
+                                       known_urls=set(), limit=1))
+        assert rep["collected"] == 1, rep
+        jd = sink[0]["jd"]
+        assert "uid=" not in jd, jd[:120]
+        assert "RootWebArea" not in jd
+        assert "岗位描述" in jd
+        assert "1、负责后端开发；" in jd

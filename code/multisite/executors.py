@@ -16,6 +16,39 @@ from multisite.site_manual import SiteManual
 # 如果哪天两边的正则需要一起改，那才是该提到更底层共享模块的信号，不是现在。
 _NODE_RE = re.compile(r'uid=(?P<uid>\S+)\s+(?P<role>\w+)(?:\s+"(?P<name>[^"]*)")?')
 
+def snapshot_to_text(snapshot_text: str) -> str:
+    """把 a11y 快照转成可读正文：只留节点上人能看见的那段文字，丢掉标记。
+
+    `jd` 有两个消费方，**它们都吃不下原始快照**：Checkpoint 1 审批页原样渲染就是
+    一屏 `uid=`；分类 prompt 里 `_JD_MAX_CHARS` 的额度大半花在 `uid=` / 角色名 /
+    `url=` 上，真正的岗位正文被挤掉。转换之后同样的额度能装下的正文多一倍不止。
+
+    **嵌套节点的重复文字要合掉**：`link "关于我们"` 底下常挂一个内容一模一样的
+    `StaticText`，页脚每个链接都出现两遍。只比对**相邻**的重复，不做全局去重——
+    岗位正文里本来就可能有重复的短语，全局去重会把它们无声删掉。
+
+    **不是快照的文本原样返回**：`link_in_row` 那条路径的 `jd` 是 `row.text`
+    （本来就是干净文本），两条路径最终都会经过这里。
+    """
+    kept: list[str] = []
+    # **对全文 finditer，不是逐行匹配**：一整段岗位职责会挤在一个节点的
+    # accessible name 里，而那段文字里的换行是**真实换行**——开引号在 `uid=` 那一行，
+    # 闭引号在两三行之后。逐行匹配时 `[^"]*` 在行尾就找不到闭引号了，`name` 匹配成
+    # 空串，后续几行又完全不匹配 `_NODE_RE`，**整段正文被无声丢掉**（真机：3076 字的
+    # 详情页只提取出 303 字，正好是导航栏加两个小标题，看着像"提取成功"）。
+    # `[^"]*` 本身就能跨行，改成全文匹配即可，不需要 DOTALL。
+    for m in _NODE_RE.finditer(snapshot_text):
+        name = (m.group("name") or "").strip()
+        if not name:
+            continue
+        if kept and kept[-1] == name:
+            continue
+        kept.append(name)
+    if not kept:
+        return snapshot_text
+    return "\n".join(kept)
+
+
 @dataclass
 class JobRow:
     anchor_uid: str   # 取 URL 时点它；真机验证事件会冒泡到整张卡片

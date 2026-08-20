@@ -18,6 +18,7 @@ function job(overrides: Partial<PendingJob> = {}): PendingJob {
     category: 'product',
     category_agent: 'product',
     why: '',
+    jd: '',
     status: 'pending',
     reason: null,
     found_at: '2026-08-20T00:00:00',

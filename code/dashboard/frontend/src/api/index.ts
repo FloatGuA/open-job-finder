@@ -148,6 +148,9 @@ export interface PendingJob {
   category: string
   category_agent: string
   why: string
+  // 岗位详情页的可读正文（harvest 取 URL 时同一次访问顺手读回来的）。
+  // 旧记录可能为空串——那是 jd 落库之前收的，不是「这个岗位没有 JD」。
+  jd: string
   status: 'pending' | 'approved' | 'rejected'
   reason: string | null
   found_at: string

@@ -43,6 +43,7 @@ const T_C1_BATCH_APPROVE = '\u6279\u51c6'
 const T_C1_BATCH_REJECT = '\u9a73\u56de'
 const T_C1_CORRECTED = 'agent \u5f52\u4e3a'
 const T_C1_OPEN = '\u6253\u5f00\u5c97\u4f4d\u9875'
+const T_C1_JD = '\u5c97\u4f4d\u539f\u6587'
 const T_C1_UNIT = '\u4e2a'
 const T_C1_MAKE_GOLDEN = '\u786e\u8ba4\uff0c\u6559\u7ed9 agent'
 const T_C1_IS_GOLDEN = '\u5df2\u5f55\u5165\u6837\u4f8b\u5e93'
@@ -612,6 +613,27 @@ function JobRow({
 
         {job.why && (
           <p className="mt-1.5 max-w-[86ch] text-[13.5px] leading-relaxed text-text-2">{job.why}</p>
+        )}
+
+        {/* 岗位原文。Checkpoint 1 唯一的人工决策是"这个岗位该不该投"，判断所需的
+            信息必须都在这一页上——只给一句 why 的话，人是在替 agent 的一句话背书。
+            默认折叠：一屏十几条候选，全展开就没法扫了；字数放在标题上，一眼能看出
+            哪条抓回来的其实是空壳。 */}
+        {job.jd && (
+          <details className="mt-2 max-w-[86ch]">
+            <summary className="cursor-pointer select-none text-[12.5px] text-text-3 transition hover:text-text-1">
+              {T_C1_JD}
+              {'\uff08'}
+              {job.jd.length}
+              {'\u5b57\uff09'}
+            </summary>
+            <pre
+              className="mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl p-3 text-[12.5px] leading-relaxed text-text-2"
+              style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}
+            >
+              {job.jd}
+            </pre>
+          </details>
         )}
 
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px] text-text-3">
