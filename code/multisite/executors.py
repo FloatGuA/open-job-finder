@@ -31,7 +31,7 @@ class _MatchedNode:
     line: str   # 原始行文本，供需要读其他属性（如 url="..."）的调用方自己正则
 
 
-def _matched_nodes(snapshot_text: str) -> list:
+def _matched_nodes(snapshot_text: str) -> list[_MatchedNode]:
     """快照里所有匹配 `uid=...` 的行，按原文顺序，带上角色和原始行文本。
 
     这是 `split_rows` 和 `job_url_offline`（`link_in_row` 分支）共用的唯一节点索引来源
@@ -48,18 +48,34 @@ def _matched_nodes(snapshot_text: str) -> list:
     return out
 
 
-def _nodes(snapshot_text: str) -> list:
-    """`(uid, name)` 视图，供只需要名字的调用方用（`validate_manual` 判据②）。"""
-    return [(n.uid, n.name) for n in _matched_nodes(snapshot_text)]
+def _nodes(snapshot_text: str) -> list[tuple[str, str, str]]:
+    """`(uid, role, name)` 视图，供不需要原始行文本、只需要节点身份的调用方用
+    （`validate_manual` 判据②）。带上 role 是因为 `_NODE_RE` 本来就解析了它——
+    丢掉再让消费方自己重新判定，会在这份文件里制造出两条节点解析路径。"""
+    return [(n.uid, n.role, n.name) for n in _matched_nodes(snapshot_text)]
 
 
-def _anchor_row_windows(snapshot_text: str, manual: SiteManual):
+# `spans` 只有在锚点数量 >= 2 时才非空（`zip(positions, positions[1:])` 至少要
+# 两个点才能求出一个间距）；`_anchor_row_windows` 已经把 0 个锚点的情况提前
+# return 掉了，所以这个回退值只在**恰好 1 个锚点**时触发。没有真实数据支持这个
+# 具体值——15 只是"总比 0 强"的保守兜底，不是某个站点的观察值。
+_SINGLE_ANCHOR_SPAN_FALLBACK = 15
+
+
+def _anchor_row_windows(
+    snapshot_text: str, manual: SiteManual
+) -> tuple[list[_MatchedNode], list[tuple[str, int, int]]]:
     """按 `row_anchor` 切出每一行在 `_matched_nodes()` 下标里的窗口 `[start, end)`。
 
     返回 `(nodes, windows)`：`nodes` 是 `_matched_nodes()` 的结果，`windows` 是
     `[(anchor_uid, start, end), ...]`。`split_rows` 用窗口取行文本，
     `job_url_offline`（`link_in_row`）用同一份窗口限定"这一行"的链接搜索范围——
     两处共用这一个函数，不各自重算一遍。
+
+    **按 uid 查找窗口是"首个命中优先"，是有意的**：真实 a11y 快照的 uid 不保证
+    唯一（本仓库 fixture 里 `uid=1_7` 就出现了两次），`job_url_offline` 按
+    `uid == row.anchor_uid` 用 `next(...)` 取第一个匹配的窗口，重复 uid 时后面
+    那个永远取不到——目前没有站点撞上这个边界，先记录取舍，不提前设计。
     """
     nodes = _matched_nodes(snapshot_text)
     anchor_positions = [i for i, n in enumerate(nodes) if n.name == manual.row_anchor]
@@ -81,7 +97,7 @@ def _anchor_row_windows(snapshot_text: str, manual: SiteManual):
     # 消失）；②锚点后 2 个节点属于本行（`+2` 是这个站的观察值，换一个站点结构不成立）。
     # 不满足这两条假设的站需要新的 row_split 执行器，而不是调这两个数字。
     spans = [b - a for a, b in zip(anchor_positions, anchor_positions[1:])]
-    span = min(spans) if spans else 15
+    span = min(spans) if spans else _SINGLE_ANCHOR_SPAN_FALLBACK
     windows = []
     for pos in anchor_positions:
         start = max(0, pos - span + 2)
@@ -90,7 +106,7 @@ def _anchor_row_windows(snapshot_text: str, manual: SiteManual):
     return nodes, windows
 
 
-def split_rows(snapshot_text: str, manual: SiteManual) -> list:
+def split_rows(snapshot_text: str, manual: SiteManual) -> list[JobRow]:
     """把平铺的快照切成一行一个岗位。`anchor_text` 的窗口算法（等距回切 + `+2`）
     绑定了两条站点几何假设，写在 `_anchor_row_windows` 的注释里——不成立的站需要新的
     row_split 执行器，不是调那两个数字。"""
@@ -110,7 +126,7 @@ def split_rows(snapshot_text: str, manual: SiteManual) -> list:
     return rows
 
 
-def read_total_count(snapshot_text: str, manual: SiteManual):
+def read_total_count(snapshot_text: str, manual: SiteManual) -> int | None:
     """按手册的正则读「共 N 个岗位」。读不到返回 None。
 
     **None ≠ 0**：None 是"这个站没有计数/读不到"，0 是"筛得一个不剩"。合并会让
@@ -125,6 +141,11 @@ def read_total_count(snapshot_text: str, manual: SiteManual):
     try:
         m = re.search(pattern, snapshot_text)
     except re.error:
+        # `SiteManual.from_dict` 已经在入口把不合法正则拦下了（见
+        # `site_manual.py` `TestTotalCountLocatorMustBeValidRegex`），所以这条
+        # 分支现在近乎死代码——**不要删**：`from_dict` 只挡得住经过它构造出来的
+        # manual，直接构造 dataclass（测试就是这么干的，也不排除将来有别的路径）
+        # 仍能绕过去，这里是那条路径的兜底。
         return None
     if not m or not m.groups():
         return None
@@ -137,7 +158,7 @@ def read_total_count(snapshot_text: str, manual: SiteManual):
 _ID_RE = re.compile(r"\b(\d{4,})\b")
 
 
-def job_url_offline(row: JobRow, snapshot_text: str, manual: SiteManual):
+def job_url_offline(row: JobRow, snapshot_text: str, manual: SiteManual) -> str | None:
     """不碰浏览器就能取到的 URL。取不到返回 None。
 
     **None 而不是空串**：调用方要能区分"这一行没有链接"（记一次失败并计数）和
@@ -153,6 +174,10 @@ def job_url_offline(row: JobRow, snapshot_text: str, manual: SiteManual):
         # 实测过：不限定窗口时，"这一行没有链接"不会返回 None，而是返回一个完全无关的
         # 链接（10 行全部返回同一个页脚"部门介绍"链接）——`validate_manual` 的判据③
         # 还拦不住它，因为那个链接照样以 http 开头。
+        #
+        # `next(...)` 按 `uid == row.anchor_uid` 取**第一个**匹配的窗口——真实
+        # a11y 快照的 uid 不保证唯一（见 `_anchor_row_windows` 的 docstring），
+        # 这里"首个命中优先"是有意的，不是漏了去重。
         nodes, windows = _anchor_row_windows(snapshot_text, manual)
         window = next(((s, e) for uid, s, e in windows if uid == row.anchor_uid), None)
         if window is None:
@@ -165,15 +190,21 @@ def job_url_offline(row: JobRow, snapshot_text: str, manual: SiteManual):
                     return m.group(1)
         return None
 
-    # id_template
-    m = _ID_RE.search(row.text)
-    return manual.url_template.replace("{id}", m.group(1)) if m else None
+    if manual.job_url_source == "id_template":
+        m = _ID_RE.search(row.text)
+        return manual.url_template.replace("{id}", m.group(1)) if m else None
+
+    # `from_dict` 的闭集校验让这里理论上不可达——但"不可达"是靠**另一个函数**
+    # 保证的，直接构造 dataclass（绕过 `from_dict`）就能送进来任意字符串。不能
+    # 隐式落进上面的 id_template 分支：那样会静默地拿"看起来像 ID 的数字"去拼
+    # 一个空的 url_template，产出一批指哪儿都不对的 URL。
+    raise ValueError(f"job_url_offline 不认识 job_url_source={manual.job_url_source!r}")
 
 
 _PAGE_LINE_RE = re.compile(r"^\s*(?P<idx>\d+):\s*.*?\((?P<url>https?://[^)]+)\)(?P<sel>.*)$", re.M)
 
 
-def _parse_pages(text: str) -> list:
+def _parse_pages(text: str) -> list[tuple[int, str, bool]]:
     """`list_pages` 的输出 → [(idx, url, is_selected)]。"""
     return [(int(m.group("idx")), m.group("url"), "[selected]" in m.group("sel"))
             for m in _PAGE_LINE_RE.finditer(text or "")]
@@ -187,7 +218,7 @@ def _flat(result) -> str:
     return str(result)
 
 
-async def job_url_online(row: JobRow, tools, manual: SiteManual):
+async def job_url_online(row: JobRow, tools, manual: SiteManual) -> str | None:
     """点开卡片、从新标签页读 URL、关掉。取不到返回 None。
 
     **拿完必须关**：不关的话标签页越积越多，`list_pages` 里"哪个是刚开的"就判不准了，
@@ -244,27 +275,46 @@ async def job_url_online(row: JobRow, tools, manual: SiteManual):
     return url
 
 
-async def validate_manual(manual: SiteManual, snapshot_text: str, tools) -> tuple:
+async def validate_manual(snapshot_text: str, tools, manual: SiteManual) -> tuple[bool, str]:
     """旧手册还成不成立。返回 `(过了没有, 人看得懂的原因)`。
 
     只验三条（spec §3.5），约 3–5 步，远低于全量重探。**任一条不过整份作废**——
     不做部分沿用：手册字段之间有耦合（`filter_interaction` 变了往往意味着筛选区重写，
     `dimensions` 也不可信），逐格判断"哪格还能用"的成本接近重探，而判错的产物是
     半对的手册，最难查。
-    """
-    # ① 计数文本仍在
-    if manual.total_count_locator and read_total_count(snapshot_text, manual) is None:
-        return False, f"计数文本读不到了（locator={manual.total_count_locator!r}），站点可能已改版"
 
-    # ② 第一个维度的选项集合没变
+    **判据①②是可选的**：`total_count_locator` / `dimensions` 为空时对应那条判据
+    直接跳过，不算失败。返回的 reason 里如实列出**实际执行了哪几条**、跳过了哪几条
+    ——不能不管跑没跑都说"手册仍然成立"，那样一份只配了 `row_anchor` 的手册会
+    退化成几乎什么都没验，却看起来跟全验过一样。
+
+    **调用 `job_url_online` 的副作用**：判据③在 `job_url_source=new_tab_on_click`
+    时会调 `job_url_online`，它抛异常时**可能残留一个未关闭的标签页**——细节见
+    `job_url_online` 自己的 docstring，这里重复一句是因为只读本函数文档的人看不到。
+    """
+    checked = []
+    skipped = []
+
+    # ① 计数文本仍在（可选：手册没配 total_count_locator 就跳过）
+    if manual.total_count_locator:
+        if read_total_count(snapshot_text, manual) is None:
+            return False, f"计数文本读不到了（locator={manual.total_count_locator!r}），站点可能已改版"
+        checked.append("计数文本")
+    else:
+        skipped.append("计数文本（手册未配置 total_count_locator）")
+
+    # ② 第一个维度的选项集合没变（可选：手册没配 dimensions 就跳过）
     if manual.dimensions:
         want = set(manual.dimensions[0].get("options") or [])
-        have = {name for _, name in _nodes(snapshot_text) if name}
+        have = {name for _, _, name in _nodes(snapshot_text) if name}
         missing = want - have
         if missing:
             return False, f"筛选维度「{manual.dimensions[0].get('name')}」的选项变了，快照里找不到：{sorted(missing)}"
+        checked.append("首个维度选项")
+    else:
+        skipped.append("首个维度选项（手册未配置 dimensions）")
 
-    # ③ 对第一个岗位实取一次 URL
+    # ③ 对第一个岗位实取一次 URL（必做，无法跳过）
     rows = split_rows(snapshot_text, manual)
     if not rows:
         return False, f"按 row_anchor={manual.row_anchor!r} 一行都切不出来"
@@ -274,5 +324,9 @@ async def validate_manual(manual: SiteManual, snapshot_text: str, tools) -> tupl
         url = job_url_offline(rows[0], snapshot_text, manual)
     if not (url or "").startswith("http"):
         return False, f"按 job_url_source={manual.job_url_source} 取不到第一个岗位的 URL"
+    checked.append("取 URL")
 
-    return True, "手册仍然成立"
+    reason = f"已验：{' / '.join(checked)}"
+    if skipped:
+        reason += f"；跳过：{'；'.join(skipped)}"
+    return True, reason

@@ -1137,12 +1137,24 @@ def _make_nodes(
             # 自己的 Bash 工具）拉起，那种场景下没有真实 stdin 可等用户敲回车。
             # 用户在弹出的 Chrome 窗口里手动登录（鼠标/键盘直接操作那个窗口，不
             # 经过运行本脚本的终端），这里定期重新截图检测登录态是否已消失。
+            #
+            # **`print` 不够**（2026-08 真实事故）：它打进 uvicorn 的 stdout，没有
+            # 读者，还被块缓冲吃掉——系统在等人、人不知道，run 日志 10 分钟只有
+            # 一条 `run_start`，最后只留下一句「等待手动登录超时」。`logger.log`
+            # 同时写 JSONL 和推 SSE，Dashboard 实时日志上看得见、事后回放也看得见，
+            # 这才是主路径；`print` 保留是因为命令行直跑（`logger=None`）时它是
+            # 唯一输出。
             print("检测到可能未登录，请在弹出的 Chrome 窗口里手动登录（最多等待 10 分钟）...")
+            if logger is not None:
+                logger.log("waiting_for_login", scope={},
+                           data={"url": entry, "max_wait_seconds": 600})
             for _ in range(60):
                 await asyncio.sleep(10)
                 snapshot = await _snapshot_and_cache()
                 if not _looks_logged_out(snapshot):
                     print("检测到登录态，继续。")
+                    if logger is not None:
+                        logger.log("login_detected", scope={}, data={"url": entry})
                     break
             else:
                 raise RuntimeError("等待手动登录超时（10 分钟），请重新运行")

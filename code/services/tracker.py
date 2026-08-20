@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 
+from multisite.site_manual import SiteManual
 from schemas import (
     AppStatus, ApplicationRecord, HRConversation, PendingApplication, PendingJob,
     SiteBrief, SiteLimit,
@@ -1547,7 +1548,7 @@ class ApplicationTracker:
 
     # -- site manuals ------------------------------------------------------------
 
-    def upsert_site_manual(self, site_name: str, manual: "SiteManual") -> None:
+    def upsert_site_manual(self, site_name: str, manual: SiteManual) -> None:
         """站点操作手册。与 `site_briefs` **并存、职责分开**——手册是本轮可执行的
         结构化事实（代码消费），brief 是跨轮经验笔记（喂 prompt 给模型看）。
         列集不同、消费方不同，不是分叉。"""
@@ -1561,10 +1562,8 @@ class ApplicationTracker:
                 (site_name, json.dumps(manual.to_dict(), ensure_ascii=False), self._utcnow_iso()),
             )
 
-    def get_site_manual(self, site_name: str) -> Optional[tuple]:
+    def get_site_manual(self, site_name: str) -> Optional[tuple[SiteManual, str]]:
         """返回 `(SiteManual, updated_at)`；没有则 None。"""
-        from multisite.site_manual import SiteManual
-
         row = self.conn.execute(
             "SELECT manual, updated_at FROM site_manuals WHERE site_name = ?", (site_name,)
         ).fetchone()

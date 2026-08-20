@@ -8,6 +8,7 @@ agent 写一句"点标题会在新窗口打开"的散文，代码没法据此分
 设计与取舍见 `docs/superpowers/specs/2026-08-19-m1-survey-plan-scan-design.md` §3。
 """
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 
@@ -85,6 +86,13 @@ class SiteManual:
                     "——没有捕获组时 read_total_count 会一直返回 None，validate_manual 会"
                     "把它误诊成「站点已改版」")
 
+        raw_reload = d.get("filters_survive_reload", False)
+        if not isinstance(raw_reload, bool):
+            raise ManualError(
+                f"filters_survive_reload 必须是 bool，收到 {raw_reload!r}"
+                f"（{type(raw_reload).__name__}）——手册是 LLM 产的 JSON，"
+                f"字符串 'false' 这类值 bool() 会静默转成 True")
+
         dimensions = d.get("dimensions") or []
         for i, dim in enumerate(dimensions):
             if not isinstance(dim, dict) or "options" not in dim:
@@ -101,11 +109,14 @@ class SiteManual:
             pagination=d["pagination"],
             filter_interaction=d["filter_interaction"],
             row_split=d["row_split"],
-            filters_survive_reload=bool(d.get("filters_survive_reload", False)),
+            filters_survive_reload=raw_reload,
             url_template=d.get("url_template", ""),
             total_count_locator=d.get("total_count_locator", ""),
             row_anchor=d.get("row_anchor", ""),
-            dimensions=list(d.get("dimensions") or []),
+            # 深拷贝：`list(d.get("dimensions") or [])` 只拷外层列表，内部 dict 仍与
+            # 输入共享引用——调用方事后改自己那份 d["dimensions"][0]["options"] 会
+            # 悄悄改到已构造好的 manual 上。
+            dimensions=deepcopy(dimensions),
             important_notes=d.get("important_notes", ""),
         )
 

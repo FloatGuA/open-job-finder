@@ -105,6 +105,36 @@ class TestTotalCountLocatorMustBeValidRegex:
             SiteManual.from_dict(d)
 
 
+class TestFiltersSurviveReloadIsStrictBool:
+    """手册是 LLM 产的 JSON——`bool("false")` 是 `True`，`bool(d.get(...))` 会把
+    字符串 `"false"` 静默转成 `True`。这跟本文件其余字段的 fail-fast 精神相反。"""
+
+    def test_missing_key_defaults_to_false(self):
+        d = _valid()
+        del d["filters_survive_reload"]
+        assert SiteManual.from_dict(d).filters_survive_reload is False
+
+    def test_string_false_is_rejected_not_coerced_to_true(self):
+        d = _valid()
+        d["filters_survive_reload"] = "false"
+        with pytest.raises(ManualError, match="filters_survive_reload"):
+            SiteManual.from_dict(d)
+
+    def test_int_one_is_rejected(self):
+        d = _valid()
+        d["filters_survive_reload"] = 1
+        with pytest.raises(ManualError, match="filters_survive_reload"):
+            SiteManual.from_dict(d)
+
+
+class TestDimensionsAreDeepCopied:
+    def test_mutating_the_source_dict_does_not_affect_the_manual(self):
+        d = _valid()
+        manual = SiteManual.from_dict(d)
+        d["dimensions"][0]["options"].append("mutated")
+        assert manual.dimensions[0]["options"] == ["2027校园招聘"]
+
+
 class TestDimensionsMustHaveOptions:
     """判据②是 `manual.dimensions[0].get("options") or []`。少写一个 `options` 键，
     判据就静默变成永远通过——`from_dict` 必须在手册进入系统前挡住这种形状。"""

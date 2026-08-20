@@ -52,6 +52,37 @@ class TestSplitRowsByAnchor:
         assert split_rows(SNAPSHOT, _manual(row_anchor="这个文本不存在")) == []
 
 
+class TestExactlyOneAnchor:
+    """`span`（相邻锚点间距）需要至少 2 个锚点才能求出来；0 个锚点在
+    `_anchor_row_windows` 里提前 return 掉了，所以"恰好 1 个"是唯一会触发
+    `_SINGLE_ANCHOR_SPAN_FALLBACK` 回退值的情况——之前只覆盖了 0 个和 10 个
+    两端，这里补上中间这一档。"""
+
+    SINGLE_ANCHOR_SNAPSHOT = (
+        '## Latest page snapshot\n'
+        'uid=1_0 RootWebArea "岗位列表"\n'
+        'uid=1_1 StaticText "推广文案A"\n'
+        'uid=1_2 StaticText "推广文案B"\n'
+        'uid=1_3 StaticText "唯一岗位标题"\n'
+        'uid=1_4 StaticText "工作地点："\n'
+        'uid=1_5 StaticText "深圳"\n'
+        'uid=1_6 StaticText "全职"\n'
+    )
+
+    def test_yields_exactly_one_row(self):
+        manual = _manual(row_anchor="工作地点：")
+        rows = split_rows(self.SINGLE_ANCHOR_SNAPSHOT, manual)
+        assert len(rows) == 1
+
+    def test_the_row_covers_the_title_and_the_node_right_after_the_anchor(self):
+        """回退窗口用 `_SINGLE_ANCHOR_SPAN_FALLBACK` 往前回切、`+2` 往后扩——
+        标题在锚点前几个节点，`+2` 之后的「深圳」也该在窗口内。"""
+        manual = _manual(row_anchor="工作地点：")
+        rows = split_rows(self.SINGLE_ANCHOR_SNAPSHOT, manual)
+        assert "唯一岗位标题" in rows[0].text
+        assert "深圳" in rows[0].text
+
+
 class TestContainerPerRowIsNotImplementedYet:
     def test_it_raises_instead_of_silently_returning_nothing(self):
         """还没有哪个真实站点需要它。`from_dict` 现在已经把 `container_per_row` 挡在
