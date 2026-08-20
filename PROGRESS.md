@@ -52,7 +52,13 @@
 合并成计划 C 第一项：**Checkpoint 1 决策信息补齐**。判据是
 「人在这一页要做的判断，需要的信息是不是都在这一页上」。
 
-**② 批准之后无法撤销**
+**② 批准之后无法撤销** —— **已完成（v2.28.1）**
+
+`tracker.undo_pending_job_decision` + `POST /api/checkpoint1/jobs/{id}/undo` + 审批页撤销按钮。
+`approved`/`rejected` → `pending`，同时清空 `reason`/`decided_at`（留着的话会显示
+「已于 X 因 Y 被拒绝」但状态是待审，两个说法互相矛盾）。
+**不区分填过表没有**——差集逻辑保证撤销后重新批准也不会二次传简历，有测试直接
+断言 `_jobs_awaiting_fill` 不含它。原始问题：
 
 `tracker.decide_pending_job` 带 `WHERE status = 'pending'`，approved 之后改不动
 （注释说是刻意防止对已进入填表阶段的岗位重新决策）。代价是**误批无法回头**——
@@ -60,7 +66,11 @@
 2026-08-20 用户误批两个岗位，只能用一次性 SQL 改数（`decided_at` 已刷新，理由已写明）。
 **需要一个正规的撤销路径**，且要区分「还没进填表」和「已经进过填表」两种情形。
 
-**③ 需要人介入时，人看不见**
+**③ 需要人介入时，人看不见** —— **已完成（v2.28.1）**
+
+`ensure_ready` 改走 `logger.log('waiting_for_login' / 'login_detected', ...)`，
+同时写 JSONL 和推 SSE；`print` 保留但不再是唯一出口；`logger=None` 时安全跳过。
+**未经真机验证**——下次撞上未登录时留意 Dashboard 上是否真出现那行提示。原始问题：
 
 `ensure_ready` 检测到未登录后会轮询等 10 分钟，提示走的是
 `print("检测到可能未登录…")` —— 打进 uvicorn 的 stdout，**没有读者**，还被块缓冲吃掉。
