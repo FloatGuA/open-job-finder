@@ -661,17 +661,31 @@ def staged_resume(resume_pdf_path: str):
     跟这一版刚做的工具白名单收窄正好相反。agent 只需要能读"我们明确交给它的那一份
     简历"，不需要读别的——复制一份进 temp 恰好就是这个语义。
 
-    跑完删掉：临时目录里躺一份带真实个人信息的简历不合适。
+    **文件名原样保留**：浏览器上传时发送的就是这个名字，所以它会出现在企业的申请表
+    里——HR 是会看附件名的。原来复制成 `ojf_resume_{pid}.pdf`，等于替用户把简历
+    改名成了一串内部编号。改成**每次一个子目录 + 原文件名**：既唯一（两次暂存同一份
+    不会互相踩），名字又是对的。
+
+    子目录同样在临时目录之下。**对着 chrome-devtools-mcp 的源码核过它的判定**
+    （`McpContext.js`）：
+
+        canonicalPath === canonicalRoot || canonicalPath.startsWith(canonicalRoot + path.sep)
+
+    子目录满足第二个条件——不是猜的。
+
+    跑完删掉：临时目录里躺一份带真实个人信息的简历不合适。**连子目录一起收走**，
+    而且异常路径上也要收（上传中途出错是常态：表单没有文件控件、页面变了……）。
     """
     src = Path(resume_pdf_path)
     if not src.is_file():
         raise FileNotFoundError(f"简历 PDF 不存在: {resume_pdf_path}")
-    staged = Path(tempfile.gettempdir()) / f"ojf_resume_{os.getpid()}{src.suffix}"
+    staged_dir = Path(tempfile.mkdtemp(prefix="ojf_resume_"))
+    staged = staged_dir / src.name
     shutil.copy2(src, staged)
     try:
         yield str(staged)
     finally:
-        staged.unlink(missing_ok=True)
+        shutil.rmtree(staged_dir, ignore_errors=True)
 
 
 def make_record_open_result_tool(sink: dict) -> "object":
