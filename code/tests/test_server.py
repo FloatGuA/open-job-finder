@@ -14,8 +14,17 @@ import yaml
 from fastapi.testclient import TestClient
 
 from dashboard.server import app
+
 from schemas import AppStatus, ApplicationRecord, HRConversation
 import dashboard.server as srv
+
+# server.py 的模块级路径常量，**在任何夹具打补丁之前**的原始值。
+# `client` 夹具会把它们重定向到 tmp_path；下面 TestNoWritesEscapeToRealUserData
+# 靠这份快照判断"哪些还指着真实位置"。
+_PRISTINE_SERVER_PATHS = {
+    _n: _v for _n, _v in vars(srv).items()
+    if _n.isupper() and isinstance(_v, Path)
+}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -132,6 +141,9 @@ def client(tmp_path, monkeypatch):
     # 测试里跑出来的每一条调度日志都写进真实的 data/schedule_log.jsonl。
     # 2026-08-15 在真实日志里查出 108 条测试产生的 ms_fill error 才发现，
     # 而且它同时解释了长期没查明的"duration=0 幽灵成功"（2115/2845 条）。
+    # 调度配置是**写**路径（PUT /api/schedule 存它）。漏掉它意味着哪天谁给调度
+    # 端点写个测试，就会静默改掉用户真实的 data/schedule.yaml。
+    monkeypatch.setattr(srv, "SCHEDULE_CONFIG_PATH", data_dir / "schedule.yaml")
     monkeypatch.setattr(srv, "SCHEDULE_LOG_PATH", data_dir / "schedule_log.jsonl")
     monkeypatch.setattr(srv, "SELFCHECK_LOG_PATH", data_dir / "selfcheck_log.jsonl")
     monkeypatch.setattr(srv, "REGRESSION_SMOKE_LOG", data_dir / "regression_smoke_log.jsonl")
@@ -848,6 +860,53 @@ _LLM_CAPS = {
                  {"type": "anthropic_api", "model": "claude-opus-4-8"}],
     "vision": [{"type": "codex_cli"}, {"type": "claude_cli"}],
 }
+
+
+class TestNoWritesEscapeToRealUserData:
+    """测试**绝不能**写进用户真实的 data/ 和 logs/。
+
+    2026-08-15 查出来过一次：`SCHEDULE_LOG_PATH` 没被夹具重定向，于是每跑一次
+    测试套件就往真实的 `data/schedule_log.jsonl` 里追加调度记录——**2115/2845 条**。
+    更糟的是它们伪装成 `duration=0` 的成功，把"上一次真的正常是什么时候"这个
+    问题的答案彻底污染掉，排查 W1/W2 故障时差点据此得出相反结论。
+
+    当时的修法是"给夹具补一个 monkeypatch"，**没有任何东西防止它重演**：
+    新加一个路径常量、或者新写一个测试文件忘了打补丁，都会静默复发，
+    而且要几周后靠人肉在真实数据里发现。这条测试让"漏一个"当场变红。
+    """
+
+    def _protected_roots(self):
+        """不许碰的三处：真实 data/、真实 logs/、真实 config.yaml。
+
+        列的是**位置**不是常量名——常量会增加，位置不会。
+        """
+        data = _PRISTINE_SERVER_PATHS["DATA_DIR"]
+        return data, data.parent.parent / "logs", _PRISTINE_SERVER_PATHS["CONFIG_PATH"]
+
+    def _leaks(self):
+        data_root, logs_root, config_file = self._protected_roots()
+        leaked = []
+        for name, pristine in _PRISTINE_SERVER_PATHS.items():
+            protected = (
+                pristine == data_root or data_root in pristine.parents
+                or logs_root in pristine.parents
+                or pristine == config_file
+            )
+            if protected and getattr(srv, name) == pristine:
+                leaked.append(name)
+        return leaked
+
+    def test_the_fixture_redirects_every_protected_path(self, client):
+        assert self._leaks() == [], (
+            "这些常量在测试里仍指向真实用户数据，`client` 夹具漏了它们："
+            f"{self._leaks()}。往 tests/test_server.py 的 client 夹具里补 "
+            "monkeypatch.setattr(srv, <名字>, ...)。"
+        )
+
+    def test_the_guard_itself_can_actually_fail(self):
+        """**变异验证钉死在测试里**：没有 client 夹具时，这些常量当然还指着真实
+        位置——所以上面那条不是恒真的。断言的是"守门有能力变红"。"""
+        assert self._leaks(), "守门失效了：不打补丁时也报告没有泄漏"
 
 
 class TestLlmConfigVocabulary:

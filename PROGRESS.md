@@ -5,12 +5,33 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-22（v2.34.3 模型下拉修复） |
-| 当前版本 | 2.34.3                         |
+| 最后更新 | 2026-08-22（v2.34.4 测试数据隔离守门） |
+| 当前版本 | 2.34.4                         |
 
 > ⚠️ **下一轮动手前先读**：Layer 1 已按 2026-08-13 的对齐改完并真机验证。**SDK 继续 LangGraph 是用户拍板的（理由是他本人正求职 agent 开发岗位、亲手做工程本身是目标），后续会话不要因为技术理由自作主张换成 Anthropic/Codex SDK。** 完整取舍见 `DECISION.md` 三条：「Layer 1 的导航/找入口/选岗交给 agent 自主决策」「选岗结果用 record_job 边找边落袋」「提交防线从不给工具改成点击工具自己拒绝」。
 
 ## 待跟进（另开会话）
+
+### ✅ 测试写进真实用户数据：补结构性守门（2026-08-22，v2.34.4）
+
+本轮**核了三条 backlog，三条都已经修好了**，板子在三个地方说了假话（都已回填）：
+`agent_runtime` 早就读 `config.yaml` 的 `multisite.model`（v2.29.7）；
+`EDITABLE_PROMPTS` 早就含 5 个 `layer1_*`（`d758b75`）；
+`schedule_log` 的幻影条目 2026-08-15 就定位到源头（测试套件在写真实日志）并修了。
+
+**但幻影那条的修法只修掉了一个实例**——补了一行 monkeypatch，没有任何东西防止
+重演。新增 `TestNoWritesEscapeToRealUserData` 扫 server.py 全部模块级路径常量，
+当场又抓到 4 个：`SCHEDULE_CONFIG_PATH`（**可写**，`PUT /api/schedule` 存它，
+潜伏中——谁给调度端点写第一个测试就会改掉真实 `data/schedule.yaml`）
++ 3 个从没用过的死 import（已删）。
+
+守门列的是「不许碰的位置」而非「要打补丁的常量名」，理由见 PITFALLS。
+变异验证：往 server.py 加一个没人 patch 的 data/ 路径常量 → 红。
+1533 passed，build 绿。
+
+**顺带修正一条有害建议**：「读 schedule_log 先过滤 `duration_seconds > 0`」
+在污染源修掉之后开始**藏真东西**（日投递上限的 skipped、m2 闸门的快速拒绝
+都是 duration 0）。该看 `result` 字段。
 
 ### ✅ 设置页模型下拉修好了（2026-08-22，v2.34.3）
 
@@ -1115,13 +1136,13 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 > **2026-08-17 再次清空四张表**（备份 `data/backups/multisite_20260816_220957.json`，16 + 3 + 2 + 1 行），准备用 v2.25.0~v2.25.3 四批修复重跑一遍完整验证。登录态 `browser_profile_multisite/bambulab/` 未动；Boss 三表（992 / 1096 / 3705）一行没碰。⚠️ `site_limits` 里那条「27届秋招（研发类）最多投递 2 次」也一起清了——重跑时 agent 要重新发现它。
 
 
-### 📌 `schedule_log.jsonl` 把"接受了请求"和"真的跑完了"混成同一个 success（2026-08-13 发现，未修）
+### 📌 `schedule_log.jsonl` 把"接受了请求"和"真的跑完了"混成同一个 success（2026-08-13 发现；**已解决**——源头是测试套件在写真实日志，2026-08-15 修，v2.34.4 补上结构性守门）
 
 2631 条记录里 **1883 条（71%）是 `duration_seconds: 0` + `summary: "ok"` + `trigger_type: "manual"`，且在 `logs/runs/` 里没有任何对应的 run 记录**——pipeline 压根没跑。交叉验证很干净：8-13 当天 `logs/runs/` 有 11 条 run，`schedule_log` 当天 `duration>0` 的也正好 11 条，1:1 对上；dur=0 那些一条都对不上。这些幻影条目还经常成对出现在**同一秒**（apply 和 check 各一条），真跑绝无可能。
 
 **后果**：翻这个日志想回答"上一次真的正常是什么时候"会直接得出错误结论——满屏 success。这次排查 W1/W2 故障时就差点被它误导。
 
-**未修的原因**：三个写入点（`workflow_orchestration.py:188/196`、`scheduler_service.py:74`）写的都是真实 duration，**幻影条目的来源还没定位到**（不在这三处）。需要先查清是哪条路径在写，再决定是给它一个独立的 `result` 值（如 `accepted`）还是干脆不写——**不能两边同步改，要选一个正确的收敛**。在修好之前，读这个日志一律先过滤 `duration_seconds > 0`。
+**未修的原因**：三个写入点（`workflow_orchestration.py:188/196`、`scheduler_service.py:74`）写的都是真实 duration，**幻影条目的来源还没定位到**（不在这三处）。需要先查清是哪条路径在写，再决定是给它一个独立的 `result` 值（如 `accepted`）还是干脆不写——**不能两边同步改，要选一个正确的收敛**。~~在修好之前，读这个日志一律先过滤 `duration_seconds > 0`~~——**这条建议作废，它会藏掉真东西**（日投递上限的 skipped、m2 闸门的快速拒绝都是 duration 0），该看 `result` 字段。详见 PITFALLS。
 
 ### 📌 信息池两件待改（2026-08-13 用户提出，日后再改）
 

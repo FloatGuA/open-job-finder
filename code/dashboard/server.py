@@ -21,13 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
-from services.boss_search_url import (
-    build_search_url as _build_boss_search_url_shared,
-    _flatten_filter_labels,
-    BOSS_DISTRICTS_PATH as _BOSS_DISTRICTS_PATH,
-    BOSS_POSITIONS_PATH as _BOSS_POSITIONS_PATH,
-    BOSS_INDUSTRIES_PATH as _BOSS_INDUSTRIES_PATH,
-)
+from services.boss_search_url import build_search_url as _build_boss_search_url_shared
 from services.config_manager import get_config_manager
 from services.console_utf8 import force_utf8_stdout
 from services.llm_client import (
