@@ -12,7 +12,6 @@ import time
 
 import pytest
 
-from services.resume_store import ResumeStore
 from services.workflow_orchestration import OrchestrationService
 
 
@@ -73,65 +72,135 @@ def _approved_job(tracker, title: str) -> int:
     return job_id
 
 
-def _export(store: ResumeStore, slug: str, name: str, offset: int = 60) -> None:
-    os.makedirs(store.exports_dir, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time() + offset))
-    with open(os.path.join(store.exports_dir, f"{ts}_{slug}_{name}.pdf"), "wb") as f:
+def _lib(data_dir):
+    from services.resume_library import ResumeLibrary
+    return ResumeLibrary(str(data_dir))
+
+
+def _put(data_dir, file: str, target: str = "", allow_send: bool = True,
+         name: str = None, slug: str = "", source: str = "dropped") -> None:
+    """往简历库里放一份 PDF 并登记元数据。
+
+    默认 `allow_send=True` 只是为了让测试短——**生产的默认是关**
+    （用户 2026-08-21 定：往外发的东西要人确认），那条由
+    `tests/test_resume_library.py` 单独守着。
+    """
+    import os
+    lib = _lib(data_dir)
+    os.makedirs(lib.library_dir, exist_ok=True)
+    with open(os.path.join(lib.library_dir, file), "wb") as f:
         f.write(b"%PDF-1.4")
+    lib.update_meta(file, name=name or os.path.splitext(file)[0], target=target,
+                    allow_send=allow_send, source=source, slug=slug)
 
 
 class TestPicksByJob:
-    def test_uses_the_resume_matching_the_job_not_the_newest_export(self, service, tracker,
-                                                                    data_dir, captured):
+    def test_uses_the_resume_matching_the_job_not_the_newest_one(self, service, tracker,
+                                                                 data_dir, captured):
         """此前用的是「最近导出的那份」——一个跟岗位毫无关系的时间属性。"""
-        store = ResumeStore(str(data_dir))
-        game = store.create("游戏岗版", target="游戏 客户端")
-        agent = store.create("AI Agent 开发版", target="AI Agent LLM")
-        _export(store, game["slug"], "游戏岗版")
-        _export(store, agent["slug"], "AI_Agent")
+        _put(data_dir, "game.pdf", target="游戏 客户端")
+        _put(data_dir, "agent.pdf", target="AI Agent LLM")
 
         service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发")})
 
-        assert game["slug"] in captured[0]["resume_pdf_path"]
+        assert "game.pdf" in captured[0]["resume_pdf_path"]
+
+    def test_a_file_you_dropped_in_yourself_competes_normally(self, service, tracker,
+                                                              data_dir, captured):
+        """自己在别处做的简历，填了目标岗位就跟系统导出的一样参与匹配
+        （用户 2026-08-21 定）。旧模型里它结构上永远选不中——文件名里没有 slug。"""
+        _put(data_dir, "我自己做的游戏简历.pdf", target="游戏", source="dropped")
+        _put(data_dir, "agent.pdf", target="AI Agent", source="exported", slug="s1")
+
+        service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发")})
+
+        assert "我自己做的游戏简历.pdf" in captured[0]["resume_pdf_path"]
 
 
-class TestRefusesWhenThePdfIsNotUsable:
-    def test_refuses_when_the_matched_resume_was_never_exported(self, service, tracker,
-                                                                data_dir, captured):
-        store = ResumeStore(str(data_dir))
-        store.create("游戏岗版", target="游戏 客户端")
+class TestAuthorisation:
+    """**没勾「允许发送」的，连"最匹配的那份"都不该是它。**
 
-        with pytest.raises(ValueError) as exc:
-            service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发")})
+    用户 2026-08-16 提、2026-08-21 定：文件夹能随便扔东西，所以往外发必须有一层
+    人工授权。没有这层的话，随手放进去的草稿会被自动发到企业系统里。
+    """
 
-        assert "游戏岗版" in str(exc.value)      # 告诉人该去导哪一份
-        assert captured == []                    # 一步都没跑
-
-    def test_refuses_when_the_pdf_is_older_than_the_resume(self, service, tracker,
-                                                           data_dir, captured):
-        """今天真机踩到的就是这个：传了一份比简历还旧的 PDF，全程无提示。"""
-        store = ResumeStore(str(data_dir))
-        game = store.create("游戏岗版", target="游戏 客户端")
-        _export(store, game["slug"], "游戏岗版", offset=-3600)   # PDF 早于简历
-
-        with pytest.raises(ValueError) as exc:
-            service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发")})
-
-        assert "游戏岗版" in str(exc.value)
-        assert captured == []
-
-    def test_does_not_silently_fall_back_to_another_resume(self, service, tracker,
-                                                           data_dir, captured):
-        """**最关键的一条**：匹配到的那份不可用时，绝不改发另一份可用的。
-        悄悄换一份发出去，比不发严重得多——它会躺在企业系统的表单里。"""
-        store = ResumeStore(str(data_dir))
-        store.create("游戏岗版", target="游戏 客户端")            # 匹配岗位，但没 PDF
-        agent = store.create("AI Agent 开发版", target="AI Agent")
-        _export(store, agent["slug"], "AI_Agent")                  # 可用，但不对口
+    def test_an_unticked_resume_is_never_sent(self, service, tracker, data_dir, captured):
+        _put(data_dir, "game.pdf", target="游戏 客户端", allow_send=False)
 
         with pytest.raises(ValueError):
             service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发")})
+        assert captured == []
 
+    def test_an_empty_library_refuses(self, service, tracker, data_dir, captured):
+        with pytest.raises(ValueError) as exc:
+            service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发")})
+        assert "库" in str(exc.value)
+        assert captured == []
+
+
+class TestRefusesWhenTheMatchIsNotUsable:
+    def test_no_match_and_no_fallback_refuses(self, service, tracker, data_dir, captured):
+        """挑不中又没指定兜底 → 拒发。**宁可不发也不乱发。**"""
+        _put(data_dir, "agent.pdf", target="AI Agent")
+
+        with pytest.raises(ValueError) as exc:
+            service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "秘书")})
+        assert "兜底" in str(exc.value) or "没挑到" in str(exc.value)
+        assert captured == []
+
+    def test_a_designated_fallback_is_used(self, service, tracker, data_dir, captured):
+        """兜底是**你指定的**，不是系统失败时偷偷改道——这是两件事。"""
+        _put(data_dir, "agent.pdf", target="AI Agent")
+        _lib(data_dir).set_fallback("agent.pdf")
+
+        service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "秘书")})
+
+        assert "agent.pdf" in captured[0]["resume_pdf_path"]
+
+    def test_refuses_when_the_pdf_is_older_than_its_source_resume(self, service, tracker,
+                                                                  data_dir, captured,
+                                                                  monkeypatch):
+        """2026-08-16 真机踩到的：传了一份比简历还旧的 PDF，全程无提示。
+        换了模型这条判断不能丢——**但只对系统导出的那些成立**，自己放的文件
+        没有源简历可比。"""
+        _put(data_dir, "20200101_000000_s1_game.pdf", target="游戏 客户端",
+             source="exported", slug="s1")
+
+        import services.resume_store as rs
+
+        class _Idx:
+            def list(self):
+                return {"active": "s1",
+                        "items": [{"slug": "s1", "name": "game",
+                                   "updated_at": "2099-01-01T00:00:00"}]}
+
+        monkeypatch.setattr(rs, "ResumeStore", lambda *a, **kw: _Idx())
+
+        with pytest.raises(ValueError) as exc:
+            service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发")})
+        assert "旧" in str(exc.value)
+        assert captured == []
+
+    def test_does_not_silently_fall_back_to_another_resume(self, service, tracker,
+                                                           data_dir, captured, monkeypatch):
+        """**最关键的一条**：匹配到的那份不可用时，绝不改发另一份可用的。
+        悄悄换一份发出去，比不发严重得多——它会躺在企业系统的表单里。"""
+        _put(data_dir, "20200101_000000_s1_game.pdf", target="游戏 客户端",
+             source="exported", slug="s1")                      # 匹配岗位，但是旧的
+        _put(data_dir, "agent.pdf", target="AI Agent")           # 可用，但不对口
+
+        import services.resume_store as rs
+
+        class _Idx:
+            def list(self):
+                return {"active": "s1",
+                        "items": [{"slug": "s1", "name": "game",
+                                   "updated_at": "2099-01-01T00:00:00"}]}
+
+        monkeypatch.setattr(rs, "ResumeStore", lambda *a, **kw: _Idx())
+
+        with pytest.raises(ValueError):
+            service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发")})
         assert captured == []
 
 
@@ -142,22 +211,21 @@ class TestTheSendPathMatchesOnTheJd:
     实际发出去的是哪份。两处输入不一样的话，人看到的和实际发生的就不是同一件事
     ——**比不显示还糟**。这条约束此前只写在注释里，没有测试守；变异验证时把
     这一处改回 `job.why`，全量测试一条都不红。
-
-    对着 `server.py` 那边的 `TestCheckpoint1ResumePickUsesTheJd` 读。
     """
 
     def test_it_feeds_the_job_jd_not_the_one_line_reason(self, service, tracker,
                                                          data_dir, monkeypatch):
         seen = {}
+        _put(data_dir, "agent.pdf", target="AI Agent")
 
-        import services.resume_matcher as rm
-        real = rm.pick_for_job
+        from services.resume_library import ResumeLibrary
+        real = ResumeLibrary.pick
 
-        def spy(store, job_title="", jd_text=""):
+        def spy(self, job_title="", jd_text=""):
             seen["jd_text"] = jd_text
-            return real(store, job_title=job_title, jd_text=jd_text)
+            return real(self, job_title=job_title, jd_text=jd_text)
 
-        monkeypatch.setattr(rm, "pick_for_job", spy)
+        monkeypatch.setattr(ResumeLibrary, "pick", spy)
 
         job_id = tracker.add_pending_job(
             site_name="s", url="https://x/jd-probe", title="游戏客户端开发",
@@ -179,7 +247,7 @@ class TestExplicitOverride:
         失败时偷偷改道。"""
         pdf = tmp_path / "manual.pdf"
         pdf.write_bytes(b"%PDF-1.4")
-        ResumeStore(str(data_dir)).create("游戏岗版", target="游戏")
+        _put(data_dir, "game.pdf", target="游戏")
 
         service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发"),
                                      "resume_pdf_path": str(pdf)})

@@ -202,11 +202,6 @@ class OrchestrationService:
         return (f"选岗完成：找到 {len(found)} 个，新入库 {len(new_ids)} 条待审批",
                 {"found": len(found), "new": len(new_ids)})
 
-    _PDF_STATE_HINT = {
-        "missing": "从没导出过 PDF",
-        "stale": "PDF 比简历内容旧（简历改过之后没有重新导出）",
-    }
-
     def _resume_for(self, job) -> str:
         """这个岗位该发哪一份简历的 PDF。选不出可用的就**拒绝**，不凑合。
 
@@ -222,26 +217,32 @@ class OrchestrationService:
         后端**不能**自己渲染 PDF：A4 排版的唯一实现在前端 `resumeHtml.ts`，
         后端再写一份就是同一契约两份实现。所以这里只能要求人先导出。
         """
-        from services.resume_matcher import pick_for_job
+        from services.resume_library import ResumeLibrary
         from services.resume_store import ResumeStore
 
-        store = ResumeStore(str(self._data_dir))
-        if not (store.list().get("items") or []):
-            raise ValueError("还没有任何简历：先在 Dashboard「简历」页建一份并导出 PDF")
+        lib = ResumeLibrary(str(self._data_dir))
+        if not lib.list():
+            raise ValueError(
+                "简历库是空的：把要用的 PDF 放进 data/resumes/library/，"
+                "或在 Dashboard「简历」页导出一份")
 
-        # 喂 JD 不是 why——见 server.py 那段同样的注释。**这两处必须一起改**：
-        # 这里决定实际发出去的是哪份，那边决定审批页显示的是哪份。
-        picked = pick_for_job(store, job_title=job.title or "", jd_text=job.jd or "")
-        status = store.pdf_status().get(picked["slug"]) or {"state": "missing"}
-        if status["state"] == "ready":
-            return status["pdf"]
+        picked = lib.pick(job_title=job.title or "", jd_text=job.jd or "")
+        if not picked["file"]:
+            raise ValueError(
+                f"这个岗位（{job.title}）没挑到能发的简历：{picked['reason']}。"
+                f"（不会替你随便挑一份：发错一份的后果是它躺在对方的申请表里）")
 
-        how = "按岗位匹配到" if picked.get("matched") else "没匹配上、按激活份兜底选中"
-        raise ValueError(
-            f"这个岗位（{job.title}）{how}「{picked['name']}」，但它{self._PDF_STATE_HINT.get(status['state'], status['state'])}——"
-            f"请先在 Dashboard「简历」页打开这一份并导出 PDF，再跑 m2。"
-            f"（不会替你改发别的简历：发错一份的后果是它躺在对方的申请表里）"
-        )
+        # 「旧内容」判断只对系统导出的那些成立（它们有源简历可比）。自己放进库里的
+        # 文件没有源简历，无从判断新旧——见 `ResumeLibrary.staleness`。
+        updated = {it["slug"]: it.get("updated_at", "")
+                   for it in ResumeStore(str(self._data_dir)).list()["items"]}
+        if lib.staleness(updated).get(picked["file"]) == "stale":
+            raise ValueError(
+                f"这个岗位（{job.title}）挑中「{picked['name']}」，但这份 PDF 比它的"
+                f"源简历还旧——传出去的是旧内容。请重新导出一次再跑 m2。")
+
+        return lib.path_of(picked["file"])
+
     def _run_multisite_fill(self, overrides: dict[str, Any]) -> tuple[str, dict]:
         """m2：对**一个已批准的岗位**打开申请表、上传简历、扫描空字段。
 

@@ -1016,13 +1016,24 @@ async def list_resumes() -> JSONResponse:
     """
     from services.resume_store import ResumeStore
 
+    from services.resume_library import ResumeLibrary
+
     store = ResumeStore(str(DATA_DIR))
     index = store.list()
-    status = store.pdf_status()
+    # 「这份可编辑简历导出过没有、导出的那份是不是已经旧了」——现在从简历库回看：
+    # 库里 source=exported 的条目带着源简历的 slug。自己放进库的文件不属于任何
+    # 可编辑简历，自然不参与这里的判断。
+    lib = ResumeLibrary(str(DATA_DIR))
+    updated = {it["slug"]: it.get("updated_at", "") for it in index.get("items") or []}
+    stale = lib.staleness(updated)
+    latest = {}
+    for it in sorted(lib.list(), key=lambda x: x["file"]):
+        if it["slug"]:
+            latest[it["slug"]] = it          # 文件名以时间戳开头，取最后一个即最新
     for item in index.get("items") or []:
-        st = status.get(item["slug"]) or {}
-        item["pdf_state"] = st.get("state", "missing")
-        item["pdf_exported_at"] = st.get("exported_at", "")
+        got = latest.get(item["slug"])
+        item["pdf_state"] = "missing" if got is None else stale.get(got["file"], "ready")
+        item["pdf_exported_at"] = (got or {}).get("added_at", "")
     return JSONResponse(index)
 
 
@@ -1081,29 +1092,92 @@ async def delete_resume(slug: str) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-# ── 导出存档（最近生成）─────────────────────────────────────────────────────
-@app.get("/api/resume/exports")
-async def list_resume_exports() -> JSONResponse:
+# ── 简历库（data/resumes/library/）───────────────────────────────────────────
+# 一个文件夹装所有能往外发的 PDF：系统导出的 + 用户自己放进去的。
+# 用户 2026-08-16 提、2026-08-21 明确：「所有需要用到简历的地方都可以选择用这里的
+# 哪些简历」。旧的「最近生成」只列系统导出，外来文件结构上进不来，已删除。
+@app.get("/api/resume/library")
+async def list_resume_library() -> JSONResponse:
+    from services.resume_library import ResumeLibrary
     from services.resume_store import ResumeStore
-    return JSONResponse({"exports": ResumeStore(str(DATA_DIR)).list_exports()})
+
+    lib = ResumeLibrary(str(DATA_DIR))
+    updated = {it["slug"]: it.get("updated_at", "")
+               for it in ResumeStore(str(DATA_DIR)).list().get("items") or []}
+    stale = lib.staleness(updated)
+    items = [{**it, "state": stale.get(it["file"], "ready")} for it in lib.list()]
+    return JSONResponse({"items": items, "fallback": lib.fallback()})
 
 
-@app.get("/api/resume/exports/{fname}")
-async def download_resume_export(fname: str):
-    from services.resume_store import ResumeStore
+@app.patch("/api/resume/library/{fname}")
+async def update_resume_library_item(fname: str, body: dict[str, Any] = Body(...)) -> JSONResponse:
+    """改一份简历的显示名 / 目标岗位 / 是否允许自动发送。
+
+    `allow_send` 是**人工授权**那一层：`state` 回答「能不能发」（PDF 是不是旧内容），
+    勾选回答「你准不准发」。两者叠加，不是二选一。
+    """
+    from services.resume_library import ResumeLibrary
     try:
-        path = ResumeStore(str(DATA_DIR)).export_file(fname)
-    except (ValueError, FileNotFoundError):
+        it = ResumeLibrary(str(DATA_DIR)).update_meta(
+            fname,
+            name=body.get("name"),
+            target=body.get("target"),
+            allow_send=body.get("allow_send"),
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=fname)
+    return JSONResponse(it)
+
+
+@app.post("/api/resume/library/fallback")
+async def set_resume_library_fallback(body: dict[str, Any] = Body(...)) -> JSONResponse:
+    """指定兜底那份：岗位匹配不上任何一份时发它。空串＝不指定（匹配不上就拒发）。"""
+    from services.resume_library import ResumeLibrary
+    ResumeLibrary(str(DATA_DIR)).set_fallback(str(body.get("file") or ""))
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/resume/library/upload")
+async def upload_resume_to_library(file: UploadFile = File(...)) -> JSONResponse:
+    """把一份在别处做好的简历 PDF 放进库里。
+
+    落进库之后它跟系统导出的平起平坐：填上「目标岗位」就参与自动匹配
+    （用户 2026-08-21 定）。**仍然默认不允许发送**，要手动勾。
+    """
+    from services.resume_library import ResumeLibrary
+
+    name = os.path.basename(file.filename or "")
+    if not name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="只接受 PDF")
+    lib = ResumeLibrary(str(DATA_DIR))
+    os.makedirs(lib.library_dir, exist_ok=True)
+    try:
+        dest = lib.path_of(name)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"非法文件名: {name}")
+    with open(dest, "wb") as f:
+        f.write(await file.read())
+    return JSONResponse(lib.update_meta(name, source="dropped"))
+
+
+@app.get("/api/resume/library/{fname}")
+async def download_resume_library_item(fname: str):
+    from services.resume_library import ResumeLibrary
+    try:
+        path = ResumeLibrary(str(DATA_DIR)).path_of(fname)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=fname)
+    if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail=fname)
     return FileResponse(path, media_type="application/pdf", filename=fname)
 
 
-@app.delete("/api/resume/exports/{fname}")
-async def delete_resume_export(fname: str) -> JSONResponse:
-    from services.resume_store import ResumeStore
+@app.delete("/api/resume/library/{fname}")
+async def delete_resume_library_item(fname: str) -> JSONResponse:
+    from services.resume_library import ResumeLibrary
     try:
-        ResumeStore(str(DATA_DIR)).delete_export(fname)
-    except (ValueError, FileNotFoundError):
+        ResumeLibrary(str(DATA_DIR)).delete(fname)
+    except (ValueError, FileNotFoundError, OSError):
         raise HTTPException(status_code=404, detail=fname)
     return JSONResponse({"ok": True})
 
@@ -1240,10 +1314,16 @@ async def print_resume_pdf(body: dict[str, Any] = Body(...)):
     # 每次导出按时间戳存档（「最近生成」列表的数据源），不互相覆盖，滚动上限修剪。
     # 存档文件名带 slug：两份同名简历（真实数据里就有两份「游戏岗版」）否则分不清
     # 谁是谁，而分不清的后果是给 A 岗位发了 B 的简历。不给 slug 就按激活份存。
+    from services.resume_library import ResumeLibrary
+
     store = ResumeStore(str(DATA_DIR))
     slug = str(body.get("slug") or "") or (store.list().get("active") or "")
-    out = store.export_path_for(slug) if slug else store.export_path(
-        str(body.get("name") or "resume"))
+    item = next((it for it in store.list().get("items") or [] if it["slug"] == slug), None)
+    out = ResumeLibrary(str(DATA_DIR)).new_export_path(
+        name=(item or {}).get("name") or str(body.get("name") or "resume"),
+        target=(item or {}).get("target") or "",
+        slug=slug,
+    )
     resume_tailor.render_html_to_pdf(html, out)
     return FileResponse(out, media_type="application/pdf", filename=os.path.basename(out))
 
@@ -1793,7 +1873,7 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
     """
     _initialize_state()
     from multisite import preferences
-    from services.resume_matcher import pick_resume
+    from services.resume_library import ResumeLibrary
     from services.resume_store import ResumeStore
 
     tracker = app.state.tracker
@@ -1803,27 +1883,21 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
     # 每个岗位要带上"批了会发哪份简历"——这是 Checkpoint 1 唯一的人工决策点，
     # 判断所需的信息必须都在这一页上（2026-08-20 真机事故：批了个「服务运营」岗位，
     # 实际兜底发的是「游戏岗版」，页面上完全看不出来）。
-    # **复用 pick_resume，绝不在这里另写匹配**：一旦分叉，审批页显示的和实际发出去
-    # 的就不是同一份，比不显示还糟。list()/pdf_status() 各调一次，循环内只调
-    # pick_resume——避免 pick_for_job 每个岗位都重读一遍 index。
-    resume_store = ResumeStore(str(DATA_DIR))
-    resume_index = resume_store.list()
-    resume_items = resume_index.get("items") or []
-    active_slug = resume_index.get("active") or ""
-    resume_pdf_status = resume_store.pdf_status()
+    # **复用 ResumeLibrary.pick，绝不在这里另写匹配**：一旦分叉，审批页显示的和
+    # 实际发出去的就不是同一份，比不显示还糟。库的 list()/staleness() 各调一次，
+    # 循环内只调 pick——避免每个岗位都重扫一遍文件夹。
+    lib = ResumeLibrary(str(DATA_DIR))
+    updated = {it["slug"]: it.get("updated_at", "")
+               for it in ResumeStore(str(DATA_DIR)).list().get("items") or []}
+    lib_stale = lib.staleness(updated)
 
     def _resume_choice(job) -> dict:
-        # **喂 JD，不是那一句归类理由**：参数名就叫 `jd_text`，传 `why` 是 `jd`
-        # 还不存在时的遗留（`jd` 是计划 B 才开始落库的）。`why` 是分类模型写的
-        # 一句话，JD 是几百字正文——关键词匹配拿一句话去匹等于把绝大部分信号扔了。
-        # **改的时候两个调用方必须一起改**（这里显示、workflow_orchestration 实发），
-        # 只改一处的话审批页显示的和实际发出去的就不是同一份。
-        picked = pick_resume(resume_items, active_slug, job_title=job.title or "",
-                             jd_text=job.jd or "")
-        state = (resume_pdf_status.get(picked["slug"]) or {}).get("state", "missing")
+        picked = lib.pick(job_title=job.title or "", jd_text=job.jd or "")
         return {
-            "slug": picked["slug"], "name": picked["name"], "matched": picked["matched"],
-            "reason": picked["reason"], "pdf_state": state,
+            "file": picked["file"], "name": picked["name"],
+            "matched": picked["matched"], "reason": picked["reason"],
+            # 没挑到就是 missing——**不是"有个文件但状态未知"**，是压根没有可发的。
+            "state": lib_stale.get(picked["file"], "ready") if picked["file"] else "missing",
         }
 
     # 站点投递上限 + 该站已批准数，一起返回给前端算告警。

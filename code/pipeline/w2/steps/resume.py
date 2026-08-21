@@ -80,10 +80,15 @@ class ResumeStep:
         return out
 
     def _adapted_pdf_path(self, name: str) -> str:
-        """按简历名回查最近一次导出的 PDF；查不到返回 ""（调用方回退站内简历）。"""
+        """按简历名从**简历库**回查 PDF；查不到返回 ""（调用方回退站内简历）。
+
+        库＝`data/resumes/library/`，装所有能往外发的 PDF（系统导出的 + 你自己
+        放进去的）。`path_for_name` 在没勾「允许发送」或**重名**时返回空——
+        重名不猜，猜错的后果是给这个 HR 发了另一份简历。
+        """
         try:
-            from services.resume_store import ResumeStore
-            return ResumeStore().latest_export_for(name)
+            from services.resume_library import ResumeLibrary
+            return ResumeLibrary().path_for_name(name)
         except Exception:
             return ""
 

@@ -27,8 +27,7 @@ class MatchResume(BaseTool):
         self._db = db
 
     def execute(self, conv_id: str, job_id: str = "") -> ToolResult:
-        from services.resume_matcher import pick_for_job
-        from services.resume_store import ResumeStore
+        from services.resume_library import ResumeLibrary
 
         job_title = ""
         if job_id:
@@ -36,10 +35,12 @@ class MatchResume(BaseTool):
             if rec:
                 job_title = rec.title or ""
 
-        pick = pick_for_job(ResumeStore(), job_title)
-        if not pick.get("slug"):
-            # 一份简历都没有：如实报告，不写库（别把空建议落成"选过了"）
-            return ToolResult(ok=True, data={"resume": "", "matched": False, "reason": pick.get("reason", "")})
+        # 从**简历库**里挑（`data/resumes/library/`），只在勾了「允许发送」的里面挑。
+        pick = ResumeLibrary().pick(job_title=job_title)
+        if not pick.get("file"):
+            # 一份可发的都没有：如实报告，不写库（别把空建议落成"选过了"）
+            return ToolResult(ok=True, data={"resume": "", "matched": False,
+                                             "reason": pick.get("reason", "")})
 
         self._db.set_matched_resume(conv_id, pick["name"], pick["reason"])
         return ToolResult(ok=True, data={

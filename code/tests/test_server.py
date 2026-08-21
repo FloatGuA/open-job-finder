@@ -1313,86 +1313,83 @@ class TestCheckpoint1Resume:
     岗位批准后实际兜底发了「游戏岗版」，页面上完全看不出来，是有人事后手动跑匹配
     函数才发现。Checkpoint 1 是唯一的人工决策点，判断所需的信息必须都在这一页上。
 
-    **必须复用 `services.resume_matcher.pick_resume`**——分叉出第二份匹配逻辑，
-    后果是"审批页显示的"和"实际发出去的"不是同一份，比不显示还糟。
+    **必须复用 `ResumeLibrary.pick`**——分叉出第二份匹配逻辑，后果是"审批页显示的"
+    和"实际发出去的"不是同一份，比不显示还糟。
     """
 
-    def test_job_carries_resume_field_with_expected_keys(self, client):
-        from services.resume_store import ResumeStore
-        from dashboard.server import DATA_DIR
+    def _put(self, file, target, allow_send=True, name=None):
+        import os
 
-        ResumeStore(str(DATA_DIR)).create("游戏岗版", target="游戏 策划")
+        from dashboard.server import DATA_DIR
+        from services.resume_library import ResumeLibrary
+        lib = ResumeLibrary(str(DATA_DIR))
+        os.makedirs(lib.library_dir, exist_ok=True)
+        with open(os.path.join(lib.library_dir, file), "wb") as f:
+            f.write(b"%PDF-1.4")
+        lib.update_meta(file, name=name or os.path.splitext(file)[0],
+                        target=target, allow_send=allow_send)
+        return lib
+
+    def test_job_carries_resume_field_with_expected_keys(self, client):
+        self._put("game.pdf", "游戏 策划")
         _add_job(title="游戏策划（关卡方向）")
 
         job = client.get("/api/checkpoint1/jobs").json()["jobs"][0]
-        assert set(job["resume"].keys()) == {"slug", "name", "matched", "reason", "pdf_state"}
+        assert set(job["resume"].keys()) == {"file", "name", "matched", "reason", "state"}
 
-    def test_matched_job_reports_matched_true_and_the_matching_slug(self, client):
-        from services.resume_store import ResumeStore
-        from dashboard.server import DATA_DIR
-
-        item = ResumeStore(str(DATA_DIR)).create("游戏岗版", target="游戏 策划")
+    def test_matched_job_reports_the_matching_file(self, client):
+        self._put("game.pdf", "游戏 策划", name="游戏岗版")
         _add_job(title="游戏策划（关卡方向）")
 
         job = client.get("/api/checkpoint1/jobs").json()["jobs"][0]
         assert job["resume"]["matched"] is True
-        assert job["resume"]["slug"] == item["slug"]
+        assert job["resume"]["file"] == "game.pdf"
+        assert job["resume"]["name"] == "游戏岗版"
 
-    def test_unmatched_job_falls_back_and_reports_matched_false(self, client):
-        from services.resume_store import ResumeStore
-        from dashboard.server import DATA_DIR
-
-        ResumeStore(str(DATA_DIR)).create("游戏岗版", target="游戏 策划")
+    def test_unmatched_job_uses_the_designated_fallback(self, client):
+        lib = self._put("game.pdf", "游戏 策划")
+        lib.set_fallback("game.pdf")
         _add_job(title="服务运营专员")
 
         job = client.get("/api/checkpoint1/jobs").json()["jobs"][0]
         assert job["resume"]["matched"] is False
+        assert job["resume"]["file"] == "game.pdf"
 
-    def test_pdf_state_reflects_whether_the_matched_resume_was_exported(self, client):
-        from services.resume_store import ResumeStore
-        from dashboard.server import DATA_DIR
+    def test_unmatched_with_no_fallback_shows_nothing_sendable(self, client):
+        """挑不中又没指定兜底 → 审批页必须明说"没有可发的"，
+        **而不是显示一份其实发不出去的**。批之前就得看见。"""
+        self._put("game.pdf", "游戏 策划")
+        _add_job(title="服务运营专员")
 
-        item = ResumeStore(str(DATA_DIR)).create("游戏岗版", target="游戏 策划")
+        r = client.get("/api/checkpoint1/jobs").json()["jobs"][0]["resume"]
+        assert r["file"] == "" and r["matched"] is False and r["state"] == "missing"
+
+    def test_an_unticked_resume_is_not_offered(self, client):
+        """没勾「允许发送」的不该出现在审批页的"会发这份"里——它发不出去。"""
+        self._put("game.pdf", "游戏 策划", allow_send=False)
         _add_job(title="游戏策划（关卡方向）")
 
-        job = client.get("/api/checkpoint1/jobs").json()["jobs"][0]
-        assert job["resume"]["pdf_state"] == "missing"      # 没导出过
+        assert client.get("/api/checkpoint1/jobs").json()["jobs"][0]["resume"]["file"] == ""
 
-    def test_no_resumes_at_all_does_not_crash(self, client):
-        """一份简历都没有是 pick_resume 明确处理的边界（返回 slug=""、matched=False），
-        端点不能因为这种情况 500。"""
-        import yaml
-
-        from dashboard.server import DATA_DIR
-
-        resumes_dir = DATA_DIR / "resumes"
-        resumes_dir.mkdir(parents=True, exist_ok=True)
-        (resumes_dir / "index.yaml").write_text(
-            yaml.safe_dump({"active": "", "items": []}, allow_unicode=True), encoding="utf-8",
-        )
+    def test_an_empty_library_does_not_crash(self, client):
         _add_job(title="游戏策划（关卡方向）")
-
         r = client.get("/api/checkpoint1/jobs")
         assert r.status_code == 200
-        resume = r.json()["jobs"][0]["resume"]
-        assert resume["slug"] == "" and resume["matched"] is False and resume["pdf_state"] == "missing"
+        assert r.json()["jobs"][0]["resume"]["file"] == ""
 
-    def test_endpoint_resume_choice_matches_pick_for_job(self, client):
-        """防分叉守门：端点显示的简历必须和真正发送时用的 `pick_for_job` 结果一致。
-        将来若有人在端点里另写一份匹配逻辑，这条测试会红。"""
-        from services.resume_matcher import pick_for_job
-        from services.resume_store import ResumeStore
+    def test_endpoint_resume_choice_matches_the_send_path(self, client):
+        """防分叉守门：端点显示的必须和真正发送时 `ResumeLibrary.pick` 的结果一致。
+        将来若有人在端点里另写一份匹配逻辑，这条会红。"""
         from dashboard.server import DATA_DIR
+        from services.resume_library import ResumeLibrary
 
-        ResumeStore(str(DATA_DIR)).create("游戏岗版", target="游戏 策划")
-        ResumeStore(str(DATA_DIR)).create("AI Agent 开发版", target="AI Agent LLM")
-        _add_job(title="游戏策划（关卡方向）", why="做过 LLM Agent 项目")
+        self._put("game.pdf", "游戏 策划")
+        self._put("agent.pdf", "AI Agent")
+        _add_job(title="游戏策划（关卡方向）", url="https://x/c1")
 
-        job = client.get("/api/checkpoint1/jobs").json()["jobs"][0]
-        expected = pick_for_job(ResumeStore(str(DATA_DIR)), job_title=job["title"], jd_text=job["why"])
-
-        assert job["resume"]["slug"] == expected["slug"]
-        assert job["resume"]["matched"] == expected["matched"]
+        shown = client.get("/api/checkpoint1/jobs").json()["jobs"][0]["resume"]
+        direct = ResumeLibrary(str(DATA_DIR)).pick(job_title="游戏策划（关卡方向）", jd_text="")
+        assert shown["file"] == direct["file"]
 
 
 class TestCheckpoint1Batch:
@@ -1531,15 +1528,15 @@ class TestCheckpoint1ResumePickUsesTheJd:
     def test_the_endpoint_passes_the_jd(self, client, monkeypatch):
         seen = {}
 
-        import services.resume_matcher as rm
+        from services.resume_library import ResumeLibrary
+        real = ResumeLibrary.pick
 
-        def spy(items, active_slug, job_title="", jd_text=""):
+        def spy(self, job_title="", jd_text=""):
             seen["jd_text"] = jd_text
             seen["job_title"] = job_title
-            return {"slug": "s", "name": "n", "matched": True, "reason": "",
-                    "score": 1, "hit_keywords": []}
+            return real(self, job_title=job_title, jd_text=jd_text)
 
-        monkeypatch.setattr(rm, "pick_resume", spy)
+        monkeypatch.setattr(ResumeLibrary, "pick", spy)
         _add_job(url="https://x/jd", title="后端工程师", jd="岗位描述\n负责后端服务开发",
                  why="一句话理由")
         client.get("/api/checkpoint1/jobs")
