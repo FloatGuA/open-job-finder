@@ -135,6 +135,43 @@ class TestRefusesWhenThePdfIsNotUsable:
         assert captured == []
 
 
+class TestTheSendPathMatchesOnTheJd:
+    """m2 挑简历时喂的是岗位 JD，跟 Checkpoint 1 显示用的那次**同一个输入**。
+
+    **只改一处就是分叉**：`server.py` 决定审批页显示"批了会发哪份"，这里决定
+    实际发出去的是哪份。两处输入不一样的话，人看到的和实际发生的就不是同一件事
+    ——**比不显示还糟**。这条约束此前只写在注释里，没有测试守；变异验证时把
+    这一处改回 `job.why`，全量测试一条都不红。
+
+    对着 `server.py` 那边的 `TestCheckpoint1ResumePickUsesTheJd` 读。
+    """
+
+    def test_it_feeds_the_job_jd_not_the_one_line_reason(self, service, tracker,
+                                                         data_dir, monkeypatch):
+        seen = {}
+
+        import services.resume_matcher as rm
+        real = rm.pick_for_job
+
+        def spy(store, job_title="", jd_text=""):
+            seen["jd_text"] = jd_text
+            return real(store, job_title=job_title, jd_text=jd_text)
+
+        monkeypatch.setattr(rm, "pick_for_job", spy)
+
+        job_id = tracker.add_pending_job(
+            site_name="s", url="https://x/jd-probe", title="游戏客户端开发",
+            why="一句话理由", jd="岗位描述\n负责游戏客户端玩法开发")
+        tracker.decide_pending_job(job_id, "approved")
+        try:
+            service._run_multisite_fill({"pending_job_id": job_id})
+        except Exception:
+            pass  # 这条测试只看喂进去的是什么，后面的流程失不失败无所谓
+
+        assert "负责游戏客户端玩法开发" in seen.get("jd_text", ""), \
+            f"实发路径喂给匹配器的不是 JD：{seen.get('jd_text')!r}"
+
+
 class TestExplicitOverride:
     def test_an_explicitly_given_path_still_wins(self, service, tracker, data_dir,
                                                  captured, tmp_path):

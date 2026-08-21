@@ -1813,7 +1813,13 @@ async def list_checkpoint1_jobs(status: str | None = None) -> JSONResponse:
     resume_pdf_status = resume_store.pdf_status()
 
     def _resume_choice(job) -> dict:
-        picked = pick_resume(resume_items, active_slug, job_title=job.title or "", jd_text=job.why or "")
+        # **喂 JD，不是那一句归类理由**：参数名就叫 `jd_text`，传 `why` 是 `jd`
+        # 还不存在时的遗留（`jd` 是计划 B 才开始落库的）。`why` 是分类模型写的
+        # 一句话，JD 是几百字正文——关键词匹配拿一句话去匹等于把绝大部分信号扔了。
+        # **改的时候两个调用方必须一起改**（这里显示、workflow_orchestration 实发），
+        # 只改一处的话审批页显示的和实际发出去的就不是同一份。
+        picked = pick_resume(resume_items, active_slug, job_title=job.title or "",
+                             jd_text=job.jd or "")
         state = (resume_pdf_status.get(picked["slug"]) or {}).get("state", "missing")
         return {
             "slug": picked["slug"], "name": picked["name"], "matched": picked["matched"],

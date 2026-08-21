@@ -1512,6 +1512,42 @@ class TestCheckpoint1Review:
                            json={"is_golden": True}).status_code == 404
 
 
+class TestCheckpoint1ResumePickUsesTheJd:
+    """挑简历时喂给 `pick_resume` 的是岗位 JD，不是那一句归类理由。
+
+    参数名就叫 `jd_text`，传 `why` 是 `jd` 还不存在时的遗留（`jd` 是计划 B 才开始
+    落库的）。`why` 是分类模型写的一句话（"职责涉及大模型应用"），而 JD 是几百字
+    的正文——**关键词匹配拿一句话去匹，等于把绝大部分信号扔了**。
+
+    **两个调用方必须同时改**：`server.py` 的 Checkpoint 1 列表（显示"批了会发哪份"）
+    和 `workflow_orchestration.py` 的 m2（实际发出去的那份）。只改一处的话，
+    审批页显示的和实际发出去的就不是同一份——**比不显示还糟**
+    （这条约束在 server.py 那段注释里已经写明）。
+
+    换之前在真实数据上量过：70 条待审批里，改用 jd 会改变选择的是 **0 条**——
+    所以这是零风险的清理，不是一次赌博。
+    """
+
+    def test_the_endpoint_passes_the_jd(self, client, monkeypatch):
+        seen = {}
+
+        import services.resume_matcher as rm
+
+        def spy(items, active_slug, job_title="", jd_text=""):
+            seen["jd_text"] = jd_text
+            seen["job_title"] = job_title
+            return {"slug": "s", "name": "n", "matched": True, "reason": "",
+                    "score": 1, "hit_keywords": []}
+
+        monkeypatch.setattr(rm, "pick_resume", spy)
+        _add_job(url="https://x/jd", title="后端工程师", jd="岗位描述\n负责后端服务开发",
+                 why="一句话理由")
+        client.get("/api/checkpoint1/jobs")
+        assert "负责后端服务开发" in seen["jd_text"], \
+            f"喂给匹配器的不是 JD：{seen['jd_text']!r}"
+        assert seen["job_title"] == "后端工程师"
+
+
 class TestClearOneSitesManual:
     """删掉一个站的操作手册，逼下一次 m1 重新勘察。
 

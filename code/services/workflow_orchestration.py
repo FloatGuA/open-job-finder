@@ -229,7 +229,9 @@ class OrchestrationService:
         if not (store.list().get("items") or []):
             raise ValueError("还没有任何简历：先在 Dashboard「简历」页建一份并导出 PDF")
 
-        picked = pick_for_job(store, job_title=job.title or "", jd_text=job.why or "")
+        # 喂 JD 不是 why——见 server.py 那段同样的注释。**这两处必须一起改**：
+        # 这里决定实际发出去的是哪份，那边决定审批页显示的是哪份。
+        picked = pick_for_job(store, job_title=job.title or "", jd_text=job.jd or "")
         status = store.pdf_status().get(picked["slug"]) or {"state": "missing"}
         if status["state"] == "ready":
             return status["pdf"]
