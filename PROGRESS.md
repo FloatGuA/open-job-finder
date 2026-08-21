@@ -5,12 +5,32 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-22（v2.34.5 会话列表岗位名） |
-| 当前版本 | 2.34.5                         |
+| 最后更新 | 2026-08-22（v2.34.6 jobs.db 备份） |
+| 当前版本 | 2.34.6                         |
 
 > ⚠️ **下一轮动手前先读**：Layer 1 已按 2026-08-13 的对齐改完并真机验证。**SDK 继续 LangGraph 是用户拍板的（理由是他本人正求职 agent 开发岗位、亲手做工程本身是目标），后续会话不要因为技术理由自作主张换成 Anthropic/Codex SDK。** 完整取舍见 `DECISION.md` 三条：「Layer 1 的导航/找入口/选岗交给 agent 自主决策」「选岗结果用 record_job 边找边落袋」「提交防线从不给工具改成点击工具自己拒绝」。
 
 ## 待跟进（另开会话）
+
+### ✅ `jobs.db` 有备份了（2026-08-22，v2.34.6）
+
+「进行中 / 待处理」里标着**「必须改（数据完整性）」**的两条之一。唯一权威库
+（1068 投递 + 1170 会话 + 3956 条消息）此前零备份、零恢复路径，而它历史上
+已因 schema 漂移做过三次紧急重建。
+
+`services/db_snapshot.py`：每天第一次打开库时 `VACUUM INTO` 一份到
+`data/db_snapshots/`，**落在 `_create_tables()` 之前**（那里面全是 ALTER TABLE，
+"迁移写错"正是三次重建的原因）。保留策略抽成 `services/snapshot_retention`，
+信息池一并收敛过去——不再有第二份实现。
+
+**没做一键恢复端点**（理由见 DECISION）：服务开着时换库文件会让持有连接的线程
+拿到半死不活的句柄，而"点一下就能恢复"会让人在最慌的时候去点。恢复是人工的：
+停后端 → 复制快照成 `data/jobs.db`。
+
+6 + 6 个新用例。变异验证：`VACUUM INTO` 改成 `shutil.copy2` → WAL 那条立刻红
+（未 checkpoint 的写不在主文件里，那种备份**看起来成功、恢复时才少数据**，
+比没有备份更坏——已记进 PITFALLS）。1553 passed，build 绿。
+真机：4 张表行数全对，4.6 MB → 3.3 MB，同日重复构造正确跳过。
 
 ### ✅ 会话列表显示岗位名 + 按岗位筛（2026-08-22，v2.34.5）
 
@@ -1628,7 +1648,7 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 
 **必须改（数据完整性 / 可观测性，2026-08-09 全项目扫视发现）**
 
-- **`data/jobs.db` 零备份、零恢复路径**：唯一权威库（applications + hr_conversations + hr_messages，几周真实投递与 HR 会话历史），`tracker.py` 初始化无任何快照逻辑，崩溃/坏盘/迁移写错即不可逆丢失。**本项目已经验证过这类风险会真的发生**——`info_pool.yaml` 在 v2.17.1 被判定"唯一主库却零备份"高风险后加了快照+回滚（见 `[[resume-vision-parse-plan]]` 一线记忆），但同样的教训没推广到更关键的 `jobs.db`；且 `jobs.db` 历史上已因 schema 漂移做过三次紧急重建（`migrate_030.py`/`migrate_app_rebuild.py`/`migrate_hrconv_rebuild.py`）。方向：仿 `info_pool` 的分层快照（写前存档 + 保留策略），或更轻量的定时 `VACUUM INTO` 落一份只读副本。
+- ~~**`data/jobs.db` 零备份、零恢复路径**~~——**已做（v2.34.6）**，每天一份 `VACUUM INTO` 到 `data/db_snapshots/`，恢复人工（见 DECISION）。原文：唯一权威库（applications + hr_conversations + hr_messages，几周真实投递与 HR 会话历史），`tracker.py` 初始化无任何快照逻辑，崩溃/坏盘/迁移写错即不可逆丢失。**本项目已经验证过这类风险会真的发生**——`info_pool.yaml` 在 v2.17.1 被判定"唯一主库却零备份"高风险后加了快照+回滚（见 `[[resume-vision-parse-plan]]` 一线记忆），但同样的教训没推广到更关键的 `jobs.db`；且 `jobs.db` 历史上已因 schema 漂移做过三次紧急重建（`migrate_030.py`/`migrate_app_rebuild.py`/`migrate_hrconv_rebuild.py`）。方向：仿 `info_pool` 的分层快照（写前存档 + 保留策略），或更轻量的定时 `VACUUM INTO` 落一份只读副本。
 - **零主动通知通道**：全库 grep `webhook/email/notify` 零命中（唯一命中都是 `threading.Condition.notify()`）。调度器/自检全靠"写文件 + 用户自己打开 Dashboard 看"，没有推送。核心卖点是"不用盯着也能跑"，但 session 过期 / Boss 改版选择器失效 / 撞配额上限，任一失败都可能安静地跑好几天而无人察觉。方向：至少给"连续 N 次 run 失败"或"self-check 连续不通过"加一条本地可感知的信号（系统通知 / 邮件 / 简单的 webhook 出口，视用户实际会看哪个渠道而定——按需再定，不要过度设计）。
 
 **待真实环境验证**

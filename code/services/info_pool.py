@@ -27,6 +27,8 @@ POOL_PATH = "data/info_pool.yaml"
 # 分层保留：既能撤销刚才的误操作，也能回到几天前的状态。
 # 单纯「保留最近 N 次」的问题是：一天里连点十几次保存就会把几天前那个内容完好的
 # 版本挤掉——而那恰恰是最需要回滚的。
+from services import snapshot_retention as retention
+
 SNAPSHOT_KEEP_RECENT = 10   # 无论哪天，最近 N 个一律保留
 SNAPSHOT_KEEP_DAYS = 14     # 再额外保留最近 N 天里「每天最早的那一个」
 
@@ -126,17 +128,16 @@ def restore_snapshot(fname: str, path: str = POOL_PATH) -> dict:
 
 
 def _daily_keepers(files: list) -> set:
-    """每天最早的那个快照（当天的"初始状态"，最值得留）——限最近 SNAPSHOT_KEEP_DAYS 天。"""
-    by_day = {}
-    for fn in files:                       # files 为倒序，越后面越早
-        by_day[fn[:8]] = fn                # 同日反复覆盖 → 最终留下当天最早的
-    recent_days = sorted(by_day, reverse=True)[:SNAPSHOT_KEEP_DAYS]
-    return {by_day[d] for d in recent_days}
+    """每天最早的那个快照（当天的"初始状态"，最值得留）——限最近 SNAPSHOT_KEEP_DAYS 天。
+
+    策略实现在 `services/snapshot_retention`，jobs.db 的快照用的是同一份。
+    """
+    return retention.daily_keepers(files, SNAPSHOT_KEEP_DAYS)
 
 
 def _prune_snapshots(d: str) -> None:
     files = sorted([f for f in os.listdir(d) if f.endswith(".yaml")], reverse=True)
-    keep = set(files[:SNAPSHOT_KEEP_RECENT]) | _daily_keepers(files)
+    keep = retention.keepers(files, SNAPSHOT_KEEP_RECENT, SNAPSHOT_KEEP_DAYS)
     for fn in files:
         if fn in keep:
             continue

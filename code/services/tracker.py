@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 
 from multisite.site_manual import SiteManual
+from services.db_snapshot import snapshot_db
 from schemas import (
     AppStatus, ApplicationRecord, HRConversation, PendingApplication, PendingJob,
     SiteBrief, SiteLimit,
@@ -62,6 +63,10 @@ class ApplicationTracker:
         # serialize writes safely: a write issued during a W2 run waits for the
         # lock (up to busy_timeout) instead of failing immediately.
         self._local = threading.local()
+        # **备份在建表/迁移之前。** `_create_tables` 里全是 ALTER TABLE，
+        # 而这个库历史上已经因 schema 漂移做过三次紧急重建——"迁移写错"正是
+        # 最想防的那个场景。每天至多一份，库不存在时跳过（全新安装/测试）。
+        snapshot_db(db_path)
         self._create_tables()
 
     @property
