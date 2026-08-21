@@ -1154,3 +1154,36 @@ chrome-devtools-mcp 没协商 roots capability 时只允许读 OS 临时目录�
 **判据**：手抄一份别处已有的结构时，问一句「抄错了会怎样」。
 如果答案是"页面上少一个/多一个节点"——那就是**没有任何人会发现**，
 必须上守门，或者干脆别抄。
+
+## 一个下拉框同时说两种话：`<select value>` 不在选项里，浏览器**静默**回退显示第一项
+
+设置页「模型」下拉的 `<option>` 填的是 provider **实例名**（`ollama_qwen3:8b`），
+`value` 填的是 provider **类型**（`ollama`）。两者永远对不上，于是浏览器按规范
+回退显示第一个选项——用户看到「明明配的是 deepseek，界面却显示 ollama 的 qwen」。
+
+**没有任何报错。** HTML 的 select 对"value 不在 options 里"不抛异常、不警告，
+就是安静地显示第一项。前端拿到的 state 还是对的，只有渲染出来的是错的。
+
+### 真正的代价在保存那一步
+
+下拉一旦被人动过再点保存，送回后端的是**实例名**，而 `save_llm_settings` 把它
+写进 `providers[0]["type"]`：
+
+```yaml
+capabilities:
+  fast:
+    - type: ollama_qwen3:8b      # ← 这不是一个合法的 provider type
+```
+
+`_build_chain` 随即 `ValueError: Unknown provider type`，保存端点 500。
+**而文件此刻已经写坏了**——下次重启后端直接起不来。
+2026-08-16 查出来时它没炸，只是因为**没人动过那个下拉**。
+
+### 判据
+
+- **同一个概念在一次请求的两个字段里用了两套命名，就是这类 bug 的全部形态。**
+  这里是 `capabilities`（类型）vs `available_providers`（实例名），出现在同一个
+  JSON 响应里。检查方法很便宜：**断言 value 一定是 options 之一**，一条测试。
+- **"写坏配置文件"和"这次没存上"是两个量级。** 凡是把用户输入往
+  config/启动必读的文件里写的路径，校验必须在**写之前**，不能靠写完再 build
+  一次去发现——那时坏数据已经落盘了。

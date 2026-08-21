@@ -495,6 +495,48 @@ class ModelRouter:
         return names
 
 
+def _named_specs(config: dict):
+    """遍历 config.yaml 里每一档 capability，产出 (level, 实例名, spec)。
+
+    **名字是把 provider 构造出来问它要的**（`provider.name`），不在这里按
+    type+model 另算一份。重算的那份不会报错，只会在某天
+    `OllamaProvider.__init__` 改了命名规则之后**静默对不上**——而这个映射正是
+    设置页把下拉选项换回配置的唯一依据，对不上就等于存不了。
+    """
+    caps = (config.get("llm") or {}).get("capabilities") or {}
+    for level in ModelRouter.LEVELS:
+        for spec in caps.get(level) or []:
+            # 坏 type 在这里就抛（_build_chain 的行为），不吞——悄悄跳过的话
+            # 下拉会少一项，而少的那项恰恰是坏的那个。
+            provider = _build_chain([spec], chain_name=level).providers[0]
+            yield level, provider.name, spec
+
+
+def configured_provider_specs(config: dict) -> dict:
+    """实例名 → 它在 config.yaml 里的那份 provider 配置（**副本**）。
+
+    设置页存模型时靠它把下拉里的实例名换回完整配置。返回副本是因为调用方会
+    把它整个塞进 capabilities，共享引用会让两档 capability 指向同一个 dict。
+    """
+    out: dict = {}
+    for _level, name, spec in _named_specs(config):
+        out.setdefault(name, dict(spec))
+    return out
+
+
+def capability_head_names(config: dict) -> dict:
+    """每档 capability 当前排在链首的那个 provider 的**实例名**。
+
+    跟 `configured_provider_specs` 说同一种话。此前这里返回的是 provider
+    **类型**、下拉选项却是实例名，于是 `<select value>` 在选项里找不到、
+    浏览器回退显示第一项——「配的是 deepseek 却显示 qwen」就是这么来的。
+    """
+    out: dict = {}
+    for level, name, _spec in _named_specs(config):
+        out.setdefault(level, name)
+    return out
+
+
 def build_model_router(config: dict) -> ModelRouter:
     caps = config.get("llm", {}).get("capabilities", {})
     chains: dict = {}

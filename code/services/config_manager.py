@@ -60,14 +60,21 @@ class ConfigManager:
 
     def save_llm_settings(
         self,
-        capabilities: dict[str, str] | None = None,
+        capabilities: dict[str, dict] | None = None,
         tool_providers: dict[str, Any] | None = None,
     ) -> None:
         """Structured update of the llm section, keeping its nesting intact.
 
-        `capabilities` maps a level (fast/balanced/powerful) to a provider TYPE; the
-        stored form is a list of provider dicts per level, so only the first entry's
-        "type" is rewritten and the rest of each provider's settings survive.
+        `capabilities` 把每档（fast/balanced/powerful/vision）映射到**一整份
+        provider 配置**，放到那一档 FallbackChain 的链首。
+
+        **收整份而不是只收一个 type**：换模型要连 `base_url`/`api_key_env` 一起
+        换过去，只改 type 会留着上一个 provider 的连接参数，配出一个谁都没配过
+        的组合。名字换回配置这件事由调用方做（`llm_client.configured_provider_specs`），
+        本模块不认识 provider——它只负责按 config.yaml 的形状写。
+
+        已经在链里的那份是**换位**，不是复制一份到链首把原链首挤掉：链首之后
+        那些是 fallback，用户选主力模型不该顺手删掉一个兜底。
 
         Exists because the dashboard used to read/modify/write config.yaml inline for
         this one section, which left the singleton's cached copy stale -- a later
@@ -76,14 +83,18 @@ class ConfigManager:
         llm = self._config.setdefault("llm", {})
         if capabilities:
             caps = llm.setdefault("capabilities", {})
-            for level, ptype in capabilities.items():
-                if not ptype:
+            for level, spec in capabilities.items():
+                if not spec:
                     continue
-                providers = caps.get(level) or []
-                if providers:
-                    providers[0]["type"] = ptype
+                chain = list(caps.get(level) or [])
+                if spec in chain:
+                    chain.remove(spec)
+                    chain.insert(0, spec)
+                elif chain:
+                    chain[0] = spec
                 else:
-                    caps[level] = [{"type": ptype}]
+                    chain = [spec]
+                caps[level] = chain
         if tool_providers is not None:
             llm["tool_providers"] = tool_providers
         self._write_config()

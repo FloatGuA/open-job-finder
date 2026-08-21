@@ -1061,13 +1061,13 @@ export const API = {
     }),
   restartBackend: () => requestJson('/api/dev/restart', { method: 'POST' }),
   getLlmConfig: (): Promise<{
-    capabilities: { fast: string; balanced: string; powerful: string }
+    capabilities: Record<string, string>
     tool_providers: { score_job: string | null; analyze_intent: string | null }
     available_providers: string[]
   }> =>
     requestJson('/api/config/llm'),
   saveLlmConfig: (data: {
-    capabilities: { fast: string; balanced: string; powerful: string }
+    capabilities: Record<string, string>
     tool_providers: { score_job: string | null; analyze_intent: string | null }
   }) =>
     requestJson('/api/config/llm', {

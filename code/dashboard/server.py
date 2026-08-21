@@ -30,7 +30,12 @@ from services.boss_search_url import (
 )
 from services.config_manager import get_config_manager
 from services.console_utf8 import force_utf8_stdout
-from services.llm_client import build_model_router, load_config
+from services.llm_client import (
+    build_model_router,
+    capability_head_names,
+    configured_provider_specs,
+    load_config,
+)
 from services.onboarding import OnboardingChecker
 from services.progress_emitter import ProgressEmitter, ProgressEvent, event_to_dict
 
@@ -1512,15 +1517,14 @@ async def reset_prompt(name: str) -> JSONResponse:
 async def get_llm_config() -> JSONResponse:
     _initialize_state()
     config = _load_runtime_config()
-    caps = config.get("llm", {}).get("capabilities", {})
-    capabilities: dict[str, str] = {}
-    for level in ("fast", "balanced", "powerful"):
-        providers = caps.get(level) or []
-        capabilities[level] = providers[0].get("type", "") if providers else ""
+    # **两端必须说同一种话。** 以前这里返回 provider 类型（`ollama`），而下面的
+    # available_providers 返回实例名（`ollama_qwen3:8b`）——`<select value>` 在
+    # 选项里找不到，浏览器回退显示第一项，于是「配的是 deepseek 却显示 qwen」。
+    # 两个字段现在都从同一次配置遍历里出来，对不上是不可能的。
+    capabilities = capability_head_names(config)
+    available = list(configured_provider_specs(config))
 
     tool_providers = config.get("llm", {}).get("tool_providers", {})
-
-    available = app.state.model_router.configured_provider_names()
 
     return JSONResponse({
         "capabilities": capabilities,
@@ -1538,12 +1542,23 @@ async def save_llm_config(request: Request) -> JSONResponse:
     # writing the file behind its back left get_system_config() serving the pre-edit
     # copy (/api/config/system reads through the singleton and would show stale data).
     tp = data.get("tool_providers") or {}
+
+    # **写之前先把名字换成配置，换不出来就拒。** 存坏了不是"少存一次"：
+    # 实例名会被当成 provider type 落进 config.yaml，`_build_chain` 随即
+    # ValueError，而**文件已经写坏了**——下次重启后端根本起不来。
+    specs = configured_provider_specs(_load_runtime_config())
+    chosen: dict[str, dict] = {}
+    for level, name in (data.get("capabilities") or {}).items():
+        if not name:
+            continue          # 前端没加载完时送空串，不是"清掉这一档"的意思
+        if name not in specs:
+            return JSONResponse(
+                {"ok": False, "error": f"未知的 provider：{name}"}, status_code=400)
+        chosen[level] = specs[name]
+
     cm = get_config_manager(str(CONFIG_PATH), str(PROFILE_PATH))
     cm.save_llm_settings(
-        capabilities={
-            level: (data.get("capabilities") or {}).get(level, "")
-            for level in ("fast", "balanced", "powerful")
-        },
+        capabilities=chosen,
         tool_providers={
             "score_job":      tp.get("score_job") or None,
             "analyze_intent": tp.get("analyze_intent") or None,

@@ -246,10 +246,16 @@ function PreferencesTab() {
 }
 
 // \u2500\u2500 Tab 2: \u6a21\u578b (capability routing + per-tool provider, single source) \u2500\u2500\u2500\u2500\u2500
+
+const CAP_LABELS: Record<string, string> = {
+  fast: '\u5feb\u901f',
+  balanced: '\u5747\u8861',
+  powerful: '\u5f3a\u529b',
+  vision: '\u89c6\u89c9',
+}
+
 function ModelTab() {
-  const [capFast, setCapFast] = useState('')
-  const [capBalanced, setCapBalanced] = useState('')
-  const [capPowerful, setCapPowerful] = useState('')
+  const [caps, setCaps] = useState<Record<string, string>>({})
   const [toolScoreJob, setToolScoreJob] = useState('')
   const [toolAnalyzeIntent, setToolAnalyzeIntent] = useState('')
   const [available, setAvailable] = useState<string[]>([])
@@ -262,9 +268,7 @@ function ModelTab() {
     setLoading(true)
     API.getLlmConfig()
       .then((llm) => {
-        setCapFast(llm.capabilities.fast ?? '')
-        setCapBalanced(llm.capabilities.balanced ?? '')
-        setCapPowerful(llm.capabilities.powerful ?? '')
+        setCaps(llm.capabilities ?? {})
         setToolScoreJob(llm.tool_providers.score_job ?? '')
         setToolAnalyzeIntent(llm.tool_providers.analyze_intent ?? '')
         setAvailable(llm.available_providers ?? [])
@@ -277,7 +281,7 @@ function ModelTab() {
     setSaving(true); setSaved(false); setError(null)
     try {
       await API.saveLlmConfig({
-        capabilities: { fast: capFast, balanced: capBalanced, powerful: capPowerful },
+        capabilities: caps,
         tool_providers: { score_job: toolScoreJob || null, analyze_intent: toolAnalyzeIntent || null },
       })
       setSaved(true)
@@ -298,22 +302,23 @@ function ModelTab() {
     <Card title={'\u6a21\u578b\u914d\u7f6e'} dev="ModelTab">
       {error && <p className="mb-4 rounded-lg bg-signal-red/10 px-3 py-2 text-xs text-signal-red">{error}</p>}
       <div className="space-y-5">
-        <div className="grid grid-cols-3 gap-4">
-          <FieldRow label={'\u5feb\u901f'}>
-            <select className={selectCls} style={inputStyle} value={capFast} onChange={(e) => setCapFast(e.target.value)}>
-              {available.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </FieldRow>
-          <FieldRow label={'\u5747\u8861'}>
-            <select className={selectCls} style={inputStyle} value={capBalanced} onChange={(e) => setCapBalanced(e.target.value)}>
-              {available.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </FieldRow>
-          <FieldRow label={'\u5f3a\u529b'}>
-            <select className={selectCls} style={inputStyle} value={capPowerful} onChange={(e) => setCapPowerful(e.target.value)}>
-              {available.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </FieldRow>
+        {/* 档位从后端来，不在这里手抄。`vision` 一直在 ModelRouter.LEVELS 里，
+            是前后端各写了一份三档列表，才让简历视觉解析那条链在 UI 上完全消失。
+            以后后端加一档，这里自动出现（没有中文名就显示原始档位名，
+            比悄悄不显示诚实）。 */}
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {Object.keys(caps).map((level) => (
+            <FieldRow key={level} label={CAP_LABELS[level] ?? level}>
+              <select
+                className={selectCls}
+                style={inputStyle}
+                value={caps[level]}
+                onChange={(e) => setCaps({ ...caps, [level]: e.target.value })}
+              >
+                {available.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </FieldRow>
+          ))}
         </div>
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '1.25rem' }}>
           <p className="mb-3 text-xs text-text-3">{'\u6307\u5b9a Tool \u4f7f\u7528\u7684 Provider\uff08\u53ef\u9009\uff0c\u7a7a\u8868\u793a\u8d70\u80fd\u529b\u8def\u7531\uff09'}</p>

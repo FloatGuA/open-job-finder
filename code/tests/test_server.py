@@ -607,28 +607,9 @@ class TestLLMConfig:
         assert "capabilities" in data
         assert "tool_providers" in data
 
-    def test_save_and_get_llm_config(self, client):
-        client.post("/api/config/llm", json={
-            "capabilities": {"fast": "ollama", "balanced": "ollama", "powerful": "ollama"},
-            "tool_providers": {},
-        })
-        r = client.get("/api/config/llm")
-        data = r.json()
-        assert data["capabilities"]["fast"] == "ollama"
-        assert data["capabilities"]["balanced"] == "ollama"
-
-    def test_save_config_writes_yaml_file(self, client, tmp_path):
-        client.post("/api/config/llm", json={
-            "capabilities": {"fast": "anthropic_api", "balanced": "claude_cli", "powerful": "claude_cli"},
-            "tool_providers": {},
-        })
-        cfg_path = tmp_path / "config.yaml"
-        assert cfg_path.exists()
-        with cfg_path.open("r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        caps = cfg["llm"]["capabilities"]
-        assert caps["fast"][0]["type"] == "anthropic_api"
-        assert caps["balanced"][0]["type"] == "claude_cli"
+    # 存/取的往返与落盘断言搬去了 TestLlmConfigVocabulary——那里有配好 llm 段的
+    # 夹具。原来那两条编码的是**旧契约**（POST 一个 provider 类型），而"能塞任意
+    # 类型进来"正是 config.yaml 被写坏的那个洞。
 
 
 # ── Filter endpoints (districts / positions / industries) ─────────────────────
@@ -855,6 +836,112 @@ def _pending_fields() -> list:
         {"field_id": "name", "label": "姓名", "kind": "demographic", "candidate_value": "张三"},
         {"field_id": "id_number", "label": "证件号码", "kind": "government_id", "candidate_value": ""},
     ]
+
+
+_LLM_CAPS = {
+    "fast": [{"type": "ollama", "model": "qwen3:8b",
+              "base_url": "http://localhost:11434"}],
+    "balanced": [{"type": "openai_compatible", "model": "deepseek-chat",
+                  "base_url": "https://api.deepseek.com",
+                  "api_key_env": "DEEPSEEK_API_KEY"}],
+    "powerful": [{"type": "claude_cli"},
+                 {"type": "anthropic_api", "model": "claude-opus-4-8"}],
+    "vision": [{"type": "codex_cli"}, {"type": "claude_cli"}],
+}
+
+
+class TestLlmConfigVocabulary:
+    """设置页「模型」下拉两端必须说同一种话。
+
+    此前 `<option>` 填实例名（`ollama_qwen3:8b`）、`value` 填类型（`ollama`），
+    value 在选项里不存在 → 浏览器回退显示第一项。而**保存会把实例名当 type
+    写进 config.yaml**，`_build_chain` 随即 ValueError，文件已经坏了，
+    下次重启后端起不来。
+    """
+
+    def _write_config(self, caps=None):
+        import yaml
+
+        from services import config_manager as _cm
+
+        srv.CONFIG_PATH.write_text(
+            yaml.safe_dump({"llm": {"capabilities": caps or _LLM_CAPS}},
+                           allow_unicode=True, sort_keys=False),
+            encoding="utf-8")
+        _cm._instance = None      # 单例已经把 `llm: {}` 读进去了
+
+    def _read_caps(self):
+        import yaml
+
+        return yaml.safe_load(srv.CONFIG_PATH.read_text(encoding="utf-8"))["llm"]["capabilities"]
+
+    def test_the_selected_value_exists_among_the_options(self, client):
+        """**这就是那个 bug**：下拉的 value 必须真的是选项之一。"""
+        self._write_config()
+        body = client.get("/api/config/llm").json()
+
+        options = set(body["available_providers"])
+        assert options
+        for level, chosen in body["capabilities"].items():
+            assert chosen in options, f"{level} 选的 {chosen!r} 不在选项里"
+
+    def test_vision_is_visible(self, client):
+        """`vision` 一直在 `ModelRouter.LEVELS` 里，是端点手抄了一份三档列表
+        才让简历视觉解析那条链在 UI 上完全看不见。"""
+        self._write_config()
+        assert client.get("/api/config/llm").json()["capabilities"]["vision"] == "codex_cli"
+
+    def test_saving_writes_the_whole_provider_spec(self, client):
+        """换模型要连 base_url/api_key_env 一起换过去——只改 type 会留下
+        上一个 provider 的连接参数，配出一个谁都没配过的组合。"""
+        self._write_config()
+        r = client.post("/api/config/llm", json={
+            "capabilities": {"fast": "openai_compat_deepseek-chat"}, "tool_providers": {}})
+        assert r.status_code == 200
+
+        assert self._read_caps()["fast"][0] == {
+            "type": "openai_compatible", "model": "deepseek-chat",
+            "base_url": "https://api.deepseek.com", "api_key_env": "DEEPSEEK_API_KEY"}
+
+    def test_an_unknown_name_is_refused_and_the_file_is_left_alone(self, client):
+        """**这条守的是那颗雷。** 存坏了不是"少存一次"，是 config.yaml 被写成
+        `type: ollama_qwen3:8b`，下次重启后端根本起不来。所以必须写之前就拒。"""
+        self._write_config()
+        before = self._read_caps()
+
+        r = client.post("/api/config/llm", json={
+            "capabilities": {"fast": "ollama_qwen3:8b_typo"}, "tool_providers": {}})
+
+        assert r.status_code == 400
+        assert self._read_caps() == before
+
+    def test_choosing_one_already_in_the_chain_moves_it_up(self, client):
+        """powerful 是 [claude_cli, anthropic]，选 anthropic 当主力应该是
+        **换位**，不是把它复制一份到链首、再把 claude_cli 挤掉。"""
+        self._write_config()
+        client.post("/api/config/llm", json={
+            "capabilities": {"powerful": "anthropic_claude-opus-4-8"}, "tool_providers": {}})
+
+        powerful = self._read_caps()["powerful"]
+        assert [p["type"] for p in powerful] == ["anthropic_api", "claude_cli"]
+
+    def test_what_you_saved_is_what_you_get_back(self, client):
+        """存完再读要能对上。**下拉的 value 来自 GET**——存进去的和读出来的
+        对不上，界面就会显示成另一个模型，而那正是用户最初报的现象。"""
+        self._write_config()
+        client.post("/api/config/llm", json={
+            "capabilities": {"fast": "claude_cli"}, "tool_providers": {}})
+
+        body = client.get("/api/config/llm").json()
+        assert body["capabilities"]["fast"] == "claude_cli"
+        assert body["capabilities"]["fast"] in body["available_providers"]
+
+    def test_an_empty_choice_leaves_that_level_untouched(self, client):
+        """前端没加载完时会送空串，那不是"清掉这一档"的意思。"""
+        self._write_config()
+        before = self._read_caps()
+        client.post("/api/config/llm", json={"capabilities": {"fast": ""}, "tool_providers": {}})
+        assert self._read_caps() == before
 
 
 class TestPendingApplications:
