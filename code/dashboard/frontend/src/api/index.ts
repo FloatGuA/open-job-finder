@@ -1132,6 +1132,11 @@ export const API = {
     const query = buildQuery({ status })
     return requestJson(`/api/pending-applications${query}`)
   },
+  // 这条填表记录来自 Checkpoint 1 的哪个岗位（含 JD）。**只在选中某条时拉**：
+  // JD 有几千字，塞进列表会让每次刷新都拖着几十份 JD，而列表上根本不显示它。
+  // 404 = 没有来源岗位（--job-url 调试路径，或岗位已被删）——诚实的空，调用方不显示这一块。
+  getApplicationSourceJob: (id: number): Promise<PendingJob> =>
+    requestJson(`/api/pending-applications/${id}/source-job`),
   approvePendingApplication: (id: number, fields: PendingApplicationField[]): Promise<{ ok: boolean; saved_new_facts: string[] }> =>
     requestJson(`/api/pending-applications/${id}/approve`, {
       method: 'POST',

@@ -11,6 +11,7 @@ import {
   type SiteManualInfo,
 } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
+import { useWorkflowStream } from '@/hooks/useWorkflowStream'
 
 // Two human checkpoints of the multi-site apply architecture, one tab each
 // (docs/multi-site-expansion-design.md):
@@ -48,6 +49,9 @@ const T_C1_JD = '\u5c97\u4f4d\u539f\u6587'
 const T_SITE_MANUAL = '\u7ad9\u70b9\u624b\u518c'
 const T_CLEAR_SITE = '\u6e05\u6389\u5019\u9009'
 const T_C2_RESUME = '\u4f20\u7684\u7b80\u5386'
+const T_C2_SOURCE = '\u6765\u6e90\u5c97\u4f4d'
+const T_C2_WHY = '\u5f53\u521d\u4e3a\u4ec0\u4e48\u9009\u5b83'
+const T_C2_JD = '\u5c97\u4f4d\u539f\u6587'
 const T_RESURVEY = '\u91cd\u65b0\u52d8\u5bdf'
 const T_RESURVEY_CONFIRM = '\u786e\u8ba4\u4f5c\u5e9f\uff1f'
 const T_RESURVEY_HINT = '\u4f5c\u5e9f\u8fd9\u4efd\u624b\u518c\uff0c\u4e0b\u4e00\u6b21 m1 \u4f1a\u91cd\u65b0\u52d8\u5bdf\u7ad9\u70b9\u7ed3\u6784\u3002\u5019\u9009\u6c60\u4e0d\u52a8\u3002\u624b\u518c\u91cc\u7684\u201c\u591a\u9009\u8fd8\u662f\u4e92\u65a5\u201d\u8fd9\u7c7b\u5224\u65ad\u53ef\u80fd\u662f\u9519\u7684\uff0c\u800c\u8f7b\u6821\u9a8c\u53d1\u73b0\u4e0d\u4e86'
@@ -1272,6 +1276,9 @@ function Checkpoint2() {
   const [rejectReason, setRejectReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [justSavedFacts, setJustSavedFacts] = useState<string[] | null>(null)
+  // 这条记录来自哪个岗位。**只在选中时拉**——JD 几千字，不该跟着列表走。
+  // null = 没有来源（--job-url 调试路径，或岗位已被删）：诚实的空，不显示这一块。
+  const [sourceJob, setSourceJob] = useState<PendingJob | null>(null)
 
   const refresh = () => {
     API.getPendingApplications(filter === 'all' ? undefined : filter)
@@ -1281,10 +1288,19 @@ function Checkpoint2() {
 
   useEffect(() => { refresh() }, [filter])
 
+  // m1/m2 跑完就把列表拉一遍——填表记录是 run 写进去的，跑完不刷新就得手动 F5。
+  // **只认这几个节点**：SSE 会成百上千条地涌进来（debug 模式每次 registry.call
+  // 一条），每条都刷新会把审批页刷爆，也会把正在编辑的字段冲掉。
+  useWorkflowStream((e) => {
+    if (e.step === 'done' || e.step === 'write_pending_application') refresh()
+  })
+
   const selected = useMemo(() => apps.find((a) => a.id === selectedId) ?? null, [apps, selectedId])
 
   function selectApp(app: PendingApplication) {
     setSelectedId(app.id)
+    setSourceJob(null)
+    void API.getApplicationSourceJob(app.id).then(setSourceJob).catch(() => setSourceJob(null))
     setRejecting(false)
     setRejectReason('')
     const init: Record<string, string> = {}
@@ -1372,6 +1388,14 @@ function Checkpoint2() {
                   {/* 这次实际传上去的是哪一份。审批人要判断的是"这份申请能不能提交"，
                       而发出去的是哪份简历跟填的字段同等重要——库里可能勾了好几份，
                       兜底也会改。空串不显示：那是诚实的空，不是发了个空简历。 */}
+                  {sourceJob && (
+                    <span className="truncate" title={sourceJob.title}>
+                      {T_C2_SOURCE}
+                      {'\uff1a'}
+                      {sourceJob.category ? `[${sourceJob.category}] ` : ''}
+                      {sourceJob.title}
+                    </span>
+                  )}
                   {selected.resume_file && (
                     <span className="truncate" title={selected.resume_file}>
                       {T_C2_RESUME}
@@ -1392,6 +1416,36 @@ function Checkpoint2() {
                 </button>
               )}
             </div>
+
+            {/* 来源岗位的 JD 和当初的选岗理由。审批人在这一步判断的是"这份申请
+                能不能提交"，而判断依据一半在 Checkpoint 1 那边——这条链一直存在
+                （source_job_id），只是界面从来没用过它，人得自己翻回选岗页去对。 */}
+            {sourceJob && (
+              <div className="mt-3 space-y-2">
+                {sourceJob.why && (
+                  <p className="max-w-[86ch] text-[13px] leading-relaxed text-text-2">
+                    <span className="text-text-3">{T_C2_WHY}{'\uff1a'}</span>
+                    {sourceJob.why}
+                  </p>
+                )}
+                {sourceJob.jd && (
+                  <details className="max-w-[86ch]">
+                    <summary className="cursor-pointer select-none text-[12.5px] text-text-3 transition hover:text-text-1">
+                      {T_C2_JD}
+                      {'\uff08'}
+                      {sourceJob.jd.length}
+                      {'\u5b57\uff09'}
+                    </summary>
+                    <pre
+                      className="mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl p-3 text-[12.5px] leading-relaxed text-text-2"
+                      style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}
+                    >
+                      {sourceJob.jd}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
 
             {selected.status !== 'pending' && (
               <div className="rounded-xl p-3 text-[13.5px]" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>

@@ -2265,6 +2265,31 @@ async def get_pending_application(application_id: int) -> JSONResponse:
     return JSONResponse(vars(rec))
 
 
+@app.get("/api/pending-applications/{application_id}/source-job")
+async def get_application_source_job(application_id: int) -> JSONResponse:
+    """这条填表记录来自 Checkpoint 1 的哪个岗位（含 JD）。
+
+    Checkpoint 2 判断的是"这份申请能不能提交"，而判断依据一半在 Checkpoint 1
+    那边——岗位是什么、当初为什么选它、JD 写了什么。`source_job_id` 这条链一直
+    存在（1:N），但界面从来没用过它，审批的人得自己翻回选岗页去对。
+
+    **单开端点、只在选中时拉**：JD 有几千字，塞进列表会让每次刷新都拖着几十份
+    JD，而列表上根本不显示它。
+
+    三种「没有」都是 404，且都是**诚实的空**，不是错误：
+    `--job-url` 调试路径没有来源岗位；岗位被「清掉候选」删了这条链会断；
+    application 本身不存在。前端据此不显示这一块，而不是显示一个空壳。
+    """
+    _initialize_state()
+    rec = app.state.tracker.get_pending_application(application_id)
+    if rec is None or rec.source_job_id is None:
+        raise HTTPException(status_code=404, detail="no source job")
+    job = app.state.tracker.get_pending_job(rec.source_job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="source job was deleted")
+    return JSONResponse(vars(job))
+
+
 @app.post("/api/pending-applications/{application_id}/approve")
 async def approve_pending_application(application_id: int, body: dict) -> JSONResponse:
     """Layer 2 go-signal. `fields` in the body is the reviewer-edited final field

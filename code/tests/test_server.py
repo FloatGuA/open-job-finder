@@ -1545,6 +1545,50 @@ class TestCheckpoint1ResumePickUsesTheJd:
         assert seen["job_title"] == "后端工程师"
 
 
+class TestCheckpoint2CanSeeWhereItCameFrom:
+    """填表审批要能看到「这条是从哪个岗位来的」，包括那个岗位的 JD。
+
+    **为什么**：Checkpoint 2 判断的是"这份申请能不能提交"，而判断依据一半在
+    Checkpoint 1 那边——岗位是什么、为什么当初选它、JD 写了什么。
+    `source_job_id` 这条链一直存在（1:N），但界面从来没用过它，
+    于是审批的人要自己翻回选岗页去对。
+
+    **单开一个端点、只在选中时拉**：JD 有几千字，塞进列表会让每次刷新都拖着
+    几十份 JD，而列表上根本不显示它。
+    """
+
+    def test_it_returns_the_job_the_application_came_from(self, client):
+        job_id = _add_job(title="服务运营 - 数据分析", url="https://x/src",
+                          jd="岗位描述\n负责数据看板搭建", why="对上了运营方向")
+        app_id = app.state.tracker.add_pending_application(
+            site_name="bambulab", job_title="服务运营 - 数据分析", fields=[],
+            source_job_id=job_id)
+
+        r = client.get(f"/api/pending-applications/{app_id}/source-job")
+        assert r.status_code == 200
+        got = r.json()
+        assert got["id"] == job_id
+        assert got["title"] == "服务运营 - 数据分析"
+        assert "负责数据看板搭建" in got["jd"]
+        assert got["why"] == "对上了运营方向"
+
+    def test_an_application_with_no_source_job_is_404(self, client):
+        """`--job-url` 调试路径的记录没有来源岗位——**是诚实的空**，
+        前端据此不显示这一块，而不是显示一个空壳。"""
+        app_id = app.state.tracker.add_pending_application(
+            site_name="s", job_title="t", fields=[], source_job_id=None)
+        assert client.get(f"/api/pending-applications/{app_id}/source-job").status_code == 404
+
+    def test_a_dangling_source_job_id_is_404_not_a_500(self, client):
+        """岗位被「清掉候选」删掉了，填表记录还在——这条链会断，端点要好好回答。"""
+        app_id = app.state.tracker.add_pending_application(
+            site_name="s", job_title="t", fields=[], source_job_id=999999)
+        assert client.get(f"/api/pending-applications/{app_id}/source-job").status_code == 404
+
+    def test_an_unknown_application_is_404(self, client):
+        assert client.get("/api/pending-applications/999999/source-job").status_code == 404
+
+
 class TestIndexHtmlIsNeverCached:
     """`index.html` **绝不能被浏览器缓存**。
 

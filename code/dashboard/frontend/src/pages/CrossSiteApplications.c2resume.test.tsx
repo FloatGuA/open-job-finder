@@ -29,12 +29,17 @@ function app(overrides: Partial<PendingApplication> = {}): PendingApplication {
 
 let mockApps: PendingApplication[] = []
 
+// Checkpoint2 现在还会订阅 SSE（run 跑完自动刷新）并在选中时拉来源岗位——
+// 替身得跟上组件的依赖，否则这里报的是 mock 缺项，不是被测行为出了问题。
+vi.mock('@/hooks/useWorkflowStream', () => ({ useWorkflowStream: () => {} }))
+
 vi.mock('@/api', () => ({
   API: {
     getCheckpoint1Jobs: () =>
       Promise.resolve({ jobs: [], total: 0, categories: [], sites: {} }),
     getPendingApplications: () =>
       Promise.resolve({ applications: mockApps, total: mockApps.length }),
+    getApplicationSourceJob: () => Promise.reject(new Error('404')),
     browseUrl: () => Promise.resolve({ ok: true }),
   },
 }))
