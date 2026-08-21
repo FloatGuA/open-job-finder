@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Briefcase, Clock, FileText, GraduationCap, Globe, GripVertical, LayoutDashboard, MessageSquare, Network, ScrollText, Settings, UserRound } from 'lucide-react'
 import { API } from '@/api'
 import { useAppContext, type Page } from '@/context/app-context'
-import { APP_VERSION } from '@/version'
+import { APP_VERSION, BUILT_AT } from '@/version'
 import DevLabel from '@/components/dev/DevLabel'
 
 const NAV_ORDER_KEY = 'ojf_nav_order'
@@ -105,7 +105,8 @@ export default function Sidebar() {
         </div>
         <div className="mt-1.5 flex items-center gap-1.5 text-[13px] text-text-3">
           <span>AI {'\u6c42\u804c\u52a9\u624b'}</span>
-          <span className="font-mono text-deco">v{APP_VERSION}</span>
+          <span className="font-mono text-deco" title={BUILT_AT ? `\u6784\u5efa\u4e8e ${BUILT_AT}` : ''}>
+            v{APP_VERSION}{BUILT_AT ? ` \u00b7 ${BUILT_AT}` : ''}</span>
         </div>
       </div>
 

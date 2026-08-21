@@ -1545,6 +1545,26 @@ class TestCheckpoint1ResumePickUsesTheJd:
         assert seen["job_title"] == "后端工程师"
 
 
+class TestIndexHtmlIsNeverCached:
+    """`index.html` **绝不能被浏览器缓存**。
+
+    JS/CSS 的文件名带内容哈希（`index-DN_z1tMQ.js`），新构建 = 新 URL，本来不会
+    拿到旧的。但**指向它们的 `index.html` 一旦被缓存，用户就永远拿到旧的那份**
+    ——它引用的是上一次构建的哈希文件名，于是前端改了多少次都不生效。
+
+    2026-08-21 真机：修好了 PDF 内联返回、验过响应头正确，用户刷新后**行为一点没变**，
+    因为跑的还是旧 JS。这个坑会伪装成"你的修复没生效"，而且每次前端改动都可能撞上。
+
+    带哈希的静态资源反过来——它们可以被永久缓存，URL 变了自然就换新的。
+    """
+
+    def test_the_page_is_served_with_no_store(self, client):
+        r = client.get("/")
+        assert r.status_code == 200
+        cc = r.headers.get("cache-control", "").lower()
+        assert "no-store" in cc or "no-cache" in cc, f"index.html 会被缓存：{cc!r}"
+
+
 class TestResumeLibraryFileServing:
     """库里的 PDF 要能**在页面里显示**，不是一点就下载。
 

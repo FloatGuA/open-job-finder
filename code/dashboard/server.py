@@ -489,10 +489,22 @@ async def shutdown() -> None:
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
+    """前端入口页。**绝不缓存。**
+
+    JS/CSS 的文件名带内容哈希（`index-DN_z1tMQ.js`），新构建 = 新 URL，那些资源
+    可以被永久缓存。但**指向它们的这个 `index.html` 一旦被缓存，用户就永远拿到
+    旧的那份**——它引用的是上一次构建的哈希文件名，于是前端改多少次都不生效。
+
+    2026-08-21 真机：修好了 PDF 内联返回、验过响应头正确，用户刷新后行为一点没变，
+    因为跑的还是旧 JS。**这个坑会伪装成"你的修复没生效"**，而且每次前端改动都可能撞上。
+    """
     index_path = STATIC_DIR / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="Dashboard frontend not found.")
-    return HTMLResponse(index_path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        index_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 @app.get("/api/jobs")
