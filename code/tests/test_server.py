@@ -988,6 +988,81 @@ class TestPendingApplications:
 
 # ── Personal info（多站点扩展表单填写用的身份事实，跟 info_pool 去重后）──────────
 
+class TestDiscardPendingApplication:
+    """DELETE /api/pending-applications/{id} —— Checkpoint 2 的"这条我不要了"。
+
+    Checkpoint 1 早就有清除入口，Checkpoint 2 只有批准/拒绝——重复记录只能手动
+    开库删。补上这条对称的入口（用户 2026-08-22）。
+    """
+
+    def _screenshot(self, name: str = "shot.png") -> str:
+        from dashboard.server import DATA_DIR
+
+        d = DATA_DIR / "multisite_screenshots"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b"\x89PNG\r\n")
+        return name
+
+    def test_discard_removes_the_row(self, client):
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+        )
+        r = client.delete(f"/api/pending-applications/{app_id}")
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        assert app.state.tracker.get_pending_application(app_id) is None
+
+    def test_discard_takes_the_screenshot_with_it(self, client):
+        """截图跟着行一起删——分两处删就会留孤儿。这次清库时手动扫出 3 张没有
+        任何行引用的截图，就是没人删过它们。"""
+        from dashboard.server import DATA_DIR
+
+        name = self._screenshot()
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+            screenshot=name,
+        )
+        client.delete(f"/api/pending-applications/{app_id}")
+        assert not (DATA_DIR / "multisite_screenshots" / name).exists()
+
+    def test_discard_refuses_an_approved_application(self, client):
+        """批准过就是给 Layer 3 放行过——那件事撤不回来，记录也不该消失。"""
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+        )
+        app.state.tracker.decide_pending_application(app_id, "approved", fields=_pending_fields())
+
+        r = client.delete(f"/api/pending-applications/{app_id}")
+        assert r.status_code == 409
+        assert app.state.tracker.get_pending_application(app_id) is not None
+
+    def test_approved_application_keeps_its_screenshot(self, client):
+        """拒绝删这行的时候，截图也不能顺手删掉——否则记录还在、证据没了。"""
+        from dashboard.server import DATA_DIR
+
+        name = self._screenshot("approved.png")
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+            screenshot=name,
+        )
+        app.state.tracker.decide_pending_application(app_id, "approved", fields=_pending_fields())
+
+        client.delete(f"/api/pending-applications/{app_id}")
+        assert (DATA_DIR / "multisite_screenshots" / name).exists()
+
+    def test_discard_nonexistent_returns_404(self, client):
+        r = client.delete("/api/pending-applications/999")
+        assert r.status_code == 404
+
+    def test_discard_a_rejected_application(self, client):
+        app_id = app.state.tracker.add_pending_application(
+            site_name="huawei", job_title="后端工程师", fields=_pending_fields(),
+        )
+        app.state.tracker.decide_pending_application(app_id, "rejected", reason="不合适")
+        r = client.delete(f"/api/pending-applications/{app_id}")
+        assert r.status_code == 200
+        assert app.state.tracker.get_pending_application(app_id) is None
+
 class TestPersonalInfo:
     def test_empty_state(self, client):
         r = client.get("/api/personal-info")

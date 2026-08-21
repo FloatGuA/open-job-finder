@@ -1724,5 +1724,24 @@ class ApplicationTracker:
                 )
             return cur.rowcount
 
+    def delete_pending_application(self, application_id: int) -> int:
+        """丢弃一条填表记录。返回删了几行（0 = 不存在，或它已经批准了）。
+
+        **已批准的一行都不动。** 批准是给 Layer 3 的提交放行信号，而提交是对外
+        发生过、撤不回来的事——删掉这行等于把"我们批准过它"这件事抹掉。这跟
+        `delete_pending_jobs_for_site` 保住 approved 是同一条理由。
+
+        跟 `decide_pending_application(id, 'rejected')` 是两件事，别拿它当拒绝用：
+        拒绝记的是"看过了，不投"（留行、留 reason，进"已拒绝"标签），删是"这条
+        记录不该占着地方"（调试重跑的重复行、误触发的填表）。**把丢弃实现成
+        写 rejected 会往决策记录里掺进从来没做过的决定。**
+        """
+        with self.conn:
+            cur = self.conn.execute(
+                "DELETE FROM pending_applications WHERE id = ? AND status != 'approved'",
+                (application_id,),
+            )
+            return cur.rowcount
+
     def close(self) -> None:
         self.conn.close()

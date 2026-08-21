@@ -2344,6 +2344,32 @@ async def reject_pending_application(application_id: int, body: dict | None = No
     if rowcount == 0:
         return JSONResponse({"ok": False, "error": "already decided"}, status_code=409)
     return JSONResponse({"ok": True})
+@app.delete("/api/pending-applications/{application_id}")
+async def discard_pending_application(application_id: int) -> JSONResponse:
+    """丢弃一条填表记录，连它的表单截图一起。
+
+    **跟"拒绝"是两件事。** 拒绝记的是一个决定（"看过了，不投"），行留在库里进
+    "已拒绝"标签；丢弃是"这条记录不该占着地方"——调试重跑出来的重复行、误触发
+    的填表。把丢弃做成写 rejected 会往决策记录里掺进从来没做过的决定。
+
+    **已批准的删不掉**（409）：批准是给 Layer 3 的提交放行信号，提交是对外发生
+    过、撤不回来的事。理由同 Checkpoint 1 的清除入口保住 approved。
+
+    截图**在行真的删掉之后**才删——顺序反了的话，拒绝删 approved 的那条路径会
+    留下"记录还在、证据没了"。
+    """
+    _initialize_state()
+    tracker = app.state.tracker
+    rec = tracker.get_pending_application(application_id)
+    if rec is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+
+    if tracker.delete_pending_application(application_id) == 0:
+        return JSONResponse({"ok": False, "error": "已批准的记录不能删"}, status_code=409)
+
+    if rec.screenshot:
+        artifact_cleanup.delete_screenshot(DATA_DIR / "multisite_screenshots", rec.screenshot)
+    return JSONResponse({"ok": True})
 
 
 # ── 个人信息（多站点扩展表单填写用的身份事实；2026-08-13 跟 info_pool 去重）──

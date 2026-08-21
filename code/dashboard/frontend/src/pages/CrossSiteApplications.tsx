@@ -106,6 +106,9 @@ const T_APPROVE = '\u6279\u51c6'
 const T_REJECT = '\u9a73\u56de'
 const T_CANCEL = '\u53d6\u6d88'
 const T_SAVING = '\u63d0\u4ea4\u4e2d\u2026'
+const T_DISCARD = '\u4e22\u5f03\u8fd9\u6761'
+const T_CONFIRM_DISCARD = '\u786e\u8ba4\u4e22\u5f03'
+const T_DISCARD_HINT = '\u4e22\u5f03\u53ea\u662f\u628a\u8fd9\u6761\u8bb0\u5f55\u4ece\u961f\u5217\u91cc\u5220\u6389\uff08\u8fde\u8868\u5355\u622a\u56fe\uff09\uff0c\u4e0d\u7b49\u4e8e\u300c\u62d2\u7edd\u300d\u2014\u2014\u62d2\u7edd\u4f1a\u7559\u4e00\u884c\u5728\u300c\u5df2\u62d2\u7edd\u300d\u91cc\u3002\u5df2\u7ecf\u4f20\u5230\u4f01\u4e1a\u8868\u5355\u91cc\u7684\u7b80\u5386\u4e0d\u4f1a\u56e0\u6b64\u64a4\u56de\u3002'
 const T_REJECT_REASON_PLACEHOLDER = '\u9a73\u56de\u7406\u7531\uff08\u53ef\u9009\uff09'
 const T_CONFIRM_REJECT = '\u786e\u8ba4\u9a73\u56de'
 const T_REASON_LABEL = '\u9a73\u56de\u7406\u7531'
@@ -1273,6 +1276,7 @@ function Checkpoint2() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [editedFields, setEditedFields] = useState<Record<string, string>>({})
   const [rejecting, setRejecting] = useState(false)
+  const [discarding, setDiscarding] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [justSavedFacts, setJustSavedFacts] = useState<string[] | null>(null)
@@ -1313,6 +1317,10 @@ function Checkpoint2() {
     return selected.fields.every((f) => !needsHumanValue(f) || (editedFields[f.field_id] ?? '').trim() !== '')
   }, [selected, editedFields])
 
+  // 换了一条记录就把二次确认收起来——否则「确认丢弃」会跟着停在下一条上，
+  // 而那条根本不是刚才要丢的那条。
+  useEffect(() => { setDiscarding(false) }, [selectedId])
+
   async function handleApprove() {
     if (!selected || !canApprove) return
     setSaving(true)
@@ -1339,6 +1347,19 @@ function Checkpoint2() {
       setSelectedId(null)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleDiscard() {
+    if (!selected) return
+    setSaving(true)
+    try {
+      await API.discardPendingApplication(selected.id)
+      refresh()
+      setSelectedId(null)
+    } finally {
+      setSaving(false)
+      setDiscarding(false)
     }
   }
 
@@ -1528,6 +1549,28 @@ function Checkpoint2() {
                     className="w-full"
                   />
                 </a>
+              </div>
+            )}
+
+            {selected.status !== 'approved' && (
+              <div className="space-y-2 border-t border-border-subtle pt-3.5">
+                {discarding ? (
+                  <>
+                    <p className="text-[12.5px] leading-relaxed text-text-2">{T_DISCARD_HINT}</p>
+                    <div className="flex items-center gap-2">
+                      <button type="button" disabled={saving} onClick={() => void handleDiscard()} className="rounded-lg px-3 py-1.5 text-[13px] font-medium text-white disabled:opacity-50" style={{ background: '#ff453a' }}>
+                        {saving ? T_SAVING : T_CONFIRM_DISCARD}
+                      </button>
+                      <button type="button" onClick={() => setDiscarding(false)} className="rounded-lg bg-bg-card2 px-3 py-1.5 text-[13px] text-text-2">
+                        {T_CANCEL}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <button type="button" disabled={saving} onClick={() => setDiscarding(true)} className="text-[13px] text-text-3 underline underline-offset-2 hover:text-text-2">
+                    {T_DISCARD}
+                  </button>
+                )}
               </div>
             )}
 

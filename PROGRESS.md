@@ -5,12 +5,28 @@
 | 项目     | 值                              |
 |----------|---------------------------------|
 | 整体状态 | 进行中                          |
-| 最后更新 | 2026-08-21（v2.34.0 步骤骨架后端导出，计划 C 收官） |
-| 当前版本 | 2.34.0                         |
+| 最后更新 | 2026-08-22（v2.34.1 Checkpoint 2 丢弃入口） |
+| 当前版本 | 2.34.1                         |
 
 > ⚠️ **下一轮动手前先读**：Layer 1 已按 2026-08-13 的对齐改完并真机验证。**SDK 继续 LangGraph 是用户拍板的（理由是他本人正求职 agent 开发岗位、亲手做工程本身是目标），后续会话不要因为技术理由自作主张换成 Anthropic/Codex SDK。** 完整取舍见 `DECISION.md` 三条：「Layer 1 的导航/找入口/选岗交给 agent 自主决策」「选岗结果用 record_job 边找边落袋」「提交防线从不给工具改成点击工具自己拒绝」。
 
 ## 待跟进（另开会话）
+
+### ✅ Checkpoint 2 补丢弃入口 + 存量清理（2026-08-22，v2.34.1）
+
+**清理**（用户要求，数据操作、无代码）：清掉 72 条 `pending_jobs`
+（70 待审批 + 2 已拒绝，bambulab/joinqq）、2 条 `pending_applications`、
+2 份没勾允许发送的历史简历、5 张孤儿截图。**保住** job 75 那行 approved
+（`pending_applications.source_job_id` 回指它）和兜底简历。删前备份到
+`data/backups/cleanup_*.json`（含被删简历 PDF 的副本），照 `reset_multisite.py`
+的规矩：备份落盘成功才删。
+
+**补入口**：清理时暴露出的不对称——Checkpoint 1 有清除、Checkpoint 2 只有批准/
+拒绝。加 `tracker.delete_pending_application` + `DELETE /api/pending-applications/{id}`
++ 前端「丢弃这条」（二次确认，approved 不给入口）。**丢弃不等于拒绝**，
+理由见 DECISION。11 个新用例，两条守门都做了变异验证。
+
+1509 passed，build 绿，真机往返验过（200 → 再删 404，行和截图都真没了）。
 
 ### ✅ 步骤骨架从后端导出（2026-08-21，v2.34.0）——计划 C 收官
 

@@ -1163,6 +1163,11 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason }),
     }),
+  // 丢弃一条填表记录（连截图）。**跟 reject 是两件事**：reject 记的是一个决定
+  // （留行、进「已拒绝」标签），discard 是「这条记录不该占着地方」——重复行、
+  // 误触发的填表。已批准的删不掉，后端返回 409。
+  discardPendingApplication: (id: number): Promise<{ ok: boolean }> =>
+    requestJson(`/api/pending-applications/${id}`, { method: 'DELETE' }),
   // ── Checkpoint 1：选岗审批 ──
   // categories 跟列表一起返回：前端渲染类别下拉必须有它，分两次请求只会多出一种
   // “下拉是空的”的中间状态。
