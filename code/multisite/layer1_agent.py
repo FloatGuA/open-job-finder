@@ -107,12 +107,29 @@ class FindJobsOutput(BaseModel):
     jobs: list[FoundJob] = Field(default_factory=list)
 
 
+# 表单没打开，可以是干得对，也可以是干不了活儿——真机 id=72 那次 agent 正确认出
+# 「已投递」没去投，日志里却跟"找不到入口"长得一模一样。
+#
+# `unknown` **不给 agent 用**（工具签名里没有），只留给"它压根没汇报"那条路：
+# 把没汇报塞进 no_entry 是替它编一个它没说过的结论。
+OpenOutcome = Literal["opened", "already_applied", "no_entry", "blocked", "unknown"]
+
+
 class OpenApplicationOutput(BaseModel):
     """导航 agent 的自评。**刻意让 agent 自己报成败**：它比外面的代码更清楚自己
-    卡在哪一步，而这个结论会被下游用来决定要不要继续扫描字段。"""
-    form_opened: bool = Field(description="是否成功打开了申请表")
-    resume_uploaded: bool = Field(description="简历是否上传成功")
-    note: str = Field(default="", description="失败时卡在哪一步、页面上看到什么")
+    卡在哪一步，而这个结论会被下游用来决定要不要继续扫描字段。
+
+    **只有 `outcome` 是 agent 报的，`form_opened` 由它派生。** 两个都让 agent 填
+    迟早会收到 `form_opened=true` + `outcome=no_entry` 这种自相矛盾的组合，
+    而那时候没人知道该信哪个——同一件事两个真相源，本项目栽过五次。
+    """
+    outcome: OpenOutcome = Field(default="unknown", description="表单没打开的话，是为什么")
+    resume_uploaded: bool = Field(default=False, description="简历是否上传成功")
+    note: str = Field(default="", description="卡在哪一步、页面上看到什么")
+
+    @property
+    def form_opened(self) -> bool:
+        return self.outcome == "opened"
 
 
 class ScannedElement(TypedDict):
@@ -703,8 +720,10 @@ def make_record_open_result_tool(sink: dict) -> "object":
     """
     from langchain_core.tools import StructuredTool
 
-    async def record_open_result(form_opened: bool, resume_uploaded: bool, note: str = "") -> str:
-        sink.update({"form_opened": bool(form_opened),
+    async def record_open_result(outcome: Literal["opened", "already_applied",
+                                                  "no_entry", "blocked"],
+                                 resume_uploaded: bool = False, note: str = "") -> str:
+        sink.update({"outcome": outcome,
                      "resume_uploaded": bool(resume_uploaded),
                      "note": (note or "").strip()[:500]})
         return "已记录本次结果。如果还有没做完的就继续；都做完了就结束，不用再调用任何工具。"
@@ -713,9 +732,14 @@ def make_record_open_result_tool(sink: dict) -> "object":
         coroutine=record_open_result,
         name="record_open_result",
         description=(
-            "汇报申请表打开/简历上传的结果。**做完或卡住时都要调用一次**："
-            "form_opened=申请表是否打开了，resume_uploaded=简历是否上传成功，"
-            "note=失败时卡在哪一步、页面上看到什么。"
+            "汇报申请表打开/简历上传的结果。**做完或卡住时都要调用一次**。\n"
+            "outcome 四选一：\n"
+            "  opened = 申请表打开了；\n"
+            "  already_applied = 页面显示这个岗位已经投过了，所以没有再投"
+            "（这是**正确**的结果，不是失败，别报成 no_entry）；\n"
+            "  no_entry = 页面上找不到任何申请/投递入口；\n"
+            "  blocked = 有东西挡住了（需要登录、报错页、关不掉的弹窗）。\n"
+            "resume_uploaded=简历是否上传成功；note=卡在哪一步、页面上看到什么。"
         ),
     )
 
@@ -1655,13 +1679,12 @@ def _make_nodes(
         if truncated:
             safe_print("[layer1] ⚠ 导航 agent 步数耗尽，结果可能不完整。", flush=True)
         outcome = OpenApplicationOutput(
-            form_opened=bool(result_sink.get("form_opened")),
+            outcome=result_sink.get("outcome") or "unknown",
             resume_uploaded=bool(result_sink.get("resume_uploaded")),
             note=result_sink.get("note") or (
                 "agent 没调用 record_open_result，最后一句：" + agent_runtime.last_text(result)[:300]
             ),
         ) if result_sink else OpenApplicationOutput(
-            form_opened=False, resume_uploaded=False,
             note="agent 未汇报结果，最后一句：" + agent_runtime.last_text(result)[:300],
         )
         # 字段扫描读的是**代码自己拍的**最后一张快照，不是 agent 的自述——agent
@@ -1741,11 +1764,7 @@ def _make_nodes(
                         _summarize_scan_buckets),
         "write_pending_jobs": (write_pending_jobs,
                                lambda out: {"new": len(out.get("pending_job_ids") or [])}),
-        "open_application": (open_application,
-                             lambda out: {"form_opened": bool(getattr(out.get("open_result"),
-                                                                      "form_opened", False)),
-                                          "resume_uploaded": bool(getattr(out.get("open_result"),
-                                                                          "resume_uploaded", False))}),
+        "open_application": (open_application, _summarize_open_application),
         "scan_and_classify_fields": (scan_and_classify_fields,
                                      lambda out: {"empty": len(out.get("empty_elements") or []),
                                                   "required": sum(1 for e in (out.get("empty_elements") or [])
@@ -1780,6 +1799,14 @@ def _stages_for(nodes: dict, stage_order: tuple) -> list:
     不上"，得靠人再往回查一层。
     """
     return [(name, *nodes.get(name, (None, None))) for name in stage_order]
+
+
+def _summarize_open_application(out: dict) -> dict:
+    """进 run 日志的那一行。**`outcome` 是这里唯一有新信息的字段**——
+    `form_opened` 从它派生，写进去只是把同一件事说两遍。"""
+    res = out.get("open_result")
+    return {"outcome": getattr(res, "outcome", "unknown"),
+            "resume_uploaded": bool(getattr(res, "resume_uploaded", False))}
 
 
 def _summarize_scan_buckets(out: dict) -> dict:

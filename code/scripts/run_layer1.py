@@ -231,7 +231,7 @@ def main() -> int:
 
     outcome = state.get("open_result")
     if outcome is not None:
-        print(f"[layer1] 表单已打开={outcome.form_opened} 简历已上传={outcome.resume_uploaded}")
+        print(f"[layer1] 结果={outcome.outcome} 简历已上传={outcome.resume_uploaded}")
         if outcome.note:
             print(f"[layer1] 说明: {outcome.note}")
 

@@ -320,7 +320,7 @@ class OrchestrationService:
         app_id = state.get("pending_application_id")
         n_fields = len(state.get("classified_fields") or [])
         return (
-            f"填表完成：表单已打开={getattr(outcome, 'form_opened', None)} "
+            f"填表完成：结果={getattr(outcome, 'outcome', 'unknown')} "
             f"简历已上传={getattr(outcome, 'resume_uploaded', None)} "
             f"待审批字段 {n_fields} 个" + (f"（记录 id={app_id}）" if app_id else "（未写记录）"),
             {"pending_application_id": app_id, "fields": n_fields,
