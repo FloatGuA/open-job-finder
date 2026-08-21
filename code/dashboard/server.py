@@ -1161,7 +1161,14 @@ async def upload_resume_to_library(file: UploadFile = File(...)) -> JSONResponse
 
 
 @app.get("/api/resume/library/{fname}")
-async def download_resume_library_item(fname: str):
+async def serve_resume_library_item(fname: str):
+    """库里那份 PDF 的字节流。**内联返回，不是附件。**
+
+    给 `FileResponse` 传 `filename=` 的本意只是"下载时叫什么名字"，副作用却是
+    带上 `content-disposition: attachment`——浏览器一律当下载处理。预览用的
+    iframe 请求它时就不是渲染而是下载，用户看到的现象是"点一下就自动下载"，
+    而**预览其实是坏的**（2026-08-21 真机）。
+    """
     from services.resume_library import ResumeLibrary
     try:
         path = ResumeLibrary(str(DATA_DIR)).path_of(fname)
@@ -1169,7 +1176,41 @@ async def download_resume_library_item(fname: str):
         raise HTTPException(status_code=404, detail=fname)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail=fname)
-    return FileResponse(path, media_type="application/pdf", filename=fname)
+    return FileResponse(path, media_type="application/pdf")
+
+
+@app.post("/api/resume/library/{fname}/reveal")
+async def reveal_resume_library_item(fname: str) -> JSONResponse:
+    """在系统文件管理器里定位到这份简历。
+
+    这是个装在自己机器上的应用，文件本来就在磁盘上——再下载一份到 Downloads
+    里没有意义，用户要的是"打开它所在的文件夹"。
+
+    **命令用 list 形式拼、绝不 `shell=True`**（项目既有约定，见
+    `ClaudeCLIProvider` 的安全注释）：文件名来自文件夹内容，拼进 shell 字符串
+    就是注入面。路径先过 `path_of` 挡目录穿越，再确认文件真的存在。
+    """
+    import subprocess
+    import sys
+
+    from services.resume_library import ResumeLibrary
+    try:
+        path = ResumeLibrary(str(DATA_DIR)).path_of(fname)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"非法文件名: {fname}")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=fname)
+
+    full = os.path.abspath(path)
+    if sys.platform == "win32":
+        # `/select,<path>` 的逗号必须紧跟在参数里，这是 explorer 的怪癖
+        cmd = ["explorer", f"/select,{full}"]
+    elif sys.platform == "darwin":
+        cmd = ["open", "-R", full]
+    else:
+        cmd = ["xdg-open", os.path.dirname(full)]
+    subprocess.Popen(cmd)
+    return JSONResponse({"ok": True, "path": full})
 
 
 @app.delete("/api/resume/library/{fname}")

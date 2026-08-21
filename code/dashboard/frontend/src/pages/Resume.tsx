@@ -1110,9 +1110,10 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
                     className="min-w-0 flex-1 truncate text-left text-[12px] transition hover:brightness-125"
                     style={{ color: it.file === previewFile ? '#ffffff' : 'var(--signal-bright, #7cc3ff)' }}
                     title={it.file}>{it.name}</button>
-                  <a href={`/api/resume/library/${encodeURIComponent(it.file)}`} target="_blank" rel="noreferrer"
-                    title={'\u5728\u65b0\u6807\u7b7e\u9875\u6253\u5f00 / \u4e0b\u8f7d'}
-                    className="shrink-0 px-1 text-[11px] text-text-3 transition hover:text-text-1">{'\u2197'}</a>
+                  <button type="button"
+                    onClick={() => { void API.revealResumeLibraryItem(it.file).catch((e) => onErr((e as Error).message)) }}
+                    title={'\u5728\u6587\u4ef6\u5939\u4e2d\u663e\u793a'}
+                    className="shrink-0 px-1 text-[11px] text-text-3 transition hover:text-text-1">{'\ud83d\udcc1'}</button>
                   {it.state === 'stale' && (
                     <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
                       style={{ background: 'rgba(255,159,10,0.16)', color: '#ff9f0a' }}

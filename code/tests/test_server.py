@@ -1545,6 +1545,90 @@ class TestCheckpoint1ResumePickUsesTheJd:
         assert seen["job_title"] == "后端工程师"
 
 
+class TestResumeLibraryFileServing:
+    """库里的 PDF 要能**在页面里显示**，不是一点就下载。
+
+    **真机（2026-08-21）**：`FileResponse(..., filename=...)` 会带上
+    `content-disposition: attachment`，浏览器一律当下载处理——于是预览用的 iframe
+    请求它时不是渲染而是下载，用户看到的现象是"点一下就自动下载"，
+    而**预览其实是坏的**。给 filename 的本意只是"下载时叫什么名字"，
+    副作用却是"强制下载"。
+    """
+
+    def _put(self, file="a.pdf"):
+        import os
+
+        from dashboard.server import DATA_DIR
+        from services.resume_library import ResumeLibrary
+        lib = ResumeLibrary(str(DATA_DIR))
+        os.makedirs(lib.library_dir, exist_ok=True)
+        with open(os.path.join(lib.library_dir, file), "wb") as f:
+            f.write(b"%PDF-1.4 test")
+        return lib
+
+    def test_it_is_served_inline_not_as_an_attachment(self, client):
+        self._put()
+        r = client.get("/api/resume/library/a.pdf")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/pdf"
+        assert "attachment" not in r.headers.get("content-disposition", "").lower()
+
+    def test_a_missing_file_is_404(self, client):
+        assert client.get("/api/resume/library/nope.pdf").status_code == 404
+
+
+class TestRevealInFolder:
+    """「在文件夹中显示」——这是个装在自己机器上的应用，文件本来就在磁盘上，
+    再下载一份到 Downloads 里没有意义。
+
+    **命令用 list 形式拼、绝不 shell=True**（项目既有约定）：文件名来自文件夹，
+    拼进 shell 字符串就是注入面。路径还要先过 `path_of` 挡穿越。
+    """
+
+    def _put(self, file="a.pdf"):
+        import os
+
+        from dashboard.server import DATA_DIR
+        from services.resume_library import ResumeLibrary
+        lib = ResumeLibrary(str(DATA_DIR))
+        os.makedirs(lib.library_dir, exist_ok=True)
+        with open(os.path.join(lib.library_dir, file), "wb") as f:
+            f.write(b"%PDF-1.4")
+        return lib
+
+    def test_it_asks_the_os_to_select_that_file(self, client, monkeypatch):
+        seen = {}
+
+        import subprocess
+        monkeypatch.setattr(subprocess, "Popen", lambda args, **kw: seen.setdefault("args", args))
+
+        lib = self._put()
+        r = client.post("/api/resume/library/a.pdf/reveal")
+        assert r.status_code == 200
+        args = seen["args"]
+        assert isinstance(args, list), "必须用 list 形式，不能拼 shell 字符串"
+        assert any("a.pdf" in str(x) for x in args)
+        assert any(lib.library_dir.replace("/", "\\") in str(x).replace("/", "\\")
+                   for x in args), args
+
+    def test_a_missing_file_is_404_and_runs_nothing(self, client, monkeypatch):
+        import subprocess
+        called = []
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: called.append(a))
+
+        assert client.post("/api/resume/library/nope.pdf/reveal").status_code == 404
+        assert called == [], "文件不存在就不该去动系统命令"
+
+    def test_a_traversing_filename_is_refused(self, client, monkeypatch):
+        import subprocess
+        called = []
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: called.append(a))
+
+        r = client.post("/api/resume/library/..%2F..%2Fsecret.pdf/reveal")
+        assert r.status_code in (400, 404)
+        assert called == []
+
+
 class TestClearOneSitesManual:
     """删掉一个站的操作手册，逼下一次 m1 重新勘察。
 

@@ -888,6 +888,10 @@ export const API = {
     fd.append('file', f)
     return requestJson('/api/resume/library/upload', { method: 'POST', body: fd })
   },
+  // 在系统文件管理器里定位到这份简历。这是个装在自己机器上的应用，
+  // 文件本来就在磁盘上——再下载一份到 Downloads 里没有意义。
+  revealResumeLibraryItem: (fname: string): Promise<{ ok: boolean; path: string }> =>
+    requestJson(`/api/resume/library/${encodeURIComponent(fname)}/reveal`, { method: 'POST' }),
   deleteResumeLibraryItem: (fname: string): Promise<{ ok: boolean }> =>
     requestJson(`/api/resume/library/${encodeURIComponent(fname)}`, { method: 'DELETE' }),
   getResumeTemplates: (): Promise<ResumeTemplate[]> =>
