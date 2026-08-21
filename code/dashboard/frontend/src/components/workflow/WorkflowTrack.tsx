@@ -3,58 +3,18 @@ import { API } from '@/api'
 import { useAppContext } from '@/context/app-context'
 import type { ProgressEvent } from '@/hooks/useWorkflowStream'
 import DevLabel from '@/components/dev/DevLabel'
+import { useWorkflowSkeleton } from '@/hooks/useWorkflowSkeleton'
 import { STEP_LABELS, SKIP_REASON_LABELS, interpretEvent } from './interpret'
 import MultisiteRunView from './MultisiteRunView'
 
-// Static step -> tools template, mirrors the registry.call() sites in the
-// pipeline step files (source of truth: pipeline/w1/**, pipeline/w2/**).
-// Rendered as a gray skeleton when a workflow is idle (no live events), so the
-// structure is visible without a run. Superset of conditionally-called tools.
-const SKELETON: Record<string, Record<string, string[]>> = {
-  w1: {
-    navigate: ['navigate_search_url'],
-    scan: ['verify_current_url', 'extract_card_list', 'scroll_search_results'],
-    fetch_jd: ['click_card_open_panel', 'read_panel_jd', 'decode_job_salary', 'score_job'],
-    apply: ['click_apply_button', 'handle_apply_dialog'],
-    upsert: ['upsert_application'],
-  },
-  w2: {
-    scan: [
-      'navigate_to_chat_list',
-      'verify_current_url',
-      'extract_conversation_list',
-      'scroll_chat_list',
-      'get_approved_replies',
-      'get_conversation_states',
-    ],
-    navigate: ['navigate_to_conversation'],
-    read: ['read_messages', 'write_hr_messages'],
-    analyze: ['detect_resume_request', 'analyze_hr_intent', 'update_hr_analysis'],
-    resume: ['accept_resume_card', 'click_toolbar_send_resume'],
-    finalize: ['sync_application_status_from_conversations'],
-  },
-  w3: {
-    scan: ['get_approved_replies', 'navigate_to_chat_list'],
-    locate: ['navigate_to_conversation', 'search_locate_conversation'],
-    send: ['send_chat_message'],
-    verify: ['read_messages', 'write_hr_messages', 'mark_reply_sent'],
-  },
-}
-
-// Run-level steps (run once per run, scope={}) vs per-instance loop steps.
-// Source of truth: pipeline/w{1,2,3}/*.py \u2014 run-level = NavigateStep / ScanStep /
-// FinalizeStep, called OUTSIDE the card/conversation loop; loop steps run once
-// per job (CardPipeline) or per conversation (ConversationPipeline / SendReplyPipeline).
-const RUN_STEPS: Record<string, string[]> = {
-  w1: ['navigate', 'scan'],
-  w2: ['scan', 'finalize'],
-  w3: ['scan'],
-}
-const LOOP_STEPS: Record<string, string[]> = {
-  w1: ['fetch_jd', 'apply', 'upsert'],
-  w2: ['navigate', 'read', 'analyze', 'resume'],
-  w3: ['locate', 'send', 'verify'],
-}
+// W1/W2/W3 的步骤骨架**不再抄在这里**——从后端 /api/workflow/skeleton 拉
+// （`useWorkflowSkeleton`）。抄的那份烂过：W3 少了 4 个步骤、W2 少了 wechat，
+// 而且不会报错。后端那份由 tests/test_pipeline_skeleton.py 双向盯着源码。
+//
+// **每步会调哪些工具也不再预先声明**：一个 pipeline 文件里可能有好几个
+// set_context，工具归哪一步靠静态分析分不出来，而手维护的列表会说谎
+// （`fetch_jd` 里挂着一个早就搬走的 score_job，永远显示"待运行"）。
+// 现在只显示**实际观测到的**工具——空闲态本来就不知道会调什么。
 
 // Per-workflow run summary chips (keys match pipeline/w{1,2}/pipeline.py summary dict).
 // W1: \u67e5\u770b(cards_viewed) \u2192 \u6253\u5206(scored) \u2192 \u6295\u9012(applied) \u2192 \u8df3\u8fc7(skipped) \u2014\u2014 the
@@ -205,7 +165,8 @@ function dotCls(status: string): string {
 
 // Render a given set of steps (step\u2192tool, real per-tool messages) for one
 // instance: a loop instance (job / conversation) or the run-level `__run__`
-// instance. `stepKeys` selects which steps to show (RUN_STEPS vs LOOP_STEPS), so
+// instance. `stepKeys` selects which steps to show (run-level vs loop-level, from
+// /api/workflow/skeleton), so
 // Open a job's Boss detail page in the shared automation browser (the one logged
 // into Boss). Reuses POST /api/browse, which 409s while a workflow runs (the single
 // login profile is locked by the run) \u2014 hence disabled when workflowRunning, matching
@@ -249,7 +210,6 @@ function InstanceDetail({
   workflow: string
   stepKeys: string[]
 }) {
-  const skeleton = SKELETON[workflow] || {}
   const instSteps = inst?.steps ?? new Map<string, StepNode>()
   return (
     <div className="overflow-hidden rounded-xl" style={{ border: '1px solid rgba(255,255,255,0.05)' }}>
@@ -288,7 +248,7 @@ function InstanceDetail({
       {stepKeys.map((stepKey) => {
         const st = instSteps.get(stepKey)
         const sStatus = st?.status ?? 'pending'
-        const toolKeys = [...new Set([...(skeleton[stepKey] ?? []), ...(st?.tools.keys() ?? [])])]
+        const toolKeys = [...(st?.tools.keys() ?? [])]
         return (
           <div
             key={stepKey}
@@ -625,28 +585,29 @@ function TreeRunView({
   const tree = useMemo(() => buildTree(events, workflowId), [events, workflowId])
   const runInst = useMemo(() => tree.find((i) => i.key === RUN_KEY) ?? null, [tree])
   // Run meta (who launched it + params), from the 'start' event detail.
+  const skeleton = useWorkflowSkeleton()
   const startDetail = (runInst?.steps.get('start')?.detail ?? {}) as Record<string, unknown>
   const trigger = typeof startDetail.trigger === 'string' ? startDetail.trigger : ''
   const runParams = formatRunParams(workflowId, (startDetail.params ?? {}) as Record<string, unknown>)
   // Loop cards = instances that actually entered the per-job/conversation loop (have
-  // at least one LOOP_STEPS node). Finalize-stage bulk closures (conv_timeout_closed /
+  // at least one loop-level node). Finalize-stage bulk closures (conv_timeout_closed /
   // job_no_response_rejected) carry a conv_id/job_id scope but never looped, so they
   // are excluded here and summarized via closedCount instead of flooding the list.
   const cards = useMemo(() => {
-    const loop = LOOP_STEPS[workflowId] ?? []
+    const loop = skeleton.loop_steps[workflowId] ?? []
     return tree
       .filter((i) => i.key !== RUN_KEY && loop.some((s) => i.steps.has(s)))
       .sort((a, b) => b.lastTs - a.lastTs)
-  }, [tree, workflowId])
+  }, [tree, workflowId, skeleton])
   const closedCount = useMemo(() => {
-    const loop = LOOP_STEPS[workflowId] ?? []
+    const loop = skeleton.loop_steps[workflowId] ?? []
     return tree.filter(
       (i) =>
         i.key !== RUN_KEY &&
         !loop.some((s) => i.steps.has(s)) &&
         (i.steps.has('conv_timeout_closed') || i.steps.has('job_no_response_rejected')),
     ).length
-  }, [tree, workflowId])
+  }, [tree, workflowId, skeleton])
   const processed = cards.length
   // The detail panel shows `activeKey`: the manually-selected instance, else
   // auto-follows the latest card so the right side tracks what's processing now.
@@ -691,7 +652,7 @@ function TreeRunView({
           {'\u672c\u6b21\u8fd0\u884c \u00b7 \u975e\u5faa\u73af'}
           <DevLabel name="RunSteps" />
         </p>
-        <InstanceDetail inst={runInst} workflow={workflowId} stepKeys={RUN_STEPS[workflowId] ?? []} />
+        <InstanceDetail inst={runInst} workflow={workflowId} stepKeys={skeleton.run_steps[workflowId] ?? []} />
       </div>
 
       {/* Loop: left = instance list, right = selected/auto-followed instance detail. */}
@@ -745,7 +706,7 @@ function TreeRunView({
             )}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <InstanceDetail inst={activeInst} workflow={workflowId} stepKeys={LOOP_STEPS[workflowId] ?? []} />
+            <InstanceDetail inst={activeInst} workflow={workflowId} stepKeys={skeleton.loop_steps[workflowId] ?? []} />
           </div>
         </div>
       </div>
@@ -955,7 +916,7 @@ const TABS = [
   { id: 'w1', badge: 'W1', title: '\u6295\u9012\u6d41\u7a0b' },
   { id: 'w2', badge: 'W2', title: '\u56de\u590d\u626b\u63cf' },
   { id: 'w3', badge: 'W3', title: '\u53d1\u9001\u56de\u590d' },
-  // \u591a\u7ad9\u70b9 Layer 1\u3002SKELETON / LOOP_STEPS / RUN_STEPS \u90fd\u6ca1\u7ed9\u5b83\u4eec\u5199\u6761\u76ee\uff0c
+  // 多站点 Layer 1。后端的步骤骨架里没有它们的条目，
   // \u90a3\u51e0\u5f20\u8868\u662f\u624b\u7ef4\u62a4\u7684\u9759\u6001\u6a21\u677f\uff08\u5df2\u7ecf\u56e0\u4e3a\u6f02\u79fb\u8bb0\u8fc7\u4e00\u6b21\u6848\uff09\uff0c
   // \u7559\u7a7a = \u53ea\u663e\u793a\u771f\u5b9e\u6536\u5230\u7684\u4e8b\u4ef6\uff0c\u4ee5\u540e\u8981\u505a\u8be6\u7ec6\u9aa8\u67b6\u518d\u5f80\u91cc\u586b\u3002
   { id: 'm1', badge: 'M1', title: '\u591a\u7ad9\u9009\u5c97' },

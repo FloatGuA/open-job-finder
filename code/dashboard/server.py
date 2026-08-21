@@ -593,6 +593,23 @@ async def get_run_artifact(run_id: str, name: str):
     return FileResponse(str(path), media_type=media)
 
 
+@app.get("/api/workflow/skeleton")
+async def get_workflow_skeleton() -> JSONResponse:
+    """W1/W2/W3 有哪些步骤、每步是 run 级还是循环级——前端空闲态骨架的数据源。
+
+    **从后端导出，不手抄**：前端原来抄了一份，抄的东西会烂——2026-08-21 对着代码
+    核出 W3 少了 4 个步骤（freshness/detect/resume/upsert）、W2 少了 wechat。
+    这种烂法不会报错：少登记一个步骤，那一步在空闲态就是不存在，跑起来才冒出来。
+    现在 `tests/test_pipeline_skeleton.py` 双向盯着声明与源码。
+
+    **不含"每步会调哪些工具"**：一个文件里可能有好几个 set_context，工具归哪一步
+    靠静态分析分不出来。前端改成只显示实际观测到的工具——空闲态本来就不知道会调
+    什么，装作知道比不显示更糟。
+    """
+    from pipeline.skeleton import LOOP_STEPS, RUN_STEPS, STEPS
+    return JSONResponse({"steps": STEPS, "run_steps": RUN_STEPS, "loop_steps": LOOP_STEPS})
+
+
 @app.get("/api/multisite/stages")
 async def get_multisite_stages() -> JSONResponse:
     """m1/m2 的 LangGraph 节点顺序——前端第 2 层「地铁站」的骨架。

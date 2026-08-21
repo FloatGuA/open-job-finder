@@ -1118,6 +1118,13 @@ export const API = {
   clearSiteCandidates: (site: string): Promise<{ deleted: number; site: string }> =>
     requestJson(`/api/checkpoint1/sites/${encodeURIComponent(site)}/jobs`, { method: 'DELETE' }),
 
+  // W1/W2/W3 的步骤骨架。**从后端导出，不在前端手抄**——抄的那份烂过：
+  // W3 少了 4 个步骤、W2 少了 wechat，而且不会报错（少登记的步骤在空闲态就是不存在）。
+  workflowSkeleton: (): Promise<{
+    steps: Record<string, string[]>
+    run_steps: Record<string, string[]>
+    loop_steps: Record<string, string[]>
+  }> => requestJson('/api/workflow/skeleton'),
   multisiteStages: (): Promise<{ m1: string[]; m2: string[]; max_steps?: number }> =>
     requestJson('/api/multisite/stages'),
   getOpsArtifacts: (): Promise<OpsArtifactsResponse> =>
