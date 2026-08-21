@@ -949,6 +949,10 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
   const [resumes, setResumes] = useState<ResumeIndex | null>(null)
   const [libItems, setLibItems] = useState<ResumeLibraryItem[]>([])
   const [libFallback, setLibFallback] = useState('')
+  // **加载失败必须跟「库真的空了」长得不一样。** 原来这里是 `.catch(() => {})`，
+  // 于是端点 404（比如后端没重启）时页面显示「库是空的」——跟真的空一模一样，
+  // 而用户没有任何办法看出区别。真机撞到过：文件在磁盘上、页面说空的。
+  const [libError, setLibError] = useState('')
   const [busy, setBusy] = useState(false)
   const [aiOn, setAiOn] = useState(() => window.localStorage.getItem('resume.aiCompose') === 'on')
   const [jobTitle, setJobTitle] = useState('')
@@ -969,8 +973,8 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
       if (!previewSlug && r.active) showPreview(r.active)
     }).catch((e) => onErr((e as Error).message))
     void API.getResumeLibrary()
-      .then((r) => { setLibItems(r.items); setLibFallback(r.fallback) })
-      .catch(() => {})
+      .then((r) => { setLibItems(r.items); setLibFallback(r.fallback); setLibError('') })
+      .catch((e) => setLibError((e as Error).message || '\u8bf7\u6c42\u5931\u8d25'))
   }
   useEffect(refresh, [])
 
@@ -1078,7 +1082,12 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
             }} />
         </label>
       }>
-        {libItems.length === 0 ? (
+        {libError ? (
+          <p className="rounded-lg px-2.5 py-2 text-[11px]"
+            style={{ background: 'rgba(255,69,58,0.12)', color: '#ff453a' }}>
+            {'\u7b80\u5386\u5e93\u6ca1\u52a0\u8f7d\u51fa\u6765\uff08\u4e0d\u662f\u5e93\u7a7a\uff09\uff1a'}{libError}
+            {'\u3002\u540e\u7aef\u521a\u6539\u8fc7\u7684\u8bdd\u5148\u91cd\u542f\u4e00\u4e0b\u3002'}</p>
+        ) : libItems.length === 0 ? (
           <p className="text-[11px] text-text-3">{'\u5e93\u662f\u7a7a\u7684\u3002\u5728\u5de5\u4f5c\u53f0\u70b9\u300c\u5bfc\u51fa PDF\u300d\uff0c\u6216\u628a\u4f60\u5728\u522b\u5904\u505a\u597d\u7684\u7b80\u5386\u4e0a\u4f20\u8fdb\u6765\u3002'}</p>
         ) : (
           <div className="space-y-2">
