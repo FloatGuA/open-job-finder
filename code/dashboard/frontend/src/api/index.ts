@@ -135,6 +135,13 @@ export interface PendingApplication {
   // 表单整页截图的文件名（由代码拍，不是 agent——DeepSeek 没有视觉）。
   // 空串 = 没拍（没有需要补的字段）。
   screenshot: string
+  // 这条填表记录来自 Checkpoint 1 的哪个岗位（1:N）。null = 走的是 --job-url
+  // 调试路径，岗位没经过选岗/审批——是诚实的空，不是缺数据。
+  // **后端一直在发这个字段，是前端类型漏了**（写 Checkpoint 2 的测试时 TS 报出来的）。
+  source_job_id: number | null
+  // 这次实际传上去的是简历库里的哪个文件（data/resumes/library/ 下的文件名）。
+  // 空串 = 没这个信息（老记录，或不传简历的路径）——诚实的空，不是发了个空简历。
+  resume_file: string
 }
 
 export interface PendingJob {

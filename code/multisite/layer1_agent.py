@@ -1142,6 +1142,11 @@ def record_application(tracker, state: dict, personal_info: dict) -> dict:
         # 来自 Checkpoint 1 的哪个岗位。None = 走的是 --job-url 调试路径（岗位没
         # 经过选岗/审批），是诚实的空，不是缺数据。
         source_job_id=state.get("source_job_id"),
+        # 这次实际传上去的是哪一份。**从交给 upload_file 的那个值取**——暂存路径的
+        # basename 就是库里的文件名（staged_resume 保留原名）。重新去库里 pick
+        # 一次就是同一件事两份实现，而两次之间兜底/勾选都可能已经变了，
+        # 那时落库的和真正发出去的就对不上——而这条记录存在的全部意义就是事后对账。
+        resume_file=os.path.basename(state.get("resume_pdf_path") or ""),
     )
     return {"pending_application_id": app_id}
 

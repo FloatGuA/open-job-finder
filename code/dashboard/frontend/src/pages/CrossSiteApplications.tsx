@@ -47,6 +47,7 @@ const T_C1_OPEN = '\u6253\u5f00\u5c97\u4f4d\u9875'
 const T_C1_JD = '\u5c97\u4f4d\u539f\u6587'
 const T_SITE_MANUAL = '\u7ad9\u70b9\u624b\u518c'
 const T_CLEAR_SITE = '\u6e05\u6389\u5019\u9009'
+const T_C2_RESUME = '\u4f20\u7684\u7b80\u5386'
 const T_RESURVEY = '\u91cd\u65b0\u52d8\u5bdf'
 const T_RESURVEY_CONFIRM = '\u786e\u8ba4\u4f5c\u5e9f\uff1f'
 const T_RESURVEY_HINT = '\u4f5c\u5e9f\u8fd9\u4efd\u624b\u518c\uff0c\u4e0b\u4e00\u6b21 m1 \u4f1a\u91cd\u65b0\u52d8\u5bdf\u7ad9\u70b9\u7ed3\u6784\u3002\u5019\u9009\u6c60\u4e0d\u52a8\u3002\u624b\u518c\u91cc\u7684\u201c\u591a\u9009\u8fd8\u662f\u4e92\u65a5\u201d\u8fd9\u7c7b\u5224\u65ad\u53ef\u80fd\u662f\u9519\u7684\uff0c\u800c\u8f7b\u6821\u9a8c\u53d1\u73b0\u4e0d\u4e86'
@@ -1368,6 +1369,16 @@ function Checkpoint2() {
                 <div className="mt-1 flex items-center gap-2 text-[13.5px] text-text-3">
                   <span className="rounded px-1.5 py-px font-mono" style={{ background: 'rgba(255,255,255,0.06)' }}>{selected.site_name}</span>
                   {selected.company && <span>{selected.company}</span>}
+                  {/* 这次实际传上去的是哪一份。审批人要判断的是"这份申请能不能提交"，
+                      而发出去的是哪份简历跟填的字段同等重要——库里可能勾了好几份，
+                      兜底也会改。空串不显示：那是诚实的空，不是发了个空简历。 */}
+                  {selected.resume_file && (
+                    <span className="truncate" title={selected.resume_file}>
+                      {T_C2_RESUME}
+                      {'\uff1a'}
+                      {selected.resume_file.replace(/\.pdf$/i, '')}
+                    </span>
+                  )}
                 </div>
               </div>
               {selected.job_url && (

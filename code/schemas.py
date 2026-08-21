@@ -115,6 +115,11 @@ class PendingApplication:
     reason: Optional[str] = None
     created_at: str = ""
     decided_at: Optional[str] = None
+    # 这次实际传上去的是简历库里的哪个**文件名**（`data/resumes/library/` 下）。
+    # 存文件名不存显示名：显示名可以随时改，文件名标识的是那次真正传出去的字节流。
+    # 空串 = 没有这个信息（老记录，或没传简历的路径）——**是诚实的空，不是缺数据**。
+    # 事后核对"当时发的是哪一份"只能靠它：库的内容会变、兜底会改、run 日志会滚动。
+    resume_file: str = ""
     # 表单整页截图的文件名（相对 data/multisite_screenshots/）。**由代码拍，不是
     # agent** —— DeepSeek 没有视觉，take_screenshot 也不在它的工具白名单里；这张图
     # 是给审批人看的：字段名本身常常不足以判断该填什么（"学校名称"是问本科还是

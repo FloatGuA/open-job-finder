@@ -258,6 +258,12 @@ class ApplicationTracker:
             # label alone is often not enough to decide ("学校名称" -- 本科 or 硕士?).
             if "screenshot" not in pa_cols:
                 self.conn.execute("ALTER TABLE pending_applications ADD COLUMN screenshot TEXT")
+            # Migration: which resume file was actually uploaded (a filename under
+            # data/resumes/library/). Without it, "which one did we send?" is only
+            # answerable from run logs -- and those roll over, while the library's
+            # contents and the fallback choice both change over time.
+            if "resume_file" not in pa_cols:
+                self.conn.execute("ALTER TABLE pending_applications ADD COLUMN resume_file TEXT")
 
             # pending_jobs: Checkpoint 1 -- candidates the selection agent found,
             # awaiting human approval before anything touches an application form.
@@ -1282,6 +1288,9 @@ class ApplicationTracker:
             created_at=row["created_at"],
             decided_at=row["decided_at"],
             screenshot=row["screenshot"] or "",
+            # 老库可能还没这一列（迁移是在同一次 __init__ 里做的，但读行代码
+            # 也可能被别的路径拿到未迁移的连接）——按 keys() 判，缺了当空串。
+            resume_file=(row["resume_file"] or "") if "resume_file" in row.keys() else "",
             source_job_id=row["source_job_id"],
         )
 
@@ -1294,6 +1303,7 @@ class ApplicationTracker:
         job_url: str = "",
         source_job_id: Optional[int] = None,
         screenshot: str = "",
+        resume_file: str = "",
     ) -> int:
         """Insert a new Layer 1 candidate awaiting Layer 2 approval. Returns the new id."""
         with self.conn:
@@ -1301,11 +1311,11 @@ class ApplicationTracker:
                 """
                 INSERT INTO pending_applications
                     (site_name, job_title, company, job_url, fields, status, created_at,
-                     source_job_id, screenshot)
-                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                     source_job_id, screenshot, resume_file)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
                 """,
                 (site_name, job_title, company, job_url, json.dumps(fields, ensure_ascii=False),
-                 self._utcnow_iso(), source_job_id, screenshot),
+                 self._utcnow_iso(), source_job_id, screenshot, resume_file),
             )
             return cur.lastrowid
 
