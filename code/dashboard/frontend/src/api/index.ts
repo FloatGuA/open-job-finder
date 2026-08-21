@@ -163,7 +163,8 @@ export interface PendingJob {
   // 批准这个岗位之后会发哪一份简历。后端用 resume_matcher.pick_resume 算出，
   // 前端绝不自己另算一遍——审批页显示的和实际发出去的必须是同一份判断。
   // slug='' = 一份简历都没有；matched=false = 没对上、按当前激活份兜底。
-  resume: { slug: string; name: string; matched: boolean; reason: string; pdf_state: ResumePdfState }
+  // 批了会发哪一份。file 为空＝没有可发的（没匹配上且没指定兜底，或都没勾允许发送）。
+  resume: { file: string; name: string; matched: boolean; reason: string; state: ResumePdfState }
 }
 
 export interface SiteLimitInfo {
@@ -642,10 +643,19 @@ export interface ResumeIndex {
   active: string
   items: ResumeMeta[]
 }
-export interface ResumeExport {
+// 简历库里的一份 PDF。库＝data/resumes/library/，装所有能往外发的简历：
+// 系统导出的（source='exported'，带源简历 slug）和你自己放进去的（source='dropped'）。
+// 两者平起平坐——填了 target 就一样参与自动匹配。
+export interface ResumeLibraryItem {
   file: string
+  name: string
+  target: string          // 目标岗位关键词，空＝不参与自动匹配
+  allow_send: boolean     // 人工授权：勾了才允许被自动发出去
+  source: 'exported' | 'dropped'
+  slug: string            // 源简历（仅 exported 有），用来判断 PDF 是不是旧内容
   size: number
-  mtime: string
+  added_at: string
+  state: 'ready' | 'stale'  // stale＝源简历改过之后没重新导出，传出去是旧内容
 }
 export interface PoolSnapshot {
   file: string
@@ -855,9 +865,31 @@ export const API = {
   deleteResume: (slug: string): Promise<{ ok: boolean }> =>
     requestJson(`/api/resumes/${slug}`, { method: 'DELETE' }),
   // \u6700\u8fd1\u751f\u6210\uff08\u5bfc\u51fa\u5b58\u6863\uff09
-  getResumeExports: (): Promise<{ exports: ResumeExport[] }> => requestJson('/api/resume/exports'),
-  deleteResumeExport: (fname: string): Promise<{ ok: boolean }> =>
-    requestJson(`/api/resume/exports/${encodeURIComponent(fname)}`, { method: 'DELETE' }),
+  getResumeLibrary: (): Promise<{ items: ResumeLibraryItem[]; fallback: string }> =>
+    requestJson('/api/resume/library'),
+  updateResumeLibraryItem: (
+    file: string,
+    patch: { name?: string; target?: string; allow_send?: boolean },
+  ): Promise<ResumeLibraryItem> =>
+    requestJson(`/api/resume/library/${encodeURIComponent(file)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+  // 兜底那份：岗位匹配不上任何一份时发它。传空串＝不指定（匹配不上就拒发）。
+  setResumeLibraryFallback: (file: string): Promise<{ ok: boolean }> =>
+    requestJson('/api/resume/library/fallback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file }),
+    }),
+  uploadResumeToLibrary: (f: File): Promise<ResumeLibraryItem> => {
+    const fd = new FormData()
+    fd.append('file', f)
+    return requestJson('/api/resume/library/upload', { method: 'POST', body: fd })
+  },
+  deleteResumeLibraryItem: (fname: string): Promise<{ ok: boolean }> =>
+    requestJson(`/api/resume/library/${encodeURIComponent(fname)}`, { method: 'DELETE' }),
   getResumeTemplates: (): Promise<ResumeTemplate[]> =>
     requestJson<{ templates: ResumeTemplate[] }>('/api/resume/templates').then((r) => r.templates),
   saveResumeTemplates: (templates: ResumeTemplate[]): Promise<{ ok: boolean }> =>

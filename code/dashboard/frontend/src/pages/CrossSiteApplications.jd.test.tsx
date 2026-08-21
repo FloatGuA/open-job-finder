@@ -30,7 +30,7 @@ function job(overrides: Partial<PendingJob> = {}): PendingJob {
     decided_at: null,
     is_golden: false,
     bucket: '',
-    resume: { slug: 'a', name: '\u540e\u7aef\u7248', matched: true, reason: '', pdf_state: 'ready' },
+    resume: { file: 'a.pdf', name: '\u540e\u7aef\u7248', matched: true, reason: '', state: 'ready' },
     ...overrides,
   }
 }

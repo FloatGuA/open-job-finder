@@ -851,7 +851,7 @@ function JobRow({
 
         <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px]">
           <span className="text-text-3">{T_RESUME_LABEL}</span>
-          {job.resume.slug ? (
+          {job.resume.file ? (
             <>
               <span
                 className={job.resume.matched ? 'text-text-2' : 'font-medium'}
@@ -868,7 +868,7 @@ function JobRow({
                   {T_RESUME_FALLBACK}
                 </span>
               )}
-              <ResumePdfPill state={job.resume.pdf_state} />
+              <ResumePdfPill state={job.resume.state} />
             </>
           ) : (
             <span className="font-semibold" style={{ color: '#ff453a' }}>{T_RESUME_NONE}</span>

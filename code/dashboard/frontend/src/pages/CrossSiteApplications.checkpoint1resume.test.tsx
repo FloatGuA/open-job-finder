@@ -25,7 +25,7 @@ function job(overrides: Partial<PendingJob> = {}): PendingJob {
     decided_at: null,
     is_golden: false,
     bucket: '',
-    resume: { slug: 'game01', name: '\u6e38\u620f\u5c97\u7248', matched: true, reason: '', pdf_state: 'ready' },
+    resume: { file: 'game01.pdf', name: '\u6e38\u620f\u5c97\u7248', matched: true, reason: '', state: 'ready' },
     ...overrides,
   }
 }
@@ -71,7 +71,7 @@ describe('Checkpoint 1 job row shows which resume will be sent', () => {
     mockJobs = [
       job({
         title: 'Ops Specialist',
-        resume: { slug: 'game01', name: '\u6e38\u620f\u5c97\u7248', matched: false, reason: 'no match', pdf_state: 'ready' },
+        resume: { file: 'game01.pdf', name: '\u6e38\u620f\u5c97\u7248', matched: false, reason: 'no match', state: 'ready' },
       }),
     ]
     render(<CrossSiteApplications />)
@@ -81,16 +81,16 @@ describe('Checkpoint 1 job row shows which resume will be sent', () => {
 
   it('makes a non-ready pdf state (e.g. missing) visible', async () => {
     mockJobs = [
-      job({ resume: { slug: 'game01', name: '\u6e38\u620f\u5c97\u7248', matched: true, reason: '', pdf_state: 'missing' } }),
+      job({ resume: { file: 'game01.pdf', name: '\u6e38\u620f\u5c97\u7248', matched: true, reason: '', state: 'missing' } }),
     ]
     render(<CrossSiteApplications />)
 
     expect(await screen.findByText('\u672a\u5bfc\u51fa')).not.toBeNull()
   })
 
-  it('renders gracefully when there is no resume at all (slug empty)', async () => {
+  it('renders gracefully when there is nothing sendable (file empty)', async () => {
     mockJobs = [
-      job({ resume: { slug: '', name: '', matched: false, reason: 'no resume', pdf_state: 'missing' } }),
+      job({ resume: { file: '', name: '', matched: false, reason: 'no resume', state: 'missing' } }),
     ]
     render(<CrossSiteApplications />)
 

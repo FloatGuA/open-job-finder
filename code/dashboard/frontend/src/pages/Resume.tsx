@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
-import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeExport, type PoolSnapshot, type FieldMarks, type PoolCurrent, type Job } from '@/api'
+import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeLibraryItem, type PoolSnapshot, type FieldMarks, type PoolCurrent, type Job } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
 import PoolDiffPanel from '@/components/PoolDiffPanel'
 
@@ -947,7 +947,8 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
   flushEdits: () => Promise<void>
 }) {
   const [resumes, setResumes] = useState<ResumeIndex | null>(null)
-  const [exportsList, setExportsList] = useState<ResumeExport[]>([])
+  const [libItems, setLibItems] = useState<ResumeLibraryItem[]>([])
+  const [libFallback, setLibFallback] = useState('')
   const [busy, setBusy] = useState(false)
   const [aiOn, setAiOn] = useState(() => window.localStorage.getItem('resume.aiCompose') === 'on')
   const [jobTitle, setJobTitle] = useState('')
@@ -967,7 +968,9 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
       setResumes(r)
       if (!previewSlug && r.active) showPreview(r.active)
     }).catch((e) => onErr((e as Error).message))
-    void API.getResumeExports().then((r) => setExportsList(r.exports)).catch(() => {})
+    void API.getResumeLibrary()
+      .then((r) => { setLibItems(r.items); setLibFallback(r.fallback) })
+      .catch(() => {})
   }
   useEffect(refresh, [])
 
@@ -1057,24 +1060,96 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
           {'\u65b0\u5efa\u7b80\u5386\u8bf7\u5230\u300c\u7b80\u5386\u5de5\u4f5c\u53f0\u300d\u2014\u2014\u7f16\u8f91\u597d\u5185\u5bb9\u540e\u70b9\u300c\u5b58\u4e3a\u65b0\u7b80\u5386\u300d\u3002'}</p>
       </Card>
 
-      <Card title={'\u6700\u8fd1\u751f\u6210'} dev="ResumeExports">
-        {exportsList.length === 0 ? (
-          <p className="text-[11px] text-text-3">{'\u8fd8\u6ca1\u6709\u5bfc\u51fa\u8bb0\u5f55\uff1b\u5728\u5de5\u4f5c\u53f0\u70b9\u300c\u5bfc\u51fa PDF\u300d\u540e\u4f1a\u5b58\u6863\u5728\u8fd9\u91cc\u3002'}</p>
+      {/* 简历库：一个文件夹装所有能往外发的 PDF。系统导出的会自动落进来，
+          你自己在别处做的直接拖进 data/resumes/library/ 或从这里上传。
+          填了「目标岗位」就参与自动匹配；勾了「允许发送」才可能被自动发出去。 */}
+      <Card title={'\u7b80\u5386\u5e93'} dev="ResumeLibrary" action={
+        <label className="cursor-pointer rounded-lg px-2 py-1 text-[11px] text-text-3 transition hover:bg-bg-card2 hover:text-text-1">
+          {'\u4e0a\u4f20 PDF'}
+          <input type="file" accept="application/pdf" className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (!f) return
+              void API.uploadResumeToLibrary(f)
+                .then(() => API.getResumeLibrary())
+                .then((r) => { setLibItems(r.items); setLibFallback(r.fallback) })
+                .catch((err) => onErr((err as Error).message))
+              e.target.value = ''
+            }} />
+        </label>
+      }>
+        {libItems.length === 0 ? (
+          <p className="text-[11px] text-text-3">{'\u5e93\u662f\u7a7a\u7684\u3002\u5728\u5de5\u4f5c\u53f0\u70b9\u300c\u5bfc\u51fa PDF\u300d\uff0c\u6216\u628a\u4f60\u5728\u522b\u5904\u505a\u597d\u7684\u7b80\u5386\u4e0a\u4f20\u8fdb\u6765\u3002'}</p>
         ) : (
-          <div className="space-y-1.5">
-            {exportsList.map((ex) => (
-              <div key={ex.file} className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
-                <a href={`/api/resume/exports/${encodeURIComponent(ex.file)}`} target="_blank" rel="noreferrer"
-                  className="min-w-0 flex-1 truncate text-[11px] text-signal-bright transition hover:brightness-125">{ex.file.replace(/\.pdf$/, '')}</a>
-                <span className="shrink-0 text-[11px] text-text-3">{ex.mtime}</span>
-                <span className="shrink-0 text-[10px] text-text-3">{Math.max(1, Math.round(ex.size / 1024))}{' KB'}</span>
-                <button type="button" title={'\u5220\u9664'}
-                  onClick={() => { void API.deleteResumeExport(ex.file).then(() => setExportsList((l) => l.filter((x) => x.file !== ex.file))).catch((e) => onErr((e as Error).message)) }}
-                  className="shrink-0 px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
+          <div className="space-y-2">
+            {libItems.map((it) => (
+              <div key={it.file} className="rounded-lg px-2.5 py-2" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <div className="flex items-center gap-2">
+                  <a href={`/api/resume/library/${encodeURIComponent(it.file)}`} target="_blank" rel="noreferrer"
+                    className="min-w-0 flex-1 truncate text-[12px] text-signal-bright transition hover:brightness-125"
+                    title={it.file}>{it.name}</a>
+                  {it.state === 'stale' && (
+                    <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+                      style={{ background: 'rgba(255,159,10,0.16)', color: '#ff9f0a' }}
+                      title={'\u6e90\u7b80\u5386\u6539\u8fc7\u4e4b\u540e\u6ca1\u91cd\u65b0\u5bfc\u51fa\u2014\u2014\u4f20\u51fa\u53bb\u7684\u662f\u65e7\u5185\u5bb9'}>
+                      {'\u65e7\u5185\u5bb9'}</span>
+                  )}
+                  <span className="shrink-0 text-[10px] text-text-3">
+                    {it.source === 'exported' ? '\u5bfc\u51fa' : '\u81ea\u5df1\u653e\u7684'}</span>
+                  <span className="shrink-0 text-[10px] text-text-3">{Math.max(1, Math.round(it.size / 1024))}{' KB'}</span>
+                  <button type="button" title={'\u5220\u9664'}
+                    onClick={() => {
+                      void API.deleteResumeLibraryItem(it.file)
+                        .then(() => API.getResumeLibrary())
+                        .then((r) => { setLibItems(r.items); setLibFallback(r.fallback) })
+                        .catch((e) => onErr((e as Error).message))
+                    }}
+                    className="shrink-0 px-1 text-text-3 transition hover:text-signal-red">{'\u2715'}</button>
+                </div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <input
+                    defaultValue={it.target}
+                    placeholder={'\u76ee\u6807\u5c97\u4f4d\uff08\u7528 / \u6216\u7a7a\u683c\u5206\u5f00\uff0c\u5982\uff1a\u6e38\u620f / \u7b56\u5212\uff09'}
+                    onBlur={(e) => {
+                      if (e.target.value === it.target) return
+                      void API.updateResumeLibraryItem(it.file, { target: e.target.value })
+                        .then(() => API.getResumeLibrary())
+                        .then((r) => setLibItems(r.items))
+                        .catch((err) => onErr((err as Error).message))
+                    }}
+                    className="min-w-0 flex-1 rounded-md bg-transparent px-2 py-1 text-[11px] text-text-2 outline-none"
+                    style={{ border: '1px solid rgba(255,255,255,0.10)' }} />
+                  <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[11px] text-text-2"
+                    title={'\u52fe\u4e86\u624d\u5141\u8bb8\u88ab\u81ea\u52a8\u53d1\u51fa\u53bb\u3002\u9ed8\u8ba4\u5173\u2014\u2014\u5f80\u5916\u53d1\u7684\u4e1c\u897f\u8981\u4eba\u786e\u8ba4'}>
+                    <input type="checkbox" checked={it.allow_send}
+                      onChange={(e) => {
+                        void API.updateResumeLibraryItem(it.file, { allow_send: e.target.checked })
+                          .then(() => API.getResumeLibrary())
+                          .then((r) => setLibItems(r.items))
+                          .catch((err) => onErr((err as Error).message))
+                      }}
+                      className="h-[14px] w-[14px] accent-[#30a14e]" />
+                    {'\u5141\u8bb8\u53d1\u9001'}
+                  </label>
+                  <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[11px] text-text-2"
+                    title={'\u5c97\u4f4d\u5339\u914d\u4e0d\u4e0a\u4efb\u4f55\u4e00\u4efd\u65f6\u53d1\u5b83\u3002\u4e0d\u6307\u5b9a\u7684\u8bdd\uff0c\u5339\u914d\u4e0d\u4e0a\u5c31\u62d2\u53d1'}>
+                    <input type="radio" name="lib-fallback" checked={libFallback === it.file}
+                      onChange={() => {
+                        void API.setResumeLibraryFallback(it.file)
+                          .then(() => setLibFallback(it.file))
+                          .catch((err) => onErr((err as Error).message))
+                      }}
+                      className="h-[14px] w-[14px] accent-[#ff9f0a]" />
+                    {'\u5151\u5e95'}
+                  </label>
+                </div>
               </div>
             ))}
           </div>
         )}
+        <p className="mt-3 border-t pt-3 text-[11px] text-text-3" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          {'\u6587\u4ef6\u5939\uff1adata/resumes/library/\u3002\u76f4\u63a5\u62f7\u8fdb\u53bb\u7684 PDF \u4e5f\u4f1a\u51fa\u73b0\u5728\u8fd9\u91cc\u3002'}
+          {'\u586b\u4e86\u76ee\u6807\u5c97\u4f4d\u624d\u53c2\u4e0e\u81ea\u52a8\u5339\u914d\uff1b\u52fe\u4e86\u5141\u8bb8\u53d1\u9001\u624d\u53ef\u80fd\u88ab\u81ea\u52a8\u53d1\u51fa\u53bb\u3002'}</p>
       </Card>
 
       <Card title={'AI \u81ea\u52a8\u5b9a\u5236\uff08\u5b9e\u9a8c\uff09'} dev="ResumeCompose" action={
