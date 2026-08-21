@@ -112,7 +112,7 @@ def _enqueue_via_dashboard(args, quotas) -> int:
     # 命中"显式指定优先"的分支，把闸门整个绕过去——同一件事两份实现、其中一份是旧
     # 规则，正是本函数原注释警告过的漂移。
     if args.resume:
-        params["resume_pdf_path"] = args.resume
+        params["resume_file"] = args.resume
 
     url = args.dashboard.rstrip("/") + "/api/workflow/queue"
     body = json.dumps({"workflow": workflow, "params": params}).encode("utf-8")
@@ -140,8 +140,9 @@ def main() -> int:
     entry.add_argument("--job-url", help="直接指定一个岗位详情页 URL，跳过选岗（调试/复现用）")
     parser.add_argument("--site", required=True, help="站点标识（如 huawei / bambulab），决定用哪个持久化登录目录")
     parser.add_argument("--resume", default=None,
-                        help="简历 PDF 路径。**不给就由队列按岗位自动选**（并校验 PDF 不旧于简历）；"
-                             "给了就绕过那道闸门，只在调试时用")
+                        help="简历库里的**文件名**（不是路径），比如 my_resume.pdf。"
+                             "不给就由队列按岗位自动选。"
+                             "**库外的文件一律拒绝**——它没经过「允许发送」那层授权")
     parser.add_argument("--headless", action="store_true", help="无头模式（仅在已确认登录态持久化后使用）")
     parser.add_argument("--max-pages", type=int, default=8,
                         help="每个分类桶最多翻几页（默认 8）")

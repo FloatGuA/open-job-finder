@@ -202,6 +202,30 @@ class OrchestrationService:
         return (f"选岗完成：找到 {len(found)} 个，新入库 {len(new_ids)} 条待审批",
                 {"found": len(found), "new": len(new_ids)})
 
+    def _resume_from_library(self, file: str) -> str:
+        """按文件名从简历库取一份，用于「这一次就发这份」。
+
+        **库外的文件一律拒绝**：它没经过「允许发送」那层人工授权。
+        没勾允许发送的也拒绝——否则显式指定就成了绕过授权的后门。
+        """
+        from services.resume_library import ResumeLibrary
+
+        lib = ResumeLibrary(str(self._data_dir))
+        try:
+            path = lib.path_of(file)
+        except ValueError:
+            raise ValueError(
+                f"resume_file 只能是简历库里的文件名（不是路径）：收到 {file!r}。"
+                f"库在 data/resumes/library/")
+        it = next((i for i in lib.list() if i["file"] == file), None)
+        if it is None:
+            raise ValueError(f"简历库里没有 {file!r}——把它放进 data/resumes/library/ 再试")
+        if not it["allow_send"]:
+            raise ValueError(
+                f"「{it['name']}」没有勾「允许发送」。显式指定不能绕过这层授权——"
+                f"去简历页勾上，或换一份")
+        return path
+
     def _resume_for(self, job) -> str:
         """这个岗位该发哪一份简历的 PDF。选不出可用的就**拒绝**，不凑合。
 
@@ -268,7 +292,12 @@ class OrchestrationService:
             # 没批准就填表 = 绕过 Checkpoint 1。这一层是队列的守门，不是 UI 的。
             raise ValueError(f"pending_job {job_id} 状态是 {job.status}，只有 approved 才能填表")
 
-        resume = str(overrides.get("resume_pdf_path") or "") or self._resume_for(job)
+        # **显式指定发哪一份，也必须是库里的一份**（用户 2026-08-21：「每个发简历的
+        # 地方都要收紧成同样的链路」）。原来这里收的是任意文件路径，于是一条命令就能
+        # 把库、把「允许发送」那层授权整个绕过去——而授权正是要的那层。
+        # 指定哪一份是合理的逃生口，"指定一个库外的文件"不是。
+        named = str(overrides.get("resume_file") or "")
+        resume = self._resume_from_library(named) if named else self._resume_for(job)
         state = asyncio.run(run_layer1(
             resume_pdf_path=resume,
             site_name=job.site_name,

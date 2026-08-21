@@ -240,16 +240,62 @@ class TestTheSendPathMatchesOnTheJd:
             f"实发路径喂给匹配器的不是 JD：{seen.get('jd_text')!r}"
 
 
-class TestExplicitOverride:
-    def test_an_explicitly_given_path_still_wins(self, service, tracker, data_dir,
-                                                 captured, tmp_path):
-        """显式指定路径是**调试逃生口**，不是自动回退——它由人给出，不是系统在
-        失败时偷偷改道。"""
-        pdf = tmp_path / "manual.pdf"
-        pdf.write_bytes(b"%PDF-1.4")
+class TestExplicitOverrideStaysInsideTheLibrary:
+    """显式指定发哪一份，**也必须是库里的一份**（用户 2026-08-21 定：
+    「每个发简历的地方都要收紧成同样的链路」）。
+
+    原来它收的是**任意文件路径**，于是一条命令就能把库、把「允许发送」那层授权
+    整个绕过去——而授权正是用户要的东西。指定哪一份是个合理的逃生口，
+    "指定一个库外的文件"不是。
+
+    Boss 直聘的站内简历不在此列：那份文件在 Boss 的存储里，我们根本不提供字节。
+    """
+
+    def test_naming_a_library_file_works(self, service, tracker, data_dir, captured):
         _put(data_dir, "game.pdf", target="游戏")
+        _put(data_dir, "agent.pdf", target="AI Agent")
 
         service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发"),
-                                     "resume_pdf_path": str(pdf)})
+                                     "resume_file": "agent.pdf"})
 
-        assert captured[0]["resume_pdf_path"] == str(pdf)
+        assert "agent.pdf" in captured[0]["resume_pdf_path"], "没听指定的那一份"
+
+    def test_it_overrides_the_match(self, service, tracker, data_dir, captured):
+        """指定了就以指定的为准——它是人给出的，不是系统在失败时偷偷改道。"""
+        _put(data_dir, "game.pdf", target="游戏 客户端")
+        _put(data_dir, "agent.pdf", target="AI Agent")
+
+        service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发"),
+                                     "resume_file": "agent.pdf"})
+
+        assert "agent.pdf" in captured[0]["resume_pdf_path"]
+
+    def test_a_file_outside_the_library_is_refused(self, service, tracker, data_dir,
+                                                   captured, tmp_path):
+        """**这是这一条的重点。** 库外的文件没有经过「允许发送」那层授权。"""
+        outside = tmp_path / "manual.pdf"
+        outside.write_bytes(b"%PDF-1.4")
+        _put(data_dir, "agent.pdf", target="AI Agent")
+
+        with pytest.raises(ValueError) as exc:
+            service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发"),
+                                         "resume_file": str(outside)})
+        assert "库" in str(exc.value)
+        assert captured == []
+
+    def test_an_unticked_library_file_is_refused(self, service, tracker, data_dir, captured):
+        """在库里但没勾「允许发送」，指定它也不行——否则显式指定就成了绕过授权的后门。"""
+        _put(data_dir, "game.pdf", target="游戏", allow_send=False)
+        _put(data_dir, "agent.pdf", target="AI Agent")
+
+        with pytest.raises(ValueError):
+            service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发"),
+                                         "resume_file": "game.pdf"})
+        assert captured == []
+
+    def test_an_unknown_file_is_refused(self, service, tracker, data_dir, captured):
+        _put(data_dir, "agent.pdf", target="AI Agent")
+        with pytest.raises(ValueError):
+            service._run_multisite_fill({"pending_job_id": _approved_job(tracker, "游戏客户端开发"),
+                                         "resume_file": "nope.pdf"})
+        assert captured == []

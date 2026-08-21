@@ -187,20 +187,34 @@ class TestSelectPassthrough:
 
 
 class TestFillPassthrough:
+    """这几条关心的是 job 的字段有没有一路传到底，不是简历怎么选。
+    但 m2 现在**必须**拿到一份库里的、勾了「允许发送」的简历才肯跑——
+    所以先往库里放一份，而不是像以前那样塞一个任意路径绕过去。"""
+
+    @pytest.fixture(autouse=True)
+    def _a_sendable_resume(self, tmp_path):
+        import os
+
+        from services.resume_library import ResumeLibrary
+        lib = ResumeLibrary(str(tmp_path))
+        os.makedirs(lib.library_dir, exist_ok=True)
+        with open(os.path.join(lib.library_dir, "r.pdf"), "wb") as f:
+            f.write(b"%PDF-1.4")
+        lib.update_meta("r.pdf", name="r", target="", allow_send=True)
+        lib.set_fallback("r.pdf")
+
     def test_approved_job_runs_with_its_url(self, service, captured_run, tracker,
                                             tmp_path):
         job_id = tracker.add_pending_job(site_name="s", url="https://x/1", title="t")
         tracker.decide_pending_job(job_id, "approved")
-        service._run_multisite_fill({"pending_job_id": job_id,
-                                     "resume_pdf_path": str(tmp_path / "r.pdf")})
+        service._run_multisite_fill({"pending_job_id": job_id})
         assert captured_run[0]["job_url"] == "https://x/1"
 
     def test_unapproved_job_refused(self, service, captured_run, tracker, tmp_path):
         # 没批准就填表 = 绕过 Checkpoint 1。守门在队列这一层，不在 UI。
         job_id = tracker.add_pending_job(site_name="s", url="https://x/2", title="t")
         with pytest.raises(ValueError):
-            service._run_multisite_fill({"pending_job_id": job_id,
-                                         "resume_pdf_path": str(tmp_path / "r.pdf")})
+            service._run_multisite_fill({"pending_job_id": job_id})
         assert captured_run == []
 
     def test_approved_job_passes_title_company_and_source_id(self, service, captured_run,
@@ -214,8 +228,7 @@ class TestFillPassthrough:
         job_id = tracker.add_pending_job(site_name="s", url="https://x/1",
                                          title="真实标题", company="真实公司")
         tracker.decide_pending_job(job_id, "approved")
-        service._run_multisite_fill({"pending_job_id": job_id,
-                                     "resume_pdf_path": str(tmp_path / "r.pdf")})
+        service._run_multisite_fill({"pending_job_id": job_id})
         kw = captured_run[0]
         assert kw["job_title"] == "真实标题"
         assert kw["company"] == "真实公司"
