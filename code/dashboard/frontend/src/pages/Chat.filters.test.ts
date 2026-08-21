@@ -16,6 +16,8 @@ import {
   WECHAT_FILTER,
   WECHAT_NUMBER_MARKER,
   convMatchesQuery,
+  jobTitleOptions,
+  matchesJobFilter,
   daysSinceContact,
   isQueuedForSend,
   isReplyApprovalVisible,
@@ -187,5 +189,54 @@ describe('matchesTabFilter', () => {
   it('a real stage name matches conv.stage exactly', () => {
     expect(matchesTabFilter(conv({ stage: 'interview' }), 'interview')).toBe(true)
     expect(matchesTabFilter(conv({ stage: 'general' }), 'interview')).toBe(false)
+  })
+})
+
+
+// 会话列表的岗位名（用户 2026-08-22 提）。
+// 同一家公司投了多个岗位时，几条会话长得一模一样。
+describe('job title filter', () => {
+  const conv = (over: Partial<Conversation>): Conversation =>
+    ({ conv_id: 'c', hr_name: 'h', company: 'co', messages: [] as ConversationMessage[],
+       ...over } as Conversation)
+
+  it('matches the exact job title', () => {
+    expect(matchesJobFilter(conv({ job_title: 'A' }), 'A')).toBe(true)
+    expect(matchesJobFilter(conv({ job_title: 'B' }), 'A')).toBe(false)
+  })
+
+  it('an empty filter keeps everything', () => {
+    expect(matchesJobFilter(conv({ job_title: 'A' }), '')).toBe(true)
+    expect(matchesJobFilter(conv({}), '')).toBe(true)
+  })
+
+  it('conversations with no job title are their own bucket', () => {
+    // 真机 1170 条里有一半拿不到岗位名（多数是 W2 回填的桩行，
+    // title 故意留空）。把它们归进任意一个岗位都是说谎，得有个自己的档。
+    expect(matchesJobFilter(conv({ job_title: '' }), '__none__')).toBe(true)
+    expect(matchesJobFilter(conv({ job_title: 'A' }), '__none__')).toBe(false)
+  })
+
+  it('options are deduped and ordered by how many conversations use them', () => {
+    const convs = [
+      conv({ job_title: 'A' }), conv({ job_title: 'B' }),
+      conv({ job_title: 'A' }), conv({ job_title: 'A' }),
+      conv({ job_title: 'B' }), conv({ job_title: '' }),
+    ]
+    expect(jobTitleOptions(convs)).toEqual([
+      { title: 'A', count: 3 },
+      { title: 'B', count: 2 },
+    ])
+  })
+
+  it('options leave out the unknown ones', () => {
+    // 空串不是一个岗位名，不能占一行下拉。
+    expect(jobTitleOptions([conv({ job_title: '' }), conv({})])).toEqual([])
+  })
+
+  it('search box also looks at the job title', () => {
+    // 搜“后端”应该能找到那个岗位的会话，
+    // 而不只是公司/HR/消息正文。
+    expect(convMatchesQuery(conv({ job_title: '\u540e\u7aef\u5de5\u7a0b\u5e08' }), '\u540e\u7aef')).toBe(true)
   })
 })

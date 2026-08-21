@@ -66,8 +66,38 @@ export function daysSinceContact(iso?: string): number | null {
 
 // \u641c\u7d22\u5339\u914d\uff1a\u516c\u53f8\u540d / HR \u540d / HR \u5934\u8854 / \u6700\u540e\u6d88\u606f\u9884\u89c8 / \u6bcf\u6761\u6d88\u606f\u6b63\u6587\uff08\u5168\u6587\uff09\u3002
 // \u7eaf\u5ba2\u6237\u7aef\u5b50\u4e32\u5339\u914d\uff08\u5df2\u52a0\u8f7d\u7684\u4f1a\u8bdd\uff09\uff0c\u4e0d\u533a\u5206\u5927\u5c0f\u5199\u3002q \u5df2 trim+lowercase\u3002
+// 会话列表按岗位筛。同一家公司投了多个岗位时，几条会话在列表上长得一模一样
+// （用户 2026-08-22 提）。`NO_JOB` 是「拿不到岗位名」那一档——真机 1170 条里
+// 有近一半是这样（多数是 W2 回填的桩行，title 故意留空），把它们归进任意一个
+// 岗位都是说谎，得有自己的一档。
+const ALL_JOBS = '\u5168\u90e8\u5c97\u4f4d'
+const NO_JOB_LABEL = '\u672a\u5173\u8054\u5c97\u4f4d'
+const GUESS_MARK = '\u63a8\u6d4b'
+const GUESS_HINT = '\u8fd9\u6761\u4f1a\u8bdd\u6ca1\u6709\u5173\u8054\u5c97\u4f4d ID\uff0c\u6309\u516c\u53f8\u540d\u56de\u67e5\u51fa\u6765\u7684\uff08\u8be5\u516c\u53f8\u53ea\u6295\u8fc7\u8fd9\u4e00\u4e2a\u5c97\u4f4d\uff09'
+
+export const NO_JOB = '__none__'
+
+export function matchesJobFilter(conv: Conversation, jobTitle: string): boolean {
+  if (!jobTitle) return true
+  const t = conv.job_title ?? ''
+  return jobTitle === NO_JOB ? !t : t === jobTitle
+}
+
+// 下拉里列哪些岗位：按用了它的会话条数从多到少。**不列空串**——那不是一个岗位名。
+export function jobTitleOptions(convs: Conversation[]): Array<{ title: string; count: number }> {
+  const counts = new Map<string, number>()
+  for (const c of convs) {
+    const t = c.job_title ?? ''
+    if (t) counts.set(t, (counts.get(t) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([title, count]) => ({ title, count }))
+    .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title))
+}
+
 export function convMatchesQuery(conv: Conversation, q: string): boolean {
   if (!q) return true
+  if ((conv.job_title ?? '').toLowerCase().includes(q)) return true
   if ((conv.company ?? '').toLowerCase().includes(q)) return true
   if ((conv.hr_name ?? '').toLowerCase().includes(q)) return true
   if ((conv.hr_title ?? '').toLowerCase().includes(q)) return true
@@ -268,14 +298,20 @@ export default function Chat() {
   // Apply the active tab filter LIVE (not just at fetch): after an optimistic
   // reply_status change, an item that no longer matches the current tab drops out
   // immediately, instead of lingering until the next refetch.
+  const [jobFilter, setJobFilter] = useState('')
   const tabScoped = conversations.filter((c) => matchesTabFilter(c, activeStage))
   const unanswered = tabScoped.filter((c) => (c.messages?.length ?? 0) === 0)
   const base = showUnanswered
     ? tabScoped
     : tabScoped.filter((c) => (c.messages?.length ?? 0) > 0)
+  // 岗位筛在 tab 之后、搜索之前：下拉列的是**当前 tab 里**有哪些岗位，
+  // 否则切到「待审批」还列着全部 500 多个岗位，绝大多数选了是空的。
+  const jobOptions = jobTitleOptions(base)
+  const jobScoped = base.filter((c) => matchesJobFilter(c, jobFilter))
+  const noJobCount = base.filter((c) => !(c.job_title ?? '')).length
   const displayed = searchNeedle
-    ? base.filter((c) => convMatchesQuery(c, searchNeedle))
-    : base
+    ? jobScoped.filter((c) => convMatchesQuery(c, searchNeedle))
+    : jobScoped
 
   const updateConversation = (convId: string, updater: (conv: Conversation) => Conversation) => {
     setConversations((prev) => prev.map((conv) => (
@@ -484,14 +520,31 @@ export default function Chat() {
             })}
           </div>
 
-          {/* Search box: client-side substring filter over company / HR / preview / message text */}
+          {/* Search box: client-side substring filter over job title / company / HR / preview / message text */}
           <div className="px-3 py-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            {/* 岗位筛选。同一家公司投了多个岗位时，几条会话在列表上长得一模一样。 */}
+            {(jobOptions.length > 1 || noJobCount > 0) && (
+              <select
+                value={jobFilter}
+                onChange={(e) => setJobFilter(e.target.value)}
+                className="mb-2 w-full rounded-lg bg-bg-card2 px-2 py-1.5 text-xs text-text-1 focus:outline-none"
+                style={{ border: '1px solid rgba(255,255,255,0.08)' }}
+              >
+                <option value="">{ALL_JOBS}{' ('}{base.length}{')'}</option>
+                {jobOptions.map((o) => (
+                  <option key={o.title} value={o.title}>{o.title}{' ('}{o.count}{')'}</option>
+                ))}
+                {noJobCount > 0 && (
+                  <option value={NO_JOB}>{NO_JOB_LABEL}{' ('}{noJobCount}{')'}</option>
+                )}
+              </select>
+            )}
             <div className="relative">
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={'\u641c\u7d22\u516c\u53f8 / HR / \u6d88\u606f\u5185\u5bb9\u2026'}
+                placeholder={'\u641c\u7d22\u5c97\u4f4d / \u516c\u53f8 / HR / \u6d88\u606f\u5185\u5bb9\u2026'}
                 className="w-full rounded-lg bg-bg-card2 px-3 py-1.5 pr-7 text-xs text-text-1 placeholder:text-text-3 focus:outline-none"
                 style={{ border: '1px solid rgba(255,255,255,0.08)' }}
               />
@@ -607,8 +660,17 @@ export default function Chat() {
                   >
                     {active && <span className="absolute left-0 top-0 bottom-0 w-0.5" style={{ background: '#0a84ff' }} />}
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm font-medium text-text-1" style={{ letterSpacing: '-0.224px' }}>
-                        {conv.company}
+                      {/* 主标题＝岗位名（用户 2026-08-22 定）。拿不到时退回公司名，
+                          而不是留空——空的主标题比"少一层信息"难用得多。
+                          推测出来的（按公司名回查）标一个淡角标，因为它跟确定的
+                          在这一行上长得一模一样，不标就没法分辨。 */}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-sm font-medium text-text-1" style={{ letterSpacing: '-0.224px' }} title={conv.job_title || conv.company}>
+                          {conv.job_title || conv.company}
+                        </span>
+                        {conv.job_title && conv.job_title_source === 'inferred' && (
+                          <span className="shrink-0 text-[10px] text-text-3" title={GUESS_HINT}>{GUESS_MARK}</span>
+                        )}
                       </span>
                       <div className="flex shrink-0 items-center gap-1.5">
                         {stage && <TintBadge label={stage.label} color={stage.color} />}
@@ -627,7 +689,9 @@ export default function Chat() {
                       </div>
                     </div>
                     <div className="mt-0.5 flex items-center justify-between gap-2">
-                      <span className="truncate text-xs text-text-2">{conv.hr_name}</span>
+                      <span className="truncate text-xs text-text-2">
+                        {conv.job_title ? `${conv.company} \u00b7 ${conv.hr_name}` : conv.hr_name}
+                      </span>
                       {idle != null && (
                         <span className={`shrink-0 text-[11px] ${idle > 7 ? 'text-signal-amber' : 'text-text-3'}`}>
                           {idle === 0 ? '\u4eca\u5929' : `${idle} \u5929\u524d`}

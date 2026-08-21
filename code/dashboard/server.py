@@ -211,7 +211,8 @@ def _analysis_state(conv, active_window_days: int) -> str:
 
 
 def _serialize_conversation(
-    conv, messages: list[dict], job_url: str, job_title: str = "", active_window_days: int = 0
+    conv, messages: list[dict], job_url: str, job_title: str = "",
+    active_window_days: int = 0, job_title_source: str = ""
 ) -> dict[str, Any]:
     """Derive the dashboard's conversation shape from the T030 schema.
 
@@ -252,6 +253,12 @@ def _serialize_conversation(
         # applications.title，按 job_id 关联（conv_id==job_id 的硬关联）。W1 投过的岗位
         # 才有；HR 主动发起、非 W1 投递的会话可能为空。
         "job_title": job_title,
+        # 'linked'   = 由 job_id 关联到 applications，确定的
+        # 'inferred' = 会话没有 job_id，按公司名回查且该公司只投过一个岗位
+        # ''         = 不知道（岗位名会显示成"未关联"，不猜）
+        # 前端要能区分：推测出来的岗位名会落在**主标题**上，跟确定的长得一样，
+        # 不标出来的话看的人没有任何办法分辨。
+        "job_title_source": job_title_source,
         "status": conv.stage,
         "stage": conv.stage,
         "intent": conv.intent,
@@ -1737,16 +1744,34 @@ async def get_conversations(
     apps_by_job_id = tracker.get_many(job_ids)
     messages_by_conv = tracker.get_hr_messages_bulk([c.conv_id for c in convs])
 
+    def _linked_title(c) -> str:
+        app = apps_by_job_id.get(c.job_id)
+        return (app.title or "") if app else ""
+
+    # 兜底：`job_id` 那条路走不通的会话，按公司名回查（只认该公司唯一的岗位，
+    # 有歧义就不给——见 tracker.unique_job_title_by_company）。真机 1170 条里
+    # 主路径覆盖 607 条，其余多数是 W2 回填的桩行（title 故意留空）。
+    needs_fallback = sorted({c.company for c in convs if c.company and not _linked_title(c)})
+    inferred = tracker.unique_job_title_by_company(needs_fallback)
+
+    def _title_and_source(c) -> tuple[str, str]:
+        linked = _linked_title(c)
+        if linked:
+            return linked, "linked"
+        guess = inferred.get(c.company or "", "")
+        return (guess, "inferred") if guess else ("", "")
+
+    def _one(c):
+        title, source = _title_and_source(c)
+        app = apps_by_job_id.get(c.job_id)
+        return _serialize_conversation(
+            c, messages_by_conv.get(c.conv_id, []),
+            (app.url or "") if app else "",
+            title, active_window_days, source,
+        )
+
     return JSONResponse({
-        "conversations": [
-            _serialize_conversation(
-                c, messages_by_conv.get(c.conv_id, []),
-                (apps_by_job_id.get(c.job_id).url or "") if apps_by_job_id.get(c.job_id) else "",
-                (apps_by_job_id.get(c.job_id).title or "") if apps_by_job_id.get(c.job_id) else "",
-                active_window_days,
-            )
-            for c in convs
-        ],
+        "conversations": [_one(c) for c in convs],
         "total": len(convs),
     })
 

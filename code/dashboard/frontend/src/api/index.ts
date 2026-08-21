@@ -71,6 +71,8 @@ export interface Conversation {
   job_id?: string
   job_url?: string
   job_title?: string
+  // 'linked' = job_id 关联到的（确定）；'inferred' = 按公司名回查出来的（该公司只投过一个岗位）；'' = 不知道
+  job_title_source?: string
   message_count?: number
   messages?: ConversationMessage[]
 }

@@ -632,6 +632,33 @@ class ApplicationTracker:
         with self.conn:
             self._upsert_application_row(record, created_at=created_at)
 
+
+    def unique_job_title_by_company(self, companies: list) -> dict:
+        """公司名 → 岗位名，**只收该公司只投过一个岗位的**。
+
+        给会话列表兜底用：`hr_conversations` 上没有岗位名，主路径是 `job_id`
+        JOIN `applications`，而真机 1170 条里有 138 条根本没有 `job_id`。
+
+        **同一公司投过多个岗位时一条都不返回**，宁可让界面显示"未关联"。
+        猜出来的岗位名会落在会话列表的**主标题**上，跟确定的长得一模一样——
+        看的人没有任何办法分辨，那比不显示糟得多。
+        （真机那 138 条：25 条能确定、22 条有歧义、91 条查无此公司。）
+
+        空 title 不参与：`backfill_application_from_conversation` 造的桩行
+        title 就是空的，它既不是答案，也不该让一个本来唯一的答案变成有歧义。
+        """
+        if not companies:
+            return {}
+        marks = ",".join("?" * len(companies))
+        rows = self.conn.execute(
+            f"""SELECT company, MIN(title) AS title
+                FROM (SELECT DISTINCT company, title FROM applications
+                      WHERE company IN ({marks}) AND TRIM(COALESCE(title, '')) != '')
+                GROUP BY company HAVING COUNT(*) = 1""",
+            list(companies),
+        ).fetchall()
+        return {r["company"]: r["title"] for r in rows}
+
     def get(self, job_id: str) -> Optional[ApplicationRecord]:
         row = self.conn.execute(
             "SELECT * FROM applications WHERE job_id = ?", (job_id,)
