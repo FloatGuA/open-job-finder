@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { API, type ResumeBlocks, type ResumeBlock, type ResumeSection, type ResumeBasicInfo, type ResumeTemplate, type ResumePlan, type ResumeIndex, type ResumeLibraryItem, type PoolSnapshot, type FieldMarks, type PoolCurrent, type Job } from '@/api'
 import DevLabel from '@/components/dev/DevLabel'
+import { PdfPreview } from './PdfPreview'
 import PoolDiffPanel from '@/components/PoolDiffPanel'
 
 // v2.16\uff1a\u5206\u533a\u4e0d\u518d\u56fa\u5b9a\uff0c\u540d\u79f0\u81ea\u5b9a\u4e49\uff08\u5982\u300c\u6e38\u620f\u7ecf\u5386\u300d\u300cAgent \u7ecf\u5386\u300d\uff09\u3002\u8fd9\u4e9b\u53ea\u662f\u65b0\u5efa\u65f6\u7684\u5feb\u6377\u5019\u9009\u3002
@@ -958,14 +959,25 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
   const [jobTitle, setJobTitle] = useState('')
   const [jdText, setJdText] = useState('')
   const [composing, setComposing] = useState(false)
+  // 预览区一次只显示一样东西：某份可编辑简历，或库里的某个 PDF。
+  // **用一个状态表达互斥**，不是两个状态各管各的——两个的话"都选中了"和"都没选"都是可达状态，而它们在界面上没有意义。
+  const [previewFile, setPreviewFile] = useState<string>('')
   const [previewSlug, setPreviewSlug] = useState<string>('')
   const [previewDoc, setPreviewDoc] = useState<ResumeBlocks | null>(null)
   const metaTimer = useRef<number | null>(null)
-  const previewName = resumes?.items.find((i) => i.slug === previewSlug)?.name ?? ''
+  const previewName = previewFile
+    ? (libItems.find((i) => i.file === previewFile)?.name ?? previewFile)
+    : (resumes?.items.find((i) => i.slug === previewSlug)?.name ?? '')
 
   const showPreview = (slug: string) => {
+    setPreviewFile('')            // 互斥：选可编辑简历就取消库里那份的选中
     setPreviewSlug(slug)
     void API.getResumeDoc(slug).then(setPreviewDoc).catch(() => setPreviewDoc(null))
+  }
+  const showLibPreview = (file: string) => {
+    setPreviewSlug('')
+    setPreviewDoc(null)
+    setPreviewFile(file)
   }
   const refresh = () => {
     void API.getResumes().then((r) => {
@@ -1094,9 +1106,13 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
             {libItems.map((it) => (
               <div key={it.file} className="rounded-lg px-2.5 py-2" style={{ background: 'rgba(255,255,255,0.04)' }}>
                 <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => showLibPreview(it.file)}
+                    className="min-w-0 flex-1 truncate text-left text-[12px] transition hover:brightness-125"
+                    style={{ color: it.file === previewFile ? '#ffffff' : 'var(--signal-bright, #7cc3ff)' }}
+                    title={it.file}>{it.name}</button>
                   <a href={`/api/resume/library/${encodeURIComponent(it.file)}`} target="_blank" rel="noreferrer"
-                    className="min-w-0 flex-1 truncate text-[12px] text-signal-bright transition hover:brightness-125"
-                    title={it.file}>{it.name}</a>
+                    title={'\u5728\u65b0\u6807\u7b7e\u9875\u6253\u5f00 / \u4e0b\u8f7d'}
+                    className="shrink-0 px-1 text-[11px] text-text-3 transition hover:text-text-1">{'\u2197'}</a>
                   {it.state === 'stale' && (
                     <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
                       style={{ background: 'rgba(255,159,10,0.16)', color: '#ff9f0a' }}
@@ -1213,7 +1229,8 @@ function SavedTab({ onErr, onActiveChanged, flushEdits }: {
           <span className="font-normal normal-case text-text-3">{previewName}</span>
         </div>
         <div className="sticky top-4">
-          {previewDoc ? <A4Preview html={buildResumeHtml(previewDoc)} />
+          {previewFile ? <PdfPreview file={previewFile} />
+            : previewDoc ? <A4Preview html={buildResumeHtml(previewDoc)} />
             : <div className="rounded-xl px-4 py-10 text-center text-xs text-text-3" style={{ border: '1px dashed rgba(255,255,255,0.14)' }}>{'\u9009\u4e00\u4efd\u7b80\u5386\u67e5\u770b\u9884\u89c8'}</div>}
         </div>
       </div>

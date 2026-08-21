@@ -1,0 +1,18 @@
+// \u7b80\u5386\u5e93\u91cc\u90a3\u4efd PDF \u7684\u9884\u89c8\u3002
+//
+// \u8ddf `A4Preview` \u662f**\u4e24\u56de\u4e8b\uff0c\u4e0d\u662f\u540c\u4e00\u4e2a\u7ec4\u4ef6\u7684\u4e24\u79cd\u6a21\u5f0f**\uff1aA4Preview \u62ff\u7684\u662f\u53ef\u7f16\u8f91
+// \u7b80\u5386\u7684\u5757\u3001\u6e32\u67d3\u6210 HTML \u518d\u6309 A4 \u5207\u9875\uff1b\u5e93\u91cc\u7684\u662f\u4e00\u4e2a PDF \u6587\u4ef6\uff0c\u6ca1\u6709\u5757\u53ef\u6e32\u67d3\uff0c
+// \u76f4\u63a5\u4ea4\u7ed9\u6d4f\u89c8\u5668\u81ea\u5e26\u7684 PDF \u663e\u793a\u3002\u786c\u5408\u5e76\u53ea\u4f1a\u5728\u91cc\u9762\u585e\u4e00\u4e2a kind \u5206\u652f\uff0c\u4e24\u8fb9\u90fd\u53d8\u96be\u8bfb\u3002
+//
+// `#toolbar=0&navpanes=0` \u662f\u7ed9 Chrome \u5185\u7f6e PDF \u9605\u8bfb\u5668\u7684\u63d0\u793a\uff08\u53bb\u6389\u5de5\u5177\u680f\u548c\u4fa7\u680f\uff09\uff0c
+// \u4e0d\u652f\u6301\u7684\u6d4f\u89c8\u5668\u4f1a\u5ffd\u7565\u5b83\u2014\u2014**\u4e0d\u662f\u529f\u80fd\u4f9d\u8d56\uff0c\u53ea\u662f\u89c2\u611f**\u3002
+export function PdfPreview({ file }: { file: string }) {
+  const src = `/api/resume/library/${encodeURIComponent(file)}#toolbar=0&navpanes=0`
+  return (
+    <div className="w-full overflow-hidden rounded-xl bg-white shadow-card"
+      style={{ height: 'calc(100vh - 150px)' }}>
+      <iframe title={`pdf-preview-${file}`} src={src}
+        style={{ width: '100%', height: '100%', border: 0 }} />
+    </div>
+  )
+}
