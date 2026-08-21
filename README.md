@@ -26,6 +26,9 @@ An AI-powered job application agent for Boss Zhipin, in three workflows: **W1 (a
 - HR 会话完整读取与本地缓存：逐一点入聊天对话，读取完整消息历史，存入 SQLite；增量脏检查，只同步有新消息的会话
   Full HR conversation sync with local cache: reads complete message history per chat, stores in SQLite; incremental dirty-check syncs only updated conversations
 
+- 简历库（`data/resumes/library/`）：**所有往外发的简历 PDF 都从这个文件夹里选**——系统导出的会自动落进来，你在别处做好的直接拷进去（或在「简历」页上传）就会出现。每份要填「目标岗位」才参与自动匹配，**并且必须勾上「允许发送」才可能被自动发出去（默认关）**；都匹配不上时发你指定的「兜底」那份，没指定就拒发而不是乱发。
+  Resume library (`data/resumes/library/`): every resume that leaves the system is picked from this one folder — exports land here automatically, and resumes you made elsewhere just need to be dropped in (or uploaded from the Resume page). Give each a "target role" to join automatic matching, and **tick "allow sending" (off by default) before it can ever be sent automatically**; when nothing matches, the resume you marked as fallback is used — if none is marked, sending is refused rather than guessed.
+
 - 自动发送附件简历：检测到 HR 索要简历时按路径发送——HR 请求卡片点"同意"或点工具栏"发简历"按钮；发送成功以聊天框出现「附件简历」系统消息为唯一判据
   Automatic resume attachment sending: when an HR resume request is detected, sends via the matching path — accept the HR card or click the toolbar send button; delivery is confirmed only when the "resume attachment" system message appears in chat
 

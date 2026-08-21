@@ -42,12 +42,18 @@ multisite/observability.py   run_scope（一次运行的生命周期）+ traced_
 - **同一套 `RunLogger`**（`logs/runs/*.jsonl` + SSE）——run 日志的读者（`run_log_reader` /
   `run_diagnostics` / 前端回放）只认这一种格式
 
-简历子系统（v2.13→v2.19）
+简历子系统（v2.13→v2.31）
 services/info_pool.py        信息池：求职者全部信息的主库，高于任何一份简历；写盘前自动快照
 services/resume_blocks.py    文档形状权威（sections:[{name,blocks}]，旧五键形状读时自动转换）
-services/resume_store.py     多份简历管理（data/resumes/{slug}.yaml + index），激活份镜像到兼容位
-services/resume_matcher.py   按岗位选简历——确定性关键词匹配，刻意不用 LLM（理由见 DECISION）
+services/resume_store.py     **可编辑**简历（data/resumes/{slug}.yaml + index）。v2.31 起它只是
+                             「生成器」——导出一次 = 往简历库里加一份成品
+services/resume_library.py   **简历库**：data/resumes/library/ 一个文件夹装所有能往外发的 PDF
+                             （系统导出的 + 用户自己放的，平起平坐）。所有发简历的出口都从这里选
 services/resume_parser.py    PDF → 页面图 → 视觉 LLM 解析
+
+`services/resume_matcher.py` 已于 2026-08-21 删除——按岗位选简历现在是
+`ResumeLibrary.pick`（同一套确定性关键词规则，刻意不用 LLM，理由见 DECISION），
+输入从"可编辑简历条目"换成了"库里的文件"。
 ```
 
 ## 后端四层约定
