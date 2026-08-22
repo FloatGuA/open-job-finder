@@ -847,7 +847,7 @@ agent 收到信号后立刻切桶；跨 run 去重也生效（认出了上一跑
 （matcher 的兜底理由原文就写着"用**当前编辑的这份**兜底"）。目前无害，但两个语义
 绑在一个指针上，将来想「兜底用 A、编辑 B」就得拆。
 
-### 🧱 计划 A（站点手册地基）已完工，在分支 `m1-manual-foundation` 上待合并（2026-08-19）
+### 🧱 ~~计划 A（站点手册地基）在分支 `m1-manual-foundation` 上待合并~~ —— **已并入 master**（2026-08-22 核实：该分支已不存在，`git branch --merged master` 只剩 master）（2026-08-19）
 
 **14 个提交，全量 1306 passed（退出码 0），`layer1_agent.py` 一行未改**——它刻意不接进现有
 工作流，m1/m2 的行为完全不变。接线是计划 B 的事。
@@ -1758,7 +1758,7 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 - [x] W2 真实环境端对端验证：真实账号有头跑 W2（5→30 会话），简历发送判据收拢到「附件简历」系统消息、hr_messages 落库 156 条、LLM 层切 ollama（2026-06-11）
 - [ ] W2 后续：ollama analysis 慢（~9.5min/30 会话）可评估 anthropic_api（需 key，不走 CLI rate-limit）；accept 境外跨境框选择器（旧 boss-dialog）未实测靠 marker 兜底；前端接线 llm_degraded/sent 可视化
 - [ ] 清理本次 5 个临时诊断脚本（inspect_apply/verify_detect/verify_apply_e2e/diag_db/peek.py），或留作诊断工具
-- [ ] 调度器重建：用 APScheduler 直接调 run_w1/run_w2，恢复定时触发（scheduler.py 已删，需新建）
+- [x] ~~调度器重建~~ —— **已完成**（2026-08-22 核实）：`services/scheduler_service.py` 已存在并在 `server.py` 接线（`_get_scheduler`），schedule.yaml 的 enabled/times/interval 生效。
 - [ ] onboarding 拆分：ConfigManager 迁移（_step2_configure_llm/run_setup_profile）+ 浏览器登录独立模块，逐步减少 browser_agent.py 依赖
 
 ### 保留的技术债
