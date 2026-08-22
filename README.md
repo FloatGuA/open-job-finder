@@ -1,8 +1,8 @@
 # OpenJobFinder
 
-基于 Boss直聘 的 AI 自动化求职 Agent，三条流程：**W1 投递**（按求职偏好搜索职位、LLM 多维度评分筛选、自动投递）；**W2 检查回应**（同步 HR 会话、分析意图、按需发送附件简历、追踪应聘进展并草拟回复）；**W3 发送已批准回复**（把你审批过的回复定位会话发出，并重扫验证投递落地）。另有**简历子系统**：视觉模型解析简历入「信息池」，从池中组合出多份面向不同岗位的简历，投递时由 Agent 判断该发哪一份。
+基于 Boss直聘 的 AI 自动化求职 Agent，三条流程：**W1 投递**（按求职偏好搜索职位、LLM 多维度评分筛选、自动投递）；**W2 检查回应**（同步 HR 会话、分析意图、按需发送附件简历、追踪应聘进展并草拟回复）；**W3 发送已批准回复**（把你审批过的回复定位会话发出，并重扫验证投递落地）。另有**简历子系统**：视觉模型解析简历入「信息池」，从池中组合出多份面向不同岗位的简历，投递时由 Agent 判断该发哪一份。此外还有**跨站点投递（m1/m2）**：面向 Boss 之外的企业官网招聘系统，由 agent 自主勘察站点并选岗（m1）、打开申请表并分类字段（m2），两道人工审批才推进；**提交类点击由代码硬拦**，不会自动提交任何表单。
 
-An AI-powered job application agent for Boss Zhipin, in three workflows: **W1 (apply)** — search jobs by your preferences, score them with LLM across multiple dimensions, auto-apply; **W2 (check responses)** — sync HR conversations, analyze intent, send resume attachments on demand, track progress and draft replies; **W3 (send approved replies)** — locate the conversation, send the reply you approved, and verify delivery by re-scanning the thread. A **resume subsystem** parses your resume with a vision model into an "info pool", lets you compose multiple job-specific resumes from it, and has the agent pick which one to send.
+An AI-powered job application agent for Boss Zhipin, in three workflows: **W1 (apply)** — search jobs by your preferences, score them with LLM across multiple dimensions, auto-apply; **W2 (check responses)** — sync HR conversations, analyze intent, send resume attachments on demand, track progress and draft replies; **W3 (send approved replies)** — locate the conversation, send the reply you approved, and verify delivery by re-scanning the thread. A **resume subsystem** parses your resume with a vision model into an "info pool", lets you compose multiple job-specific resumes from it, and has the agent pick which one to send. There is also **cross-site applications (m1/m2)** for company career sites beyond Boss Zhipin: an agent explores the site and selects jobs (m1), then opens the application form and classifies its fields (m2); each stage stops at a human approval checkpoint, and **submit clicks are refused in code**, so no form is ever submitted automatically.
 
 ---
 
@@ -53,6 +53,9 @@ An AI-powered job application agent for Boss Zhipin, in three workflows: **W1 (a
 - 按岗位选简历：HR 索要简历时，用**确定性关键词匹配**（岗位标题权重高于 JD 正文）挑出最合适的那一份并在会话页给出「建议发 X 版」。**刻意不用 LLM**——路由决策要可解释可预期。是否真的把该版本的已导出 PDF 作为附件发出，由 `w2.auto_send_adapted_resume` 控制（**默认关**）；开启后若该简历没导出过 PDF、上传失败或未确认送达，**一律自动回退发 Boss 站内简历，不会漏发**
   Per-job resume routing: when an HR asks for your resume, a **deterministic keyword match** (job title weighted above JD body) picks the best-fitting version and the chat page shows "suggest sending version X". **Deliberately not LLM-driven** — routing decisions must be explainable and predictable. Whether that version's exported PDF is actually sent as an attachment is controlled by `w2.auto_send_adapted_resume` (**off by default**); when on, any failure (no exported PDF, upload error, delivery unconfirmed) **falls back to the built-in Boss resume, so nothing is ever missed**
 
+- 跨站点投递（Boss 之外的企业官网）：另一条完全独立的轨道——chrome-devtools-mcp + LangGraph 驱动的 agent 自主操作浏览器，不走 DrissionPage。**m1 选岗**：自己勘察站点结构、规划搜索类别、逐类扫岗位，结果进「跨站点投递」页的 **Checkpoint 1** 由你审批（带岗位原文 JD、agent 实探出的站点手册、会发哪一份简历）；**m2 勘察申请表**：打开表单、上传简历、扫描并分类每个字段，进 **Checkpoint 2** 由你审批或丢弃。**提交类点击由代码拒绝（不靠 prompt 叮嘱 agent）**，所以最后那一下始终是你自己点。需要 Node.js（见安装前提）。
+  Cross-site applications (career sites beyond Boss Zhipin): a separate track entirely — an agent drives the browser through chrome-devtools-mcp + LangGraph rather than DrissionPage. **m1 (job selection)** surveys the site's structure, plans search categories, and scans each one; results land in **Checkpoint 1** on the "cross-site" page for your approval (with the raw JD, the site manual the agent discovered, and which resume would be sent). **m2 (form survey)** opens the application form, uploads the resume, and classifies every field, landing in **Checkpoint 2** to approve or discard. **Submit-like clicks are refused in code, not merely discouraged in the prompt** — the final click is always yours. Requires Node.js (see Prerequisites).
+
 - 日志页"概览"视图：把每次 workflow 运行的日志解析成类实时（live）的可读时间线，无需直接阅读原始 JSON
   Logs "overview" view: parses each workflow run's log into a live-style readable timeline, no need to read raw JSON
 
@@ -65,6 +68,8 @@ An AI-powered job application agent for Boss Zhipin, in three workflows: **W1 (a
 - Python 3.11+
 - Chrome 浏览器（已安装即可，DrissionPage 会复用；简历 PDF 也由它渲染，无需额外系统依赖）
   Chrome browser (already installed; DrissionPage reuses it, and resume PDFs are rendered through it — no extra system dependencies needed)
+- Node.js（**仅「跨站点投递」m1/m2 需要**：它通过 `npx chrome-devtools-mcp@latest` 拉起浏览器驱动；只用 Boss 那条线（W1/W2/W3）可以不装）
+  Node.js (**only needed for cross-site applications, m1/m2** — the browser driver is launched via `npx chrome-devtools-mcp@latest`; not required if you only use the Boss workflows W1/W2/W3)
 
 ```bash
 # 克隆仓库 / Clone the repo

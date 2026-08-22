@@ -31,7 +31,10 @@ services/run_diagnostics.py          run 日志确定性诊断，不调 LLM
 
 多站点 Layer 1（v2.21→，跟上面那条线**浏览器栈完全不同**：chrome-devtools-mcp + LangGraph + 各站独立
 profile，不是 DrissionPage；两个 Chrome 实例互不干扰）
-multisite/layer1_agent.py    m1=选岗 / m2=填表，LangGraph 六节点；节点内部才是 agent 循环
+multisite/layer1_agent.py    m1=选岗（5 节点）/ m2=勘察申请表（4 节点）；节点内部才是 agent 循环。
+                             **m2 只扫描并分类字段，不填也不提交**——填写+提交+存证是尚未做的 m3。
+                             阶段表 `M1_STAGES` / `M2_STAGES` 是**前端步骤骨架的唯一权威源**
+                             （v2.34.0 起由后端 `stage_names()` 导出，前端不再手抄）
 multisite/safe_tools.py      守法 click（提交类点击由代码拒绝，不靠 prompt 叮嘱）
 multisite/observability.py   run_scope（一次运行的生命周期）+ traced_stage（一个阶段的记录）；
                              刻意不碰浏览器/LangGraph，否则要开真 Chrome 才测得到

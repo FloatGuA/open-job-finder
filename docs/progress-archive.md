@@ -2,6 +2,7 @@
 
 > `PROGRESS.md`「已完成」的历史条目，**v2.12.x 及以前（2026-07-30 及更早）**。
 > 2026-08-05 从 PROGRESS.md 迁出，内容原样未改。
+> 2026-08-22 又迁入一组**非「已完成」**的历史条目（文末的 factory 时代 ChatAgent 遗留 Warnings）。
 > 这里的条目可能引用已删除的文档（`AGENTS.md` / `COLLAB.md` / `spec.md` 等 factory 流程残留）——归档如实保留当时的表述。
 
 ---
@@ -854,3 +855,21 @@
   - dashboard/server.py：upload_resume() 添加 10MB 文件大小限制，超限返回 HTTP 400
   - 核查确认 M2（打招呼用户名）和 M4（SCORED 状态 score_result）在初始构建中已正确实现
 - 初始构建完成（task_001~009）：schemas、tracker、LLM 多 Provider、tool registry、browser agent、resume parser/manager、apply tool、orchestrator/scheduler、FastAPI dashboard
+
+---
+
+## factory 时代 ChatAgent 的 task_0xx 遗留 Warnings（2026-08-22 从 PROGRESS.md 搬入）
+
+> ⚠️ 里面的 **W1~W5 是 chat agent 自己的 workflow 编号，不是现在的 W1 投递 / W2 检查回应 / W3 发送**——重名且毫无提示，这正是把它们搬出 PROGRESS 的原因。ChatAgent 已停用（`main.py --chat` 只打印「暂不可用」），`services/chat_agent.py` 全库唯一调用方是它自己的单测。**仅作史料，不是待办。**
+
+- task_014 遗留 Warnings：
+  - W1：_execute_pending 中 Guard 的 state 传入方式脆弱
+  - W2：_run_config 意图提取依赖 LLM，Ollama 不可用时 config 修改无法走规则兜底
+  - W3：is_confirm 把空字符串视为确认
+  - W5：Ollama 失败后 _ollama_available 永久禁用本次 session
+- task_013 遗留 Warnings：
+  - W1：_classify_message() normalized 变量仅用于英文，中文匹配不一致
+  - W2："发过来"关键词过于宽泛，可能误匹配非简历场景
+- task_010 遗留 Warnings：
+  - W2：MAX_UPLOAD_BYTES 建议提取为模块级常量
+  - W3：parse_resume_file 失败时临时文件未清理

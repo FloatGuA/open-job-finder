@@ -21,6 +21,34 @@ open_result 原因枚举 / 设置页模型下拉修复（拆雷）/ 测试数据
 
 **「进行中 / 待处理」里标着「必须改（数据完整性 / 可观测性）」的两条已全部收口。**
 
+### 🧹 文档板陈旧条目核查（2026-08-22，无代码改动）
+
+把「进行中 / 待处理」整块对着代码核了一遍——那一块从 2026-03 攒到现在，
+**从来没人回头核过**，9 条已被代码证伪：简历发送「未实现」实际 v2.18
+就做了（v2.31 还改成了简历库）、`AppStatus.DISCOVERED` 早已不存在、
+5 个临时诊断脚本都不在仓库里、`--health-check` 已被 Dashboard 自检取代、
+weasyprint / playwright 两条「待安装」都不再需要。按文件已有的
+`~~划线~~ + 标注` 模式改，**不删条目、不重排**。
+
+另外把 factory 时代那三组 `task_0xx` 遗留 Warnings（共 8 条）**搬进了 `docs/progress-archive.md`**（PROGRESS 留一行指路）。理由：
+**里面的 W1~W5 是 ChatAgent 自己的 workflow 编号，不是现在的 W1/W2/W3**——
+重名得毫无提示，下一个人极容易拿它去改现在的流水线。
+
+**同轮修的两处指路错误**：
+
+- `TECHNICAL.md` 多站点那段写「m1=选岗 / m2=填表，LangGraph 六节点」——实际
+  **m1 五节点 / m2 四节点**（v2.29.0 拆图后），且 **m2 是勘察不是填表**
+  （`scan_and_classify_fields`，不填也不提交），填表是尚未做的 m3。
+  顺带写明 `M1_STAGES` / `M2_STAGES` 是前端步骤骨架的唯一权威源。
+- `README.md` **整条多站点主线一个字都没有**（v2.21→v2.35 两周主线、
+  独立 navigator `CrossSiteApplications.tsx`），且**安装前提缺 Node.js**——
+  没有它 `npx chrome-devtools-mcp` 拉不起来，m1/m2 直接跑不了。
+  已补开篇、功能特性一条、前提条件一条（中英双语）。
+
+**教训**：这三处都不是「忘了记」，是**记录只往前追加、没有回头核的动作**。
+陈旧待办的危害不是占地方，是让人**基于错误认知做决定**——
+比如再去「实现」一个已经在跑的功能。
+
 ### ✅ 真机抓了 getGeekFriendList：**这条线索是死的**（2026-08-22，v2.34.8）
 
 用户批准直接跑 W2 去抓（跑之前确认过：0 条排队简历、0 条已批准待发回复，
@@ -1716,7 +1744,7 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 - `_classify_message()` 中英文关键词匹配逻辑不一致（Chat Agent W1）。
 - Chat Agent：_execute_pending 中 Guard 的 state 传入方式脆弱（内部匿名类伪造），Ollama 失败后 `_ollama_available` 永久禁用本次 session。
 - ~~`job_id` 关联目前靠 company 名模糊匹配~~（2026-07-06 已解决）：两表现按 `job_id`（encryptJobId）硬关联，同公司多岗位不再误配。仅历史无 job_id 的软键会话仍走 hr_name+company 兜底，随重扫「即时吸收」逐步收敛。
-- **简历功能③（发送）未实现**：招呼语规划走「W1 投递成功 → 生成 → 进审批队列 → W3 发送」，简历附件的发送目前无流程——需先调研 Boss直聘 附件简历上传机制（`upload_resume_file` tool 已撤线）再接线。`/api/stats` 的 `attachment_resume.ready=false` 即此状态。
+- ~~**简历功能③（发送）未实现**~~ —— **已实现（2026-08-22 核实）**：v2.18 接上 W2 附件简历（`w2.auto_send_adapted_resume`，默认关），v2.31 改成统一的**简历库**（`data/resumes/library/`）+「允许发送」白名单。`upload_resume_file` 并未撤线，现存 `tools/browser/w2/upload_resume_file.py` 且已注册。以下为原文：招呼语规划走「W1 投递成功 → 生成 → 进审批队列 → W3 发送」，简历附件的发送目前无流程——需先调研 Boss直聘 附件简历上传机制（`upload_resume_file` tool 已撤线）再接线。`/api/stats` 的 `attachment_resume.ready=false` 即此状态。
 - **资源历史/方案文件无清理**：`data/selfcheck_history.jsonl` / `resume_plans.yaml` 持续追加/累积，暂无 GC，长期运行需加上限或归档。
 
 
@@ -1757,17 +1785,17 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 - [x] W1 真实环境端对端验证：真实账号跑 W1（max_cards=2/阈值0/有头），确认能停（cards_viewed=2）+ 能入库（db_write_failures=0，DB 541→543）（2026-06-10）
 - [x] W2 真实环境端对端验证：真实账号有头跑 W2（5→30 会话），简历发送判据收拢到「附件简历」系统消息、hr_messages 落库 156 条、LLM 层切 ollama（2026-06-11）
 - [ ] W2 后续：ollama analysis 慢（~9.5min/30 会话）可评估 anthropic_api（需 key，不走 CLI rate-limit）；accept 境外跨境框选择器（旧 boss-dialog）未实测靠 marker 兜底；前端接线 llm_degraded/sent 可视化
-- [ ] 清理本次 5 个临时诊断脚本（inspect_apply/verify_detect/verify_apply_e2e/diag_db/peek.py），或留作诊断工具
+- [x] ~~清理本次 5 个临时诊断脚本（inspect_apply/verify_detect/verify_apply_e2e/diag_db/peek.py）~~ —— **五个文件都已不在仓库里（2026-08-22 核实）**，条目作废。
 - [x] ~~调度器重建~~ —— **已完成**（2026-08-22 核实）：`services/scheduler_service.py` 已存在并在 `server.py` 接线（`_get_scheduler`），schedule.yaml 的 enabled/times/interval 生效。
-- [ ] onboarding 拆分：ConfigManager 迁移（_step2_configure_llm/run_setup_profile）+ 浏览器登录独立模块，逐步减少 browser_agent.py 依赖
+- [x] ~~onboarding 拆分：ConfigManager 迁移 + 浏览器登录独立模块，逐步减少 browser_agent.py 依赖~~ —— **前提已消失（2026-08-22 核实）**：`browser_agent.py` 已于 2026-06-16 删除，`main.py --onboarding` 也已退役（只打印提示改用 Dashboard）。引导现在全在 Dashboard 侧。
 
 ### 保留的技术债
 
 - [x] services/browser_agent.py **已删除**（2026-06-16，浏览器收敛 Phase 3）；交互浏览器统一走 BrowserSession，onboarding 的浏览器方法已桩化退役，整体待重写为 workflow
 - --chat 模式禁用，ChatAgent 未迁移到新 pipeline
-- test_server.py AppStatus.DISCOVERED 预存 bug（跳过运行）
+- ~~test_server.py AppStatus.DISCOVERED 预存 bug（跳过运行）~~ —— **已不存在（2026-08-22 核实）**：`AppStatus` 现在只有 FOUND/APPLIED/INTERVIEWING/OFFER/REJECTED（`schemas.py:6`），DISCOVERED 全库零命中。
 - onboarding.py 仍写旧 profile 字段（score_threshold/scale/job_type 单数）且文件内中文已被 GBK 工具链损坏，待单独修复
-- 前端需适配 /api/config/system 返回结构（apply/schedule/browser → w1/w2）；Config 页接入 w1/w2 运行参数 + "设为默认"按钮
+- ~~前端需适配 /api/config/system 返回结构（apply/schedule/browser → w1/w2）；Config 页接入 w1/w2 运行参数 + "设为默认"按钮~~ —— **已完成（2026-08-22 核实）**：三层配置模型已落地（`docs/configuration.md`），`Automation.tsx` 的 `saveDefault` 写 `user_settings.yaml`。
 - daily_limit 仅用于 stats 显示，pipeline 未实现真正限流
 - agent_workflows.py（停用 Chat Agent 遗留）仍读旧 config 结构，随 chat 迁移再清理
 - [x] 日志系统：**已验证正常工作**（2026-06-10）。完整 run 的 log（w1_20260610_0715.jsonl 5278B）含 run_start/tool×10/step×4/job_scored/job_applied/run_end 全套事件；之前"仅 1KB/只有 run_start"是被强杀的半截 run 产物，非埋点 bug
@@ -1784,10 +1812,10 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 - [x] Carryover 孤儿记录启动警告：超过 cap(5) 时打印 warning（含 DISCOVERED/SCANNED/SCORED 分项数量），并向 emitter 发 ProgressEvent；3 个单元测试通过
 - [ ] _budget_ok() 逻辑提取 + 测试：从闭包提取为可独立测试的函数
 - [ ] apply_limit + daily_limit 边界交互测试：两者同时接近上限时的优先顺序
-- [ ] Boss搜索 URL 快照测试：关键参数组合 → 预期完整 URL 对比
+- [x] Boss搜索 URL 快照测试：关键参数组合 → 预期完整 URL 对比（`tests/test_boss_search_url.py`，2026-08-22 核实）
 - [x] 结构化 JSON 日志：event_log.py RunLogger，per-run JSONL 事件，/api/runs 端点，Logs 页面
 - [ ] LLM fallback 命中层统计：FallbackChain 记录 attempt 序号到日志
-- [ ] --health-check 环境自检：检查 Chromium/DrissionPage/Ollama/profile/session 就绪状态
+- [x] ~~--health-check 环境自检~~ —— **已被取代（2026-08-22 核实）**：能力落在 Dashboard 自检模块（`SelfCheck.tsx` + `workflow_orchestration` 的 selfcheck，探针 + 完整周期 + 每 12 小时自动），**CLI 标志不再做**——再做一份就是同一件事两份实现。
 - [ ] Dashboard 投递趋势：/api/stats 增加按天聚合历史数据
 
 ### 已知遗留问题（不阻断，待机会修复）
@@ -1795,20 +1823,10 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 - _send_chat_message 输入框选择器（`.input-area div[contenteditable='true']`）未在真实环境验证，可能需根据实际 DOM 调整
 - aggressive_resume 模式端到端未验证（需要有未回复的会话）
 - 未读 badge selector 未验证（当前所有会话均已读）
-- task_014 遗留 Warnings：
-  - W1：_execute_pending 中 Guard 的 state 传入方式脆弱
-  - W2：_run_config 意图提取依赖 LLM，Ollama 不可用时 config 修改无法走规则兜底
-  - W3：is_confirm 把空字符串视为确认
-  - W5：Ollama 失败后 _ollama_available 永久禁用本次 session
-- task_013 遗留 Warnings：
-  - W1：_classify_message() normalized 变量仅用于英文，中文匹配不一致
-  - W2："发过来"关键词过于宽泛，可能误匹配非简历场景
-- task_010 遗留 Warnings：
-  - W2：MAX_UPLOAD_BYTES 建议提取为模块级常量
-  - W3：parse_resume_file 失败时临时文件未清理
+- ~~task_010 / task_013 / task_014 遗留 Warnings（共 8 条）~~ —— **已搬进 `docs/progress-archive.md`（2026-08-22）**：那三组是 factory 时代 ChatAgent（`--chat`，已停用）的，里面的 W1~W5 是它自己的 workflow 编号、跟现在的 W1/W2/W3 重名，留在这里只会被当成现在的待办去改。
 - 待手动验证：Boss直聘账号登录 + session 保存
-- 待安装：weasyprint 及系统级依赖（libpango 等），才能使用 PDF 简历生成
-- 待安装：playwright install chromium
+- ~~待安装：weasyprint 及系统级依赖（libpango 等）~~ —— **不再需要（2026-08-22 核实）**：`requirements.txt` 里已无 weasyprint，简历 PDF 改由 Chromium（DrissionPage CDP）渲染，与前端预览同源。
+- ~~待安装：playwright install chromium~~ —— **不需要（2026-08-22 核实）**：本项目浏览器栈是 DrissionPage；`requirements.txt` 里的 playwright 只给根目录 `diagnose_browser`/`diagnose_cdp_attach` 诊断脚本用，不需装 chromium。
 - apply() 选择器改为 data-* 属性（稳定性提升）
 
 ## 变更记录
