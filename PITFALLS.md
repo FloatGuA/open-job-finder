@@ -1246,3 +1246,31 @@ capabilities:
 
 **同族**：任何"文件 + 边文件"的格式都有这个问题（SQLite 的 -wal/-shm、
 LevelDB 的 LOG、Postgres 的 pg_wal）。判据是**这个格式有没有主文件之外的状态**。
+
+## 注释里点名了一个字段，不等于它知道那个字段是什么意思
+
+`backfill_application_from_conversation` 的注释写着：
+
+> title is left empty (**the friend-list API title isn't persisted on the conversation**)
+
+读起来像是「API 有岗位名，只是我们没存」。据此追下去，真机抓包确认
+`getGeekFriendList` 确实返回 `title` 字段——**但它的值是 HR 的头衔**
+（实测 `"HR"` / `"招聘经理"` / `"HRBP"` / `"CEO"`），不是岗位名。
+
+同一趟还排除了另外两个候选：`sourceTitle` 全空；DOM 兜底那条路用
+`.job-name` 等选择器抓的东西也落进 `hr_title`，全库 83 条可比对里
+**只有 1 条**跟 `applications.title` 巧合一致。
+
+**结论：Boss 的会话列表（API 和 DOM）都不带岗位名。** 已写进
+`extract_conversation_list` 的诊断注释里，免得下次又被同一句注释引过去。
+
+### 判据
+
+- **一句注释可以同时"点名正确"和"理解错误"。** 它说的字段真实存在，
+  只是作者（和我）都没验过它装的是什么。**字段名不是语义**。
+- 便宜的验法：**拿它跟一份你已经确定的数据比对**。这次是
+  `applications.title`（W1 投递时存的，确定是岗位名）——一条 SQL 就能判死。
+  比"看几个值觉得像"可靠得多。
+- **先验证再铺管道。** 这轮先建了列 + upsert 参数 + 流水线透传 + 6 个测试，
+  跑完真机才发现值是 `"HR"`。**如果当时直接上线，界面上每个会话的主标题
+  都会变成「HR」**，而测试全绿——测试只能验管道通不通，验不了水是什么。

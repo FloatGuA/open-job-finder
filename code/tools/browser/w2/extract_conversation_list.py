@@ -40,7 +40,15 @@ return (function(){
       lastMsg: last.showText || it.lastMsg || '',
       lastTS: it.lastTS || last.msgTime || 0,
       unreadMsgCount: it.unreadMsgCount || 0,
-      securityId: it.securityId || ''
+      securityId: it.securityId || '',
+      // 诊断用：这条原始记录**有哪些键**（不带值）。Boss 什么时候加/改/删字段，
+      // run 日志里就有据可查。
+      //
+      // 2026-08-22 真机抓包，这个 API 返回 30 个字段，**里面没有岗位名**：
+      // `title` 是 HR 的头衔（实测值是 "HR"/"招聘经理"/"HRBP"），`sourceTitle` 是空的。
+      // DOM 兜底那条路抓的 `.job-name` 也一样落进 hr_title，全库 83 条可比对里
+      // 只有 1 条跟 applications.title 巧合一致。**别再从这里找岗位名了。**
+      _fields: Object.keys(it)
     });
   }}
   return out;
@@ -121,6 +129,11 @@ class ExtractConversationList(BaseTool):
                 items_data = dom if isinstance(dom, list) else []
                 source = "dom"
 
+            # 键名的并集。**只有键名**——值里是真实 HR 名/公司名/消息正文，
+            # 而这份 data 会进 run 日志（那里出过 PII 事故）。
+            api_fields = sorted({k for it in items_data
+                                 for k in (it.get("_fields") or [])})
+
             conversations = []
             for item in items_data:
                 job_id = item.get("encryptJobId", "") or ""
@@ -142,6 +155,7 @@ class ExtractConversationList(BaseTool):
                 "item_count": len(conversations),
                 "items": conversations,
                 "source": source,
+                "api_fields": api_fields,
             })
         except Exception as exc:
             return ToolResult(ok=False, data={}, error=str(exc))

@@ -54,6 +54,9 @@ class UpsertHRConversation(BaseTool):
         stage: str = "new",
         last_msg_preview: str = "",
         hr_title: str = "",
+        # 接受但不落库（调用方兼容，见文件顶部注释）。2026-08-22 查证：
+        # Boss 会话列表的 API 和 DOM 都**不带岗位名**，所以这里也没有值可存
+        # ——实测记录在 extract_conversation_list 的诊断字段那段。
         job_title: str = "",
         job_id: str = "",
         last_msg_ts: int = 0,
