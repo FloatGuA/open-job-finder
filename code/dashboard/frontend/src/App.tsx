@@ -32,7 +32,28 @@ const PAGE_COMPONENTS: Record<Page, JSX.Element> = {
 
 const PAGE_STORAGE_KEY = 'ojf.page'
 
+
+// 标签页标题角标：`\u26a0 (2) OpenJobFinder`。
+// 横幅只有切到控制台才看得见，而这个系统的失败模式恰恰是"好几天没人看"——
+// 标题在**后台标签**上也能看到，是这一版能做到的最远的一步（不接任何外部服务）。
+function useAlertTitleBadge() {
+  useEffect(() => {
+    const base = document.title.replace(/^\u26a0 \(\d+\) /, '')
+    const load = () => void API.getHealthAlerts()
+      .then((r) => {
+        const n = r.alerts?.length ?? 0
+        document.title = n > 0 ? `\u26a0 (${n}) ${base}` : base
+      })
+      .catch(() => {})
+    load()
+    const id = window.setInterval(load, 60_000)
+    return () => { window.clearInterval(id); document.title = base }
+  }, [])
+}
+
 export default function App() {
+  useAlertTitleBadge()
+
   // Persist the active page so a refresh stays where you were instead of snapping
   // back to the dashboard. Validated against known pages so a stale/garbage value
   // can never render a blank shell.

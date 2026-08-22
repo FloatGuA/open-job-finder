@@ -708,6 +708,13 @@ export type WorkflowId = 'w1' | 'w2' | 'w3' | 'm1' | 'm2'
 // Which workflows have parameters worth remembering between runs. The backend
 // keeps the same list (server._DEFAULTABLE_WORKFLOWS); w3 and m2 have none --
 // w3 sends whatever is approved, m2's job differs every time.
+export interface HealthAlert {
+  id: string
+  level: 'error' | 'warn'
+  title: string
+  detail: string
+}
+
 export type DefaultableWorkflow = 'w1' | 'w2' | 'm1'
 
 export type WorkflowDefaults = Record<DefaultableWorkflow, Record<string, unknown>>
@@ -1077,6 +1084,10 @@ export const API = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     }),
+  // 「有东西坏了但没人发现」的信号。判据在后端 services/health_alerts（纯函数），
+  // 前端只负责显示——判据散到前端就成了第二份实现。
+  getHealthAlerts: (): Promise<{ alerts: HealthAlert[]; total: number }> =>
+    requestJson('/api/health/alerts'),
   getSchedule: (): Promise<ScheduleConfig> =>
     requestJson('/api/schedule'),
   updateSchedule: (body: SchedulePayload): Promise<ScheduleConfig> =>

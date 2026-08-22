@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
+
+import HealthBanner from '@/components/HealthBanner'
 import { API } from '@/api'
 import type { PendingReply, WechatPending } from '@/api'
 import { useAppContext } from '@/context/app-context'
@@ -291,6 +293,9 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-5">
+      {/* 坏了但没人发现的信号，放最顶上——它比任何统计都该先被看到 */}
+      <HealthBanner />
+
       {/* Pending approval \u2014 jumps to Chat (sole approval UI) */}
       <ApproveBar onGo={() => setPage('chat')} />
 

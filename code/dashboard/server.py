@@ -2702,6 +2702,40 @@ async def update_schedule(body: dict) -> JSONResponse:
     return JSONResponse({"ok": True, "config": result_cfg})
 
 
+
+@app.get("/api/health/alerts")
+async def get_health_alerts() -> JSONResponse:
+    """「有东西坏了但没人发现」的信号，给 Dashboard 顶部横幅。
+
+    **判据全在 `services/health_alerts`（纯函数）**，这里只负责把三份输入读出来
+    喂进去。日志坏一行不该让这个端点 500——它是诊断工具，在最需要它的时候
+    失灵最糟；解析容错在那个模块里。
+    """
+    _initialize_state()
+    from services.health_alerts import detect_alerts
+
+    def _jsonl(path) -> list:
+        if not path.exists():
+            return []
+        rows = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(_json.loads(line))
+            except _json.JSONDecodeError:
+                continue          # 半截行跳过，不是让整个端点挂掉的理由
+        return rows
+
+    alerts = detect_alerts(
+        schedule_log=_jsonl(SCHEDULE_LOG_PATH),
+        selfcheck_log=_jsonl(SELFCHECK_LOG_PATH),
+        schedule=_load_schedule_config(),
+        now=datetime.now(timezone.utc),
+    )
+    return JSONResponse({"alerts": alerts, "total": len(alerts)})
+
 @app.get("/api/schedule/log")
 async def get_schedule_log(limit: int = 50) -> JSONResponse:
     _initialize_state()
