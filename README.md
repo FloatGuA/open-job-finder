@@ -171,8 +171,8 @@ The frontend build artifacts are already included in the repo (`dashboard/static
 
 ```bash
 cd code
-python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8765 --reload
-# 访问 / Open: http://localhost:8765
+python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 18765 --reload
+# 访问 / Open: http://localhost:18765
 ```
 
 **前端开发模式 / Frontend dev mode**
@@ -184,7 +184,7 @@ To modify frontend code, start both the backend (for API) and the frontend dev s
 ```bash
 # 终端 1 — 后端 / Terminal 1 — Backend
 cd code
-python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8765 --reload
+python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 18765 --reload
 
 # 终端 2 — 前端开发服务器 / Terminal 2 — Frontend dev server
 cd code/dashboard/frontend
@@ -202,8 +202,8 @@ After modifying frontend code, rebuild the artifacts so uvicorn serves the compi
 ```bash
 cd code/dashboard/frontend
 npm run build
-# 产物输出到 dashboard/static/，之后直接访问 :8765 即可
-# Build output goes to dashboard/static/; then access :8765 directly
+# 产物输出到 dashboard/static/，之后直接访问 :18765 即可
+# Build output goes to dashboard/static/; then access :18765 directly
 ```
 
 ---

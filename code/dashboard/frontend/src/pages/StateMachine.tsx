@@ -271,7 +271,7 @@ function SystemOverview({ running }: { running: string | null }) {
           <text x={591} y={354} textAnchor="middle" fontSize={11.5} fill="#8e8e93">{'\u8c03 LLM'}</text>
 
           <OverBox x={cx - 105} y={22} w={210} h={58} color="#64d2ff" title={'\u6d4f\u89c8\u5668 \u00b7 React \u9762\u677f'} sub={'\u524d\u7aef \u00b7 \u4f60\u770b\u5230\u548c\u70b9\u7684\u754c\u9762'} />
-          <OverBox x={cx - 115} y={140} w={230} h={60} color="#bf5af2" title={'FastAPI \u670d\u52a1\u5668 :8765'} sub={'\u540e\u7aef\u5927\u95e8 \u00b7 \u53ea\u63a5\u7ebf\u8f6c\u53d1'} />
+          <OverBox x={cx - 115} y={140} w={230} h={60} color="#bf5af2" title={'FastAPI \u670d\u52a1\u5668 :18765'} sub={'\u540e\u7aef\u5927\u95e8 \u00b7 \u53ea\u63a5\u7ebf\u8f6c\u53d1'} />
           <OverBox x={24} y={262} w={210} h={56} color="#30d158" title={'pipeline \u00b7 W1/W2/W3 \u6d41\u7a0b'} sub={'\u628a tool \u4e32\u6210\u5de5\u4f5c\u6d41'} />
           <OverBox x={255} y={262} w={210} h={56} color="#ff9f0a" title={'services \u00b7 \u5171\u7528\u57fa\u5efa'} sub={'\u6d4f\u89c8\u5668/DB/LLM \u5355\u4f8b'} />
           <OverBox x={486} y={262} w={210} h={56} color="#0a84ff" title={'tools \u00b7 \u5355\u4e2a\u52a8\u4f5c'} sub={'\u4e00\u6b21\u78b0\u6d4f\u89c8\u5668/DB/LLM'} />
@@ -324,7 +324,7 @@ function Wire({ label, accent, lines }: { label: string; accent: string; lines: 
 function CommsDetail() {
   const reqLines = [
     'POST /api/workflow/apply HTTP/1.1',
-    'Host: localhost:8765',
+    'Host: localhost:18765',
     'Content-Type: application/json',
     '',
     '{"max_cards":15,"score_threshold":60,"dry_run":false}',

@@ -124,7 +124,7 @@ def _enqueue_via_dashboard(args, quotas) -> int:
     except urllib.error.URLError as exc:
         raise SystemExit(
             f"连不上 Dashboard（{args.dashboard}）：{exc}\n"
-            f"先启动它：python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8765\n"
+            f"先启动它：python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 18765\n"
             f"或者加 --direct 绕开队列（会跟 W1/W2 抢，且不写 schedule_log）"
         )
     print(f"[layer1] 已排入队列：{workflow} status={out.get('status')} id={out.get('id')}")
@@ -151,8 +151,8 @@ def main() -> int:
         help="覆盖本次的类别名额，可重复：--category 产品:3 --category 开发:5。"
              "不给就用 profile.yaml 的 job_seeking.categories。",
     )
-    parser.add_argument("--dashboard", default="http://127.0.0.1:8765",
-                        help="Dashboard 地址（默认 http://127.0.0.1:8765）")
+    parser.add_argument("--dashboard", default="http://127.0.0.1:18765",
+                        help="Dashboard 地址（默认 http://127.0.0.1:18765）")
     parser.add_argument("--direct", action="store_true",
                         help="绕开队列直接在本进程跑。**会跟 W1/W2 同时执行**——"
                              "队列的串行保护、schedule_log、SSE 进度全都不生效。"

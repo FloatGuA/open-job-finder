@@ -1096,3 +1096,36 @@
 - **下一个可能的水源**（没做，留给以后）：W2 打开每个会话时，聊天页页首
   是显示岗位名的。那是另一处 DOM、另一个步骤（`navigate_to_conversation` /
   `read_messages`），需要单独查证。
+
+## Dashboard 固定端口从 8765 改成 18765（用户拍板）
+
+- **日期 / 版本**：2026-08-31，v2.35.1
+- **背景**：启动 Dashboard 时 `uvicorn --port 8765` 报 `[WinError 10013]`（拒绝
+  bind）。裸 `socket.bind()` 复现同样报错，排除 uvicorn/DrissionPage 自身问题；
+  `netsh ... excludedportrange` 不含 8765（不是已记录的 9222 那种"开机保留段"）；
+  `Get-NetTCPConnection -LocalPort 8765` 显示 `State=Bound` 但 `OwningProcess`
+  查无此进程，两个 WSL 发行版里也确认没有真实监听者——判定为 WSL2/HNS 遗留
+  的幽灵端口保留（详见 PITFALLS.md 新条目）。
+- **选了什么**：Dashboard 固定端口永久改成 `18765`（不在 netsh 保留段、也不在
+  WSL 动态端口范围 1024–15000 内，已用裸 socket.bind() 验证可正常绑上）。
+  **用户明确要求"换固定端口到别的"**——是长期改配置，不是这次跑一下临时绕开。
+- **否掉了什么，为什么**：①重启 WSL 网络栈（`wsl --shutdown` 或重启 `hns` 服务）
+  真正释放 8765——否掉，会连带杀掉 WSL 里正在跑的 node/postgres/python 等进程，
+  代价太大，且不确定这是不是一次性问题。②只这次用别的端口跑、配置不动——
+  否掉，用户要的是永久换号，不是一次性绕过。
+- **代价 / 已知不足**：全项目对 8765 的硬编码引用有 24 处命中，其中活的、
+  这次一并改掉的有：`main.py`（委托 URL + 提示文案）、`config.yaml` 的
+  `dashboard.port`（顺带发现这个键**从未被 `server.py` 读取**，真正生效的是
+  启动命令的 `--port` 参数，已在 `docs/configuration.md` 标注这个死配置）、
+  `dashboard/server.py` 的 `__main__` fallback、`scripts/reconcile_conversations.py`、
+  `scripts/run_layer1.py`、前端 `vite.config.ts` 的 dev proxy、`StateMachine.tsx`
+  架构图标签、`CLAUDE.md`/`README.md` 的启动命令。**刻意没改**：`PITFALLS.md`
+  里 9222/8765 相关的历史事故记叙文字（那是过去某次真实事件的记录，改动即
+  篡改历史）、`PROGRESS.md`/`docs/superpowers/plans` 等归档类文档、
+  `tests/test_multisite_wiring.py` 里的占位测试 URL（任意值，不代表真实默认）。
+  未验证重启电脑是否会让 8765 自然释放——没有测试这条路径。
+- **什么情况下应该重新考虑**：如果确认重启电脑后 8765 稳定可用（而不是
+  WSL/HNS 每次都可能占用任意端口），可以考虑换回 8765 以匹配更短的历史文档
+  习惯；但鉴于 9222 那条坑证明"任何硬编码端口都不安全"，更稳妥的长期方案
+  其实是像 `pick_debug_port()` 那样启动前动态探测，而不是继续硬编码另一个
+  固定数字——这次选 18765 只是权宜，不是断言它永远安全。

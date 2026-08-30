@@ -14,7 +14,7 @@
 
 ！！必须先停掉 Dashboard 再跑 ！！open_browser 会 _kill_stale_chrome
 杀掉占用同一 browser_profile 的 Chrome——Dashboard 在跑时会连它的浏览器一起杀。
-脚本默认检测 8765 端口，占用则拒绝执行（--force 可强制）。
+脚本默认检测 18765 端口，占用则拒绝执行（--force 可强制）。
 
 用法（在 code/ 目录下，先停 Dashboard）：
   python scripts/reconcile_conversations.py [--headless] [--force]
@@ -39,7 +39,7 @@ from tools.registry import ToolRegistry
 def _dashboard_running() -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
-        return s.connect_ex(("127.0.0.1", 8765)) == 0
+        return s.connect_ex(("127.0.0.1", 18765)) == 0
 
 
 def main() -> int:
@@ -49,7 +49,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if _dashboard_running() and not args.force:
-        print("[abort] 检测到 Dashboard 在 8765 运行。open_browser 会杀掉它的浏览器。")
+        print("[abort] 检测到 Dashboard 在 18765 运行。open_browser 会杀掉它的浏览器。")
         print("        请先停掉 Dashboard 再跑，或 --force 强制（不推荐）。")
         return 2
 

@@ -43,7 +43,7 @@ config.yaml 的 w1: / w2:            ← 出厂默认（最低优先级 fallback
 |----|------|------|
 | `llm.capabilities.{fast,balanced,powerful}` | W1+W2 | 各能力档的 provider fallback 链 |
 | `llm.tool_providers.{score_job,analyze_intent}` | W1 / W2 | `null`=按 capability 路由；填 provider 名可覆盖单个工具 |
-| `dashboard.port` | Dashboard | 服务端口（默认 8765） |
+| `dashboard.port` | Dashboard | 服务端口（默认 18765；**注：此键当前未被 server.py 读取**，实际端口由启动命令的 `--port` 参数决定，见"启动方式"） |
 
 ### `config.yaml` — Layer 3 运行参数出厂默认
 

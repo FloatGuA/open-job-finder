@@ -1446,6 +1446,13 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 
 ## 已完成
 
+- **Dashboard 固定端口 8765 → 18765（v2.35.1，2026-08-31，v2.35.1.1，`code` 目录 pytest 全绿 + `npm run build` 绿）**
+  - 起因是这次要启动 Dashboard 时 8765 `bind` 报 `[WinError 10013]`——查明是 WSL2/HNS 遗留的幽灵端口保留（不是已记录的 9222 那种「开机保留段」），细节见 `PITFALLS.md` 新条目。用户拍板永久换固定端口而非临时绕开，选了 18765（已验证可正常 bind，不落在 netsh 保留段/WSL 动态端口范围内），取舍见 `DECISION.md`。
+  - 改动范围：`main.py`（委托 URL + 提示文案）、`config.yaml` 的 `dashboard.port`（顺带发现这个键从未被 `server.py` 读取，真正生效的是启动命令 `--port` 参数，已在 `docs/configuration.md` 标注）、`dashboard/server.py` 的 `__main__` fallback、`scripts/reconcile_conversations.py`、`scripts/run_layer1.py`、前端 `vite.config.ts` 的 dev proxy、`StateMachine.tsx` 架构图标签、`CLAUDE.md`/`README.md` 的启动命令。
+  - 已用新端口 18765 实际跑起 Dashboard，`curl /api/workflow/status` 验证可访问。
+  - 顺带在桌面新建了快速启动脚本 `C:\Users\86579\Desktop\启动OpenJobFinder.bat`（检测 18765 是否已在跑：在跑直接开浏览器，没跑则起一个新窗口跑 `--reload` 再开浏览器）——不在仓库里，是本机个人便利脚本。
+  - **未做**：没有验证重启电脑是否会让 8765 自然释放（这次没重启电脑，直接换端口绕开的）；`.bat` 里 `start` 弹出新窗口这部分在自动化工具的沙盒环境里没法完整模拟双击效果，只做了「已在运行时打开浏览器」这条路径的真实验证，双击起新实例这条路径需要用户自己确认一次。
+
 - **`link_in_row` 离线路径补上 `jd`（bambulab 真机端到端跑通后暴露的覆盖缺口）**（2026-08-20，commit `a6f5f32`，无版本号变更，`code` 目录全量 `pytest -q` 退出码 0）
   - 上面那条 `container_per_row` 执行器补完之后，bambulab 真机端到端跑通了（`logs/runs/m1_20260820_1520.jsonl`，`successful`，落库 5 条），但暴露新缺口：5 条的 `jd` 长度全是 0。根因：`harvest.py` 的 `harvest_page` 只有 `new_tab_on_click` 那条路把详情页快照当 `jd`；`job_url_offline`（`link_in_row`）那条路 `jd` 恒为空串——这是当初写 harvest 时明确记下的设计边界，但导致这整类站点（拿不到详情页快照）没有 JD 可读，`layer1_classify_jobs.md` 那条"职责里出现 xx 就归类"的核心规则完全没有 jd 可执行。
   - 修复：offline 分支下 `jd = row.text[:_JD_MAX_CHARS]`——`row.text`（容器模式下是那个 link 节点的 accessible name）本来就已经被当 `title` 用了，标题/地点/类型/JD 摘要全挤在一起，是手边能拿到的最好的 JD 替代；复用同一个 `_JD_MAX_CHARS`（3000），不新开第二个截断点。

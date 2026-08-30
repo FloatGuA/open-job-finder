@@ -265,6 +265,16 @@ netsh interface ipv4 show excludedportrange protocol=tcp
 
 **故障窗口（用证据钉准，别凭感觉说"多久没发现"）**：最后一次真正跑完的 run 是 **8-12 23:00**（check，352s）→ **8-13 12:56 重启**（`(Get-CimInstance Win32_OperatingSystem).LastBootUpTime`，保留端口段就是在这一刻重新分配的）→ **8-13 15:19 第一次失败**，也正是重启后第一次真跑。**故障是重启那一刻产生的，2 小时 23 分后被首次触发**——不是"停摆了好几天"。冒烟自 8-09 起就没再跑（`schedule.yaml` 的 `selfcheck.enabled: false`）是另一件事，两者不要混成一句话说。
 
+## WSL2/HNS 幽灵端口保留导致 bind 报 10013，跟 9222 那条"开机保留段"看着像但不是同一回事
+
+**复现**：`python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8765` → 启动过程打出 `Application startup complete`，随后立刻 `ERROR: [Errno 13] error while attempting to bind on address ('0.0.0.0', 8765): [WinError 10013]`；裸 `socket.bind(('0.0.0.0', 8765))` 复现同样报错（排除 uvicorn/DrissionPage 自身问题）；换 `127.0.0.1` 也一样失败。
+**现象**：`curl http://localhost:8765/...` 显示 `Connection refused`（说明没有任何进程在真正监听），但 `Get-NetTCPConnection -LocalPort 8765` 却显示一行 `State=Bound`（不是 `Listen`），`OwningProcess` 是个 `Get-Process` 查不到的 PID——"看着没人占用"和"bind 就是被拒绝"同时成立，很容易怀疑成防火墙/权限问题。
+**真因**：`netsh interface ipv4 show excludedportrange protocol=tcp` **不包含** 8765，排除了 9222 那条已记录的"Hyper-V/WinNAT 开机动态保留段"情况；两个 WSL 发行版（当时 Running 的 Ubuntu-24.04、Stopped 的 docker-desktop/Ubuntu）里用 `ss -ltnp` 都确认没有真实监听者。判定为 HNS（WSL2 NAT 网络栈）遗留的陈旧端口保留记录（具体是哪次 WSL/容器端口映射留下的没有继续深挖）。
+**正确做法**：真正释放需要重启 WSL 网络栈（`wsl --shutdown` 或重启 `hns` 服务），但会连带杀掉 WSL 里所有正在跑的进程（本例里有 node/postgres/python 等），代价通常大于收益；更省事的做法是给这个固定端口换一个号（本项目由此把 Dashboard 端口从 8765 改成了 18765，见 `DECISION.md`）。**换端口前用裸 `socket.bind()` 探一下候选端口能不能真正绑上**，别只避开这一个号——这类"幽灵占用"是不可预测的，换一个"看起来没人用"的数字不保证安全。
+**判据**：同时满足①`curl`/浏览器连接被拒绝（没人在监听）②`Get-NetTCPConnection` 显示该端口 `Bound` 且 `OwningProcess` 查无此进程③裸 `socket.bind()` 报 `WinError 10013`，三者叠加就是这种幽灵占用；先查 `netsh ... excludedportrange` 排除是不是 9222 那条已知的开机保留段，是的话按那条的方法处理，不是的话就是这条。
+**状态**：仍有效（未验证重启电脑是否会自愈；这次没有重启电脑，是直接换端口绕开的）。
+**首次**：2026-08-31 ｜ **复发**：1 次
+
 ## `schedule_log.jsonl` 里 71% 的 "success" 是幻影，判据是 `duration_seconds > 0`
 
 **现象**：想回答"这个功能上一次真的正常是什么时候"，翻 `schedule_log.jsonl` 会看到密密麻麻的 `result: "success"`，于是得出"一直好好的"的错误结论。

@@ -26,7 +26,7 @@
 | 浏览器自动化 | **DrissionPage**（同步，绕过 CDP 反爬；非 Playwright） |
 | LLM 调用 | `ModelRouter` + FallbackChain（`claude_cli` / `codex_cli` / `ollama` / `anthropic_api` / `openai_compatible`），按 capability（fast/balanced/powerful）路由 |
 | 数据库 | SQLite（`data/jobs.db`） |
-| Dashboard 后端 | FastAPI + uvicorn（端口 8765），SSE 推送 workflow 进度 |
+| Dashboard 后端 | FastAPI + uvicorn（端口 18765），SSE 推送 workflow 进度 |
 | Dashboard 前端 | React 18 + Vite + Tailwind CSS v3（构建产物落入 `dashboard/static/`） |
 | 简历生成 | Jinja2 + WeasyPrint（需系统级依赖；当前默认关闭） |
 | 配置 | YAML（PyYAML） |
@@ -44,9 +44,9 @@ pip install -r requirements.txt
 # 首次启动引导（配置 profile、登录 session）
 python main.py --onboarding
 
-# 启动 Dashboard（端口 8765；触发 W1/W2 的权威入口）
-python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8765 --reload
-# 访问 http://localhost:8765
+# 启动 Dashboard（端口 18765；触发 W1/W2 的权威入口）
+python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 18765 --reload
+# 访问 http://localhost:18765
 
 # CLI 直接跑（注意：会委托给正在运行的 Dashboard server）
 python main.py --once     # 跑一次 W1（投递）

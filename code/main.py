@@ -28,7 +28,7 @@ def _try_delegate_to_server(action: str, dry_run: bool = False) -> bool:
     import urllib.error
     import json
 
-    base = "http://localhost:8765"
+    base = "http://localhost:18765"
     try:
         urllib.request.urlopen(f"{base}/api/workflow/status", timeout=2)
     except (urllib.error.URLError, OSError):
@@ -42,7 +42,7 @@ def _try_delegate_to_server(action: str, dry_run: bool = False) -> bool:
         with urllib.request.urlopen(req, timeout=5) as resp:
             result = json.loads(resp.read())
         print(f"Delegated to Dashboard server → {result}")
-        print("Monitor progress at http://localhost:8765")
+        print("Monitor progress at http://localhost:18765")
         return True
     except Exception as exc:
         print(f"Server delegation failed ({exc}), running directly.")
@@ -72,7 +72,7 @@ def main():
     # Dashboard instead of pretending the CLI can still log in.
     _DASH_HINT = (
         "请启动 Dashboard 后在「设置 → 环境&Session」完成登录与配置：\n"
-        "  python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8765 --reload"
+        "  python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 18765 --reload"
     )
     if args.onboarding:
         print("CLI onboarding 已退役。" + _DASH_HINT)

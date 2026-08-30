@@ -42,7 +42,7 @@ llm:                          # [W1+W2] 模型与 fallback 链，按 capability 
     score_job: null           # [W1]
     analyze_intent: null      # [W2]
 dashboard:
-  port: 8765
+  port: 18765
 
 # ===== Layer 3：workflow 运行参数出厂默认（前端可覆盖 / 设为默认）=====
 w1:                           # 投递流程

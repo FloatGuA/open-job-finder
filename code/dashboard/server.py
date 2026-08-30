@@ -3223,4 +3223,4 @@ async def open_boss_browser() -> JSONResponse:
 
 
 if __name__ == "__main__":
-    uvicorn.run("dashboard.server:app", host="0.0.0.0", port=8765)
+    uvicorn.run("dashboard.server:app", host="0.0.0.0", port=18765)
