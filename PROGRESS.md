@@ -1446,6 +1446,11 @@ W2 那边已经有 `resume_matcher`（按 target 切词 vs 岗位标题/JD 做�
 
 ## 已完成
 
+- **对外展示文档 `docs/open-job-finder-showcase.html`**（2026-09-01，无版本号变更，纯文档新增）
+  - 面向面试官预读的单文件 HTML（纯中文，3-5 分钟读完）：开头 30 秒区（定位 + 3+1 模块 / 1573 测试 / 5 维评分 / 外发 100% 过审批 四格数据条）→ SVG 系统架构图（琥珀色统一标记人工审批门）→ W1/W2/W3/简历子系统四张主卡 + m1m2/Dashboard 两张小卡（各带 GitHub 源码直链，已逐一核实指向远端 master 真实路径）→ 工程约定与教训三条（一份 SQL / 覆盖三态 / models judge, code decides）→ 诚实技术边界。
+  - 已发布为 Claude Artifact：https://claude.ai/code/artifact/02994124-4cbd-4696-84cf-c00b4d6ece1b —— **默认私有，附简历前用户需先在页面分享菜单开启分享**；后续改源文件重新发布即可保持同一链接。
+  - 验证：UTF-8 中文落盘完好；深/浅/系统三态主题 token 齐全；SVG 图内文字经程序化检查无溢出。浏览器面板截图丢帧误导排查的坑已记 `PITFALLS.md`（2026-09-01 条）。
+
 - **Dashboard 固定端口 8765 → 18765（v2.35.1，2026-08-31，v2.35.1.1，`code` 目录 pytest 全绿 + `npm run build` 绿）**
   - 起因是这次要启动 Dashboard 时 8765 `bind` 报 `[WinError 10013]`——查明是 WSL2/HNS 遗留的幽灵端口保留（不是已记录的 9222 那种「开机保留段」），细节见 `PITFALLS.md` 新条目。用户拍板永久换固定端口而非临时绕开，选了 18765（已验证可正常 bind，不落在 netsh 保留段/WSL 动态端口范围内），取舍见 `DECISION.md`。
   - 改动范围：`main.py`（委托 URL + 提示文案）、`config.yaml` 的 `dashboard.port`（顺带发现这个键从未被 `server.py` 读取，真正生效的是启动命令 `--port` 参数，已在 `docs/configuration.md` 标注）、`dashboard/server.py` 的 `__main__` fallback、`scripts/reconcile_conversations.py`、`scripts/run_layer1.py`、前端 `vite.config.ts` 的 dev proxy、`StateMachine.tsx` 架构图标签、`CLAUDE.md`/`README.md` 的启动命令。

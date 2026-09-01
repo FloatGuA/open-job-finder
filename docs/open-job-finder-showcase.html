@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenJobFinder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --ground:#F5F6F8; --surface:#FFFFFF; --sunk:#EEF0F4;
+  --ink:#1C2028; --ink-2:#5B6370; --ink-3:#828B99;
+  --rule:#E2E5EA; --rule-2:#C9CED6;
+  --accent:#35528F; --accent-ink:#2C4478; --accent-soft:#EBEFF7;
+  --gate:#A2690B; --gate-bg:#F7EFDC; --gate-line:#C9964A;
+  --ok:#1E6B4F; --ok-bg:#E6F1EC;
+  --font-display:"Noto Serif SC","Songti SC",SimSun,serif;
+  --font-body:"Segoe UI",-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono","Cascadia Mono",Consolas,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#14171C; --surface:#1B1F26; --sunk:#101318;
+    --ink:#E7EAEF; --ink-2:#9AA3B1; --ink-3:#727C8B;
+    --rule:#2A3038; --rule-2:#3D4550;
+    --accent:#8FA9DF; --accent-ink:#A8BEE8; --accent-soft:#232B3B;
+    --gate:#D8A94E; --gate-bg:#2E2717; --gate-line:#9A7A35;
+    --ok:#5FBE9B; --ok-bg:#163026;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14171C; --surface:#1B1F26; --sunk:#101318;
+  --ink:#E7EAEF; --ink-2:#9AA3B1; --ink-3:#727C8B;
+  --rule:#2A3038; --rule-2:#3D4550;
+  --accent:#8FA9DF; --accent-ink:#A8BEE8; --accent-soft:#232B3B;
+  --gate:#D8A94E; --gate-bg:#2E2717; --gate-line:#9A7A35;
+  --ok:#5FBE9B; --ok-bg:#163026;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:var(--font-body); font-size:16px; line-height:1.85;
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:47rem; margin:0 auto; padding:3.5rem 1.5rem 4rem}
+a{color:var(--accent-ink); text-decoration:none; border-bottom:1px solid var(--rule-2)}
+a:hover{border-bottom-color:var(--accent-ink)}
+a:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:2px}
+
+/* ---------- header ---------- */
+.eyebrow{
+  font-family:var(--font-mono); font-size:.75rem; letter-spacing:.18em;
+  color:var(--ink-3); text-transform:uppercase; margin-bottom:1rem;
+}
+h1{
+  font-family:var(--font-display); font-weight:700; font-size:2.4rem;
+  line-height:1.25; margin:0 0 .4rem; letter-spacing:.01em; text-wrap:balance;
+}
+.tagline{
+  font-size:1.08rem; color:var(--ink); margin:0 0 1.1rem; font-weight:600;
+}
+.lede{color:var(--ink-2); margin:0 0 1.6rem}
+.lede strong{color:var(--ink); font-weight:600}
+.repo-btn{
+  display:inline-flex; align-items:center; gap:.5em;
+  font-family:var(--font-mono); font-size:.85rem; font-weight:600;
+  background:var(--ink); color:var(--ground); border:none; border-radius:6px;
+  padding:.55em 1em;
+}
+.repo-btn:hover{opacity:.88; border:none}
+.repo-btn svg{width:1.05em; height:1.05em; fill:currentColor}
+
+/* stat strip */
+.stats{
+  display:grid; grid-template-columns:repeat(4,1fr); gap:1px;
+  background:var(--rule); border:1px solid var(--rule); border-radius:8px;
+  overflow:hidden; margin:2rem 0 0;
+}
+.stat{background:var(--surface); padding:.9rem 1rem}
+.stat b{
+  display:block; font-family:var(--font-mono); font-size:1.25rem;
+  font-weight:600; color:var(--accent-ink); font-variant-numeric:tabular-nums;
+  line-height:1.3;
+}
+.stat span{font-size:.8rem; color:var(--ink-2); line-height:1.5; display:block; margin-top:.15rem}
+@media (max-width:620px){.stats{grid-template-columns:repeat(2,1fr)}}
+
+/* ---------- sections ---------- */
+section{margin-top:3.2rem}
+h2{
+  font-family:var(--font-display); font-weight:700; font-size:1.45rem;
+  margin:0 0 .35rem; text-wrap:balance;
+}
+.sec-note{color:var(--ink-3); font-size:.88rem; margin:0 0 1.4rem}
+h2 + p, .sec-note + p{margin-top:0}
+
+/* diagram */
+.diagram-wrap{
+  background:var(--surface); border:1px solid var(--rule); border-radius:10px;
+  padding:1.2rem .8rem; overflow-x:auto; margin-top:1.2rem;
+}
+.diagram-wrap svg{display:block; min-width:720px; width:100%; height:auto}
+.dg-box{fill:var(--surface); stroke:var(--rule-2); stroke-width:1.2}
+.dg-box-accent{fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.2}
+.dg-box-gate{fill:var(--gate-bg); stroke:var(--gate-line); stroke-width:1.4}
+.dg-box-ok{fill:var(--ok-bg); stroke:var(--ok); stroke-width:1.2}
+.dg-t{font-family:var(--font-body); font-size:13px; font-weight:600; fill:var(--ink)}
+.dg-t2{font-family:var(--font-body); font-size:11px; fill:var(--ink-2)}
+.dg-t-gate{fill:var(--gate); font-weight:700}
+.dg-t-ok{fill:var(--ok)}
+.dg-line{stroke:var(--rule-2); stroke-width:1.4; fill:none}
+.dg-line-main{stroke:var(--ink-3); stroke-width:1.6; fill:none}
+.dg-arrow{fill:var(--ink-3)}
+.dg-caption{font-family:var(--font-mono); font-size:10px; fill:var(--ink-3); letter-spacing:.08em}
+
+/* module cards */
+.card{
+  background:var(--surface); border:1px solid var(--rule); border-radius:10px;
+  padding:1.4rem 1.6rem; margin-top:1.1rem;
+}
+.card h3{
+  font-family:var(--font-display); font-size:1.12rem; font-weight:700;
+  margin:0 0 .55rem; display:flex; align-items:baseline; gap:.6em; flex-wrap:wrap;
+}
+.card h3 .wf{
+  font-family:var(--font-mono); font-size:.75rem; font-weight:600;
+  color:var(--accent-ink); background:var(--accent-soft);
+  padding:.15em .6em; border-radius:4px; letter-spacing:.05em;
+}
+.card p{margin:.5rem 0; color:var(--ink-2)}
+.card p strong{color:var(--ink); font-weight:600}
+.hl{
+  margin:.7rem 0 0; padding:.55rem .9rem; border-left:3px solid var(--accent);
+  background:var(--accent-soft); border-radius:0 6px 6px 0;
+  font-size:.92rem; color:var(--ink-2);
+}
+.hl strong{color:var(--accent-ink)}
+.hl.gate{border-left-color:var(--gate-line); background:var(--gate-bg)}
+.hl.gate strong{color:var(--gate)}
+.src{
+  display:flex; flex-wrap:wrap; gap:.5rem; margin-top:.9rem;
+}
+.src a{
+  font-family:var(--font-mono); font-size:.75rem; color:var(--ink-2);
+  background:var(--sunk); border:1px solid var(--rule); border-radius:5px;
+  padding:.2em .65em; border-bottom-width:1px;
+}
+.src a:hover{color:var(--accent-ink); border-color:var(--rule-2)}
+.src .lbl{
+  font-family:var(--font-mono); font-size:.72rem; color:var(--ink-3);
+  align-self:center; letter-spacing:.06em;
+}
+
+/* minor cards */
+.minor-grid{display:grid; grid-template-columns:1fr 1fr; gap:1.1rem; margin-top:1.1rem}
+@media (max-width:620px){.minor-grid{grid-template-columns:1fr}}
+.minor{
+  background:var(--surface); border:1px solid var(--rule); border-radius:10px;
+  padding:1.1rem 1.3rem;
+}
+.minor h3{font-size:1rem; font-weight:600; margin:0 0 .4rem; font-family:var(--font-body)}
+.minor p{margin:0; font-size:.9rem; color:var(--ink-2)}
+.minor .src{margin-top:.7rem}
+
+/* lessons */
+.lesson{margin-top:1.4rem}
+.lesson h3{
+  font-size:1rem; font-weight:600; margin:0 0 .3rem;
+  font-family:var(--font-body);
+}
+.lesson h3 code, .card p code, .lesson p code{
+  font-family:var(--font-mono); font-size:.85em; background:var(--sunk);
+  border:1px solid var(--rule); border-radius:4px; padding:.08em .35em;
+}
+.lesson p{margin:0; color:var(--ink-2); font-size:.95rem}
+.lesson p strong{color:var(--ink); font-weight:600}
+
+/* honest boundary */
+.boundary{
+  background:var(--surface); border:1px solid var(--rule); border-radius:10px;
+  padding:1.3rem 1.6rem; margin-top:1.2rem;
+}
+.boundary p{margin:.4rem 0; color:var(--ink-2); font-size:.95rem}
+.boundary p strong{color:var(--ink); font-weight:600}
+
+/* footer */
+footer{
+  margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--rule);
+  color:var(--ink-3); font-size:.85rem;
+}
+footer .stack{font-family:var(--font-mono); font-size:.78rem; line-height:2}
+footer p{margin:.3rem 0}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="eyebrow">Project Brief &middot; 2026</div>
+  <h1>OpenJobFinder</h1>
+  <p class="tagline">Boss直聘全流程自动求职 Agent：搜索评分投递、追踪 HR 回应、审批后代发回复，全程人在环。</p>
+  <p class="lede">
+    三条工作流构成闭环：<strong>W1</strong> 按求职偏好搜索职位、LLM 五维评分、自动投递；<strong>W2</strong> 同步 HR 会话、分析意图、草拟回复；<strong>W3</strong> 把人工审批过的回复发出并验证真正落地。
+    配套<strong>简历子系统</strong>（视觉模型解析 &rarr; 信息池 &rarr; 多份定向简历 &rarr; 投递时自动匹配发哪份）、跨站点投递探索（m1/m2）与实时可观测 Dashboard。
+    单人业余项目，从第一行代码到持续真机运行。
+  </p>
+  <a class="repo-btn" href="https://github.com/FloatGuA/open-job-finder" target="_blank" rel="noopener">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+    FloatGuA/open-job-finder
+  </a>
+
+  <div class="stats">
+    <div class="stat"><b>3+1</b><span>工作流闭环 + 简历子系统</span></div>
+    <div class="stat"><b>1573</b><span>自动化测试守门（pytest + vitest）</span></div>
+    <div class="stat"><b>5 维</b><span>LLM 独立评分，Python 端加权</span></div>
+    <div class="stat"><b>100%</b><span>外发回复经人工审批 + 落地验证</span></div>
+  </div>
+</header>
+
+<section>
+  <h2>系统一览</h2>
+  <p class="sec-note">数据流从左到右；琥珀色是人工审批门——所有对真人的外发动作都要过它。</p>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 860 328" role="img" aria-label="系统架构图：W1 投递与 W2 会话分析写入 SQLite 状态机，W2 草拟的回复经人工审批门后由 W3 发送并重扫验证；简历子系统为投递和发送提供简历匹配；Dashboard 全程可观测">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/>
+        </marker>
+      </defs>
+
+      <!-- Boss site -->
+      <rect x="20" y="86" width="96" height="72" rx="8" class="dg-box"/>
+      <text x="68" y="118" text-anchor="middle" class="dg-t">Boss直聘</text>
+      <text x="68" y="136" text-anchor="middle" class="dg-t2">DrissionPage</text>
+
+      <!-- W1 -->
+      <rect x="166" y="30" width="150" height="62" rx="8" class="dg-box-accent"/>
+      <text x="241" y="55" text-anchor="middle" class="dg-t">W1 自动投递</text>
+      <text x="241" y="73" text-anchor="middle" class="dg-t2">搜索 &rarr; 五维评分 &rarr; 投递</text>
+
+      <!-- W2 -->
+      <rect x="166" y="152" width="150" height="62" rx="8" class="dg-box-accent"/>
+      <text x="241" y="177" text-anchor="middle" class="dg-t">W2 会话与意图</text>
+      <text x="241" y="195" text-anchor="middle" class="dg-t2">同步 &rarr; 意图分析 &rarr; 草拟</text>
+
+      <!-- tracker -->
+      <rect x="376" y="86" width="128" height="72" rx="8" class="dg-box"/>
+      <text x="440" y="115" text-anchor="middle" class="dg-t">SQLite 状态机</text>
+      <text x="440" y="133" text-anchor="middle" class="dg-t2">tracker · 唯一写路径</text>
+
+      <!-- gate -->
+      <rect x="564" y="86" width="118" height="72" rx="8" class="dg-box-gate"/>
+      <text x="623" y="115" text-anchor="middle" class="dg-t dg-t-gate">人工审批</text>
+      <text x="623" y="133" text-anchor="middle" class="dg-t2">批准 / 修改 / 驳回</text>
+
+      <!-- W3 -->
+      <rect x="732" y="30" width="108" height="56" rx="8" class="dg-box-accent"/>
+      <text x="786" y="53" text-anchor="middle" class="dg-t">W3 发送</text>
+      <text x="786" y="70" text-anchor="middle" class="dg-t2">新鲜度闸</text>
+
+      <!-- verify -->
+      <rect x="732" y="152" width="108" height="56" rx="8" class="dg-box-ok"/>
+      <text x="786" y="175" text-anchor="middle" class="dg-t dg-t-ok">重扫验证</text>
+      <text x="786" y="192" text-anchor="middle" class="dg-t2">落地才算已发</text>
+
+      <!-- resume subsystem -->
+      <rect x="166" y="248" width="216" height="56" rx="8" class="dg-box"/>
+      <text x="274" y="271" text-anchor="middle" class="dg-t">简历子系统</text>
+      <text x="274" y="289" text-anchor="middle" class="dg-t2">视觉解析 &rarr; 信息池 &rarr; 匹配路由</text>
+
+      <!-- dashboard -->
+      <rect x="440" y="248" width="400" height="56" rx="8" class="dg-box"/>
+      <text x="640" y="271" text-anchor="middle" class="dg-t">Dashboard（FastAPI + React）</text>
+      <text x="640" y="289" text-anchor="middle" class="dg-t2">SSE 实时进度 · 工作流队列 · 定时调度 · 历史 run 回放</text>
+
+      <!-- edges -->
+      <path d="M116 105 Q140 100 162 74" class="dg-line-main" marker-end="url(#ah)"/>
+      <path d="M116 139 Q140 144 162 170" class="dg-line-main" marker-end="url(#ah)"/>
+      <path d="M316 61 Q350 70 372 96" class="dg-line-main" marker-end="url(#ah)"/>
+      <path d="M316 183 Q350 174 372 148" class="dg-line-main" marker-end="url(#ah)"/>
+      <path d="M504 122 L560 122" class="dg-line-main" marker-end="url(#ah)"/>
+      <path d="M682 105 Q706 96 728 66" class="dg-line-main" marker-end="url(#ah)"/>
+      <path d="M786 86 L786 148" class="dg-line-main" marker-end="url(#ah)"/>
+      <path d="M786 208 Q790 232 690 248" class="dg-line" marker-end="url(#ah)"/>
+      <path d="M274 248 L250 218" class="dg-line" marker-end="url(#ah)"/>
+
+      <!-- captions -->
+      <text x="330" y="120" text-anchor="middle" class="dg-caption">落库</text>
+      <text x="532" y="112" text-anchor="middle" class="dg-caption">草拟回复</text>
+      <text x="806" y="122" text-anchor="start" class="dg-caption">发送</text>
+      <text x="248" y="236" text-anchor="start" class="dg-caption">投哪份简历</text>
+      <text x="742" y="238" text-anchor="middle" class="dg-caption">回写状态</text>
+    </svg>
+  </div>
+</section>
+
+<section>
+  <h2>核心模块</h2>
+  <p class="sec-note">每张卡末尾的代码芯片直达 GitHub 对应源码。</p>
+
+  <div class="card">
+    <h3><span class="wf">W1</span>自动投递</h3>
+    <p>
+      按用户偏好组合多关键词 &times; 多城市搜索，逐卡抓取 JD 全文，交给 LLM 做<strong>五维独立评分</strong>（技能匹配、经验、城市、薪资、发展潜力各出一个分数的结构化 JSON），Python 端加权汇总，超过阈值才投递，结果全部落库。
+      不让 LLM 拍一个整体主观分——分维打分 + 代码加权，结果稳定、可解释、可单独调权重。
+    </p>
+    <div class="hl"><strong>幂等与去重</strong>：数据库层两道防线（job_id 精确去重 + JD 内容指纹去重），程序崩溃重启后安全续跑，不会重复打扰同一职位。</div>
+    <div class="src"><span class="lbl">源码</span>
+      <a href="https://github.com/FloatGuA/open-job-finder/tree/master/code/pipeline/w1" target="_blank" rel="noopener">pipeline/w1</a>
+      <a href="https://github.com/FloatGuA/open-job-finder/tree/master/code/tools/llm" target="_blank" rel="noopener">tools/llm</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3><span class="wf">W2</span>会话同步与意图分析</h3>
+    <p>
+      拦截 Boss 站内 API 拿到会话全量元数据（真实时间戳、加密 job_id），实现<strong>投递记录与 HR 会话的硬关联</strong>；脏检查只同步有新消息的会话，把全量扫描降为增量。逐会话读取完整消息历史后，LLM 分析 HR 意图（约面、索简历、婉拒&hellip;），需要回应的草拟一条建议回复——只草拟，不发送。
+    </p>
+    <div class="hl"><strong>读/析解耦</strong>：读取成功与分析成功分别记录时间戳。此前 LLM 偶发超时会让一批会话被判「无变化」而永久跳过——解耦后失败的分析下轮自动重试，这类隐形丢失清零。另有平台诱导消息（伪装成 HR 发言的运营提示）识别重分类，防止污染意图判断。</div>
+    <div class="src"><span class="lbl">源码</span>
+      <a href="https://github.com/FloatGuA/open-job-finder/tree/master/code/pipeline/w2" target="_blank" rel="noopener">pipeline/w2</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3><span class="wf">W3</span>人工审批后发送</h3>
+    <p>
+      W2 草拟的回复进入 Dashboard 审批队列，用户<strong>批准 / 修改 / 驳回</strong>后 W3 才动手。发送前有<strong>新鲜度闸</strong>：如果会话已有新动态（比如上一条已是我方消息），草稿自动作废退回重新分析，绝不盲发过时内容。
+    </p>
+    <div class="hl gate"><strong>「动作做了 &ne; 结果发生了」</strong>：点了发送不算数——W3 发送后重新扫描会话，确认消息真实出现在对话里才标记已发。对真人不可逆的操作，验证的必须是结果而不是动作。</div>
+    <div class="src"><span class="lbl">源码</span>
+      <a href="https://github.com/FloatGuA/open-job-finder/tree/master/code/pipeline/w3" target="_blank" rel="noopener">pipeline/w3</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3><span class="wf">简历</span>简历子系统</h3>
+    <p>
+      上传 PDF 由<strong>视觉模型</strong>解析——读页面渲染图而非抽取文本，排版型简历不丢结构——进入<strong>信息池</strong>：关于用户的全部素材主库，只增改不删，写盘前自动快照、可回滚。从池中拖拽组合出多份<strong>面向不同岗位的简历</strong>，A4 分页预览与导出 PDF 同源渲染。投递时由确定性关键词匹配决定「投这个岗发哪份」——匹配路由刻意不用 LLM，要的是可解释、可预期。
+    </p>
+    <div class="hl gate"><strong>产品边界</strong>：简历内容由用户掌控，Agent 只选不写。自动发送默认关闭，每份简历须显式勾选「允许发送」；全部匹配不上时用指定兜底，没有兜底就拒发——宁可不发，不乱发。</div>
+    <div class="src"><span class="lbl">源码</span>
+      <a href="https://github.com/FloatGuA/open-job-finder/blob/master/code/services/resume_parser.py" target="_blank" rel="noopener">services/resume_parser.py</a>
+      <a href="https://github.com/FloatGuA/open-job-finder/blob/master/code/services/resume_library.py" target="_blank" rel="noopener">services/resume_library.py</a>
+      <a href="https://github.com/FloatGuA/open-job-finder/blob/master/code/tools/db/w2/match_resume.py" target="_blank" rel="noopener">tools/db/w2/match_resume.py</a>
+    </div>
+  </div>
+
+  <div class="minor-grid">
+    <div class="minor">
+      <h3>跨站点投递（m1/m2）</h3>
+      <p>面向 Boss 之外的企业官网招聘系统：agent 自主勘察站点结构并选岗（m1），打开申请表并分类字段（m2）。每阶段停在人工审批点，<strong>提交类点击由代码硬拦</strong>——不存在任何自动提交表单的路径。</p>
+      <div class="src"><a href="https://github.com/FloatGuA/open-job-finder/tree/master/code/multisite" target="_blank" rel="noopener">multisite/</a></div>
+    </div>
+    <div class="minor">
+      <h3>Dashboard</h3>
+      <p>FastAPI + React 18。SSE 实时推送工作流进度；所有触发方式（手动 / 定时 / 自检）统一进队列顺序执行；自检模块一键探针 + 完整周期真跑；任意历史 run 可逐事件回放。</p>
+      <div class="src"><a href="https://github.com/FloatGuA/open-job-finder/tree/master/code/dashboard" target="_blank" rel="noopener">dashboard/</a></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>工程约定与教训</h2>
+  <p class="sec-note">三条约定，都不是从书上抄的——每条背后有一次真实事故或一个真实约束。</p>
+
+  <div class="lesson">
+    <h3>一个状态转换，只有一份 SQL</h3>
+    <p>
+      一次审查连抓四例同构漂移：同一个状态转换在代码里存在多份实现，各写各的 CASE 分支。最危险的一例是 <code>mark_reply_sent</code> 有三份，其中一份把状态写成 NULL 而不是终态——意味着已发送的回复可能被当成未处理重发，<strong>给同一位 HR 二次打扰</strong>。此后立铁律：<code>tracker</code> 独占全部状态机 SQL，工具层只做薄壳契约，端点里一行 SQL 都不许出现。发现分叉不做两边同步，选对的那版收敛掉另一版。
+    </p>
+  </div>
+
+  <div class="lesson">
+    <h3>可观测：没失败 &ne; 验证到了</h3>
+    <p>
+      每次运行的全部步骤事件落 JSONL 文件（SSE 实时推送只是它的投影），Dashboard 可逐事件回放任意历史 run；配套诊断器把「覆盖」拆成三态——通过、失败、<strong>根本没走到</strong>。一条路径没报错，可能只是因为它压根没执行；把这件事显式化之后，扫描 553 个历史 run 找出过一批静默未覆盖的分支。
+    </p>
+  </div>
+
+  <div class="lesson">
+    <h3>LLM 的使用边界：models judge, code decides</h3>
+    <p>
+      LLM 只做真正需要判断的事：职位评分、意图分析、回复草拟。路由、重试、状态码处理、简历匹配全是确定性代码——凡是状态已经决定结果的地方，绝不引入模型的不确定性。LLM 调用封装在多 Provider 降级链里（Anthropic API / Ollama 本地 / OpenAI 兼容 / CLI），按 fast / balanced / powerful 能力分级路由，单一 provider 挂掉不影响流程。守门的是 <strong>1573 项自动化测试</strong>（pytest + 前端 vitest），改动不绿不收工。
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>诚实的技术边界</h2>
+  <div class="boundary">
+    <p>
+      这不是分布式系统，也不试图伪装成一个。<strong>单进程单线程同步</strong>——DrissionPage 不支持 async，而且单个求职账号的浏览器操作本质上就是串行的；<strong>SQLite</strong>——单用户、低频写入，一个文件就是全部状态，备份等于复制；<strong>不做多租户</strong>——它服务一个人找工作，不服务一个平台。
+    </p>
+    <p>
+      选型跟着真实约束走，而不是跟着简历关键词走。复杂度花在了刀刃上：反爬对抗、状态机正确性、人在环安全、可观测回放。
+    </p>
+  </div>
+</section>
+
+<footer>
+  <p class="stack">Python 3.11 · DrissionPage · FastAPI + SSE · SQLite · React 18 + Vite · Multi-provider LLM</p>
+  <p>GitHub：<a href="https://github.com/FloatGuA/open-job-finder" target="_blank" rel="noopener">FloatGuA/open-job-finder</a> &nbsp;·&nbsp; v2.35 · 2026</p>
+</footer>
+
+</div>
+</body>
+</html>

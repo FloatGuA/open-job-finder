@@ -1284,3 +1284,20 @@ LevelDB 的 LOG、Postgres 的 pg_wal）。判据是**这个格式有没有主�
 - **先验证再铺管道。** 这轮先建了列 + upsert 参数 + 流水线透传 + 6 个测试，
   跑完真机才发现值是 `"HR"`。**如果当时直接上线，界面上每个会话的主标题
   都会变成「HR」**，而测试全绿——测试只能验管道通不通，验不了水是什么。
+
+## 2026-09-01 新增
+
+## Claude Code 内置浏览器面板隐藏时，screenshot 会返回过期空帧——看起来像页面白屏
+
+**复现**：让 Browser pane 打开一个页面（本次是 data: URL 的本地 HTML）→ 面板处于隐藏状态 →
+连续调 `computer screenshot` → 期望拿到当前视口 → 实际返回同一张过期帧（大片纯背景色），
+偶尔直接报 "Screenshot timed out after 5s"。scroll / scroll_to 之后再截，画面也不动。
+**现象**：截图里内容区一片空白，极易误判为"页面渲染坏了/CSS 写错了"，进而去改本来没问题的代码。
+本次页面用了 Google Fonts 中文分包（200+ unicode-range 子集懒加载），渲染慢加剧了丢帧。
+**真因**：面板隐藏时截图管线拿的是缓存帧；页面本身 DOM/样式完全正常。
+**正确做法**：面板隐藏时不要用截图做验证，改用 `read_page` / `find` / `javascript_tool`
+查 DOM 几何（getBoundingClientRect / getBBox）和 computed style；工具返回里
+"pane is hidden" 的提示就是切换信号。
+**判据**：连续两张截图完全相同、且 JS 查询显示元素位置/颜色都正常 → 是截图过期，不是页面坏了。
+**状态**：仍有效（环境行为，无法守门）
+**首次**：2026-09-01
